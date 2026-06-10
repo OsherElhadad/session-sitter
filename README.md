@@ -2,8 +2,6 @@
 
 A lightweight VS Code extension that adds a **tabbed session browser** to the Secondary Sidebar — so you can switch between Claude Code sessions with a single click instead of hunting through the Command Palette.
 
-![Claude Session Switcher tab strip](docs/screenshot-placeholder.png)
-
 ---
 
 ## Why This Exists
