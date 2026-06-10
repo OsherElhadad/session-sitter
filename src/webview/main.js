@@ -16,7 +16,6 @@
   // ── DOM References (populated after DOMContentLoaded) ───────────────────
 
   let tabStrip;        // the scrollable tab row (excluding the + button)
-  let historySection;  // the entire history section element
   let historyContent;  // the collapsible content div
   let historyToggle;   // the toggle button / heading
 
@@ -73,7 +72,7 @@
     tab.dataset.sessionId = session.sessionId;
     tab.setAttribute('role', 'tab');
     tab.setAttribute('tabindex', '0');
-    tab.setAttribute('title', escapeHtml(session.title));
+    tab.setAttribute('title', (session.title || '(untitled)') + ' — ' + formatRelativeTime(session.updatedAt));
 
     // Title label
     const titleEl = document.createElement('span');
@@ -122,6 +121,7 @@
    * Fully re-render the tab strip from the current `sessions` array.
    */
   function renderTabs() {
+    if (!tabStrip) { return; }
     // Clear existing tabs (everything except the + button, which is a sibling)
     tabStrip.innerHTML = '';
 
@@ -145,7 +145,7 @@
   function renderHistory() {
     const countEl = document.getElementById('history-count');
     if (countEl) {
-      countEl.textContent = String(sessions.length);
+      countEl.textContent = '';
     }
   }
 
@@ -192,7 +192,6 @@
 
   function init() {
     tabStrip      = document.getElementById('tab-strip');
-    historySection = document.getElementById('history-section');
     historyContent = document.getElementById('history-content');
     historyToggle  = document.getElementById('history-toggle');
 

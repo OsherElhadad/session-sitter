@@ -137,6 +137,11 @@ button:focus-visible {
   outline-offset: -1px;
 }
 
+.tab[aria-selected="true"] {
+  background: var(--vscode-tab-activeBackground, var(--vscode-focusBorder));
+  color: var(--vscode-tab-activeForeground, var(--vscode-editor-foreground));
+}
+
 /* Session title inside tab */
 .tab-title {
   flex: 1 1 auto;
@@ -184,8 +189,8 @@ button:focus-visible {
   opacity: 0.7;
 }
 
-.tab-close:hover {
-  opacity: 1 !important;
+.tab:hover .tab-close:hover {
+  opacity: 1;
   background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.25));
 }
 
