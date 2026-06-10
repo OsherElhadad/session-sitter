@@ -2,8 +2,12 @@
   "name": "claude-session-switcher",
   "displayName": "Claude Session Switcher",
   "description": "Tabbed session switcher for Claude Code in the Secondary Sidebar",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "publisher": "eranra",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eranra/claude-session-switcher"
+  },
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
