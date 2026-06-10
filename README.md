@@ -34,10 +34,6 @@ This extension puts all your sessions in a persistent tab strip — always visib
 
 ## Installation
 
-### From the Marketplace *(coming soon)*
-
-Search for **"Claude Session Switcher"** in the VS Code Extensions panel (`Ctrl+Shift+X` / `Cmd+Shift+X`).
-
 ### From a VSIX file
 
 1. Download the latest `.vsix` from the [Releases](https://github.com/eranra/claude-session-switcher/releases) page
