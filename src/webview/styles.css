@@ -1,1 +1,250 @@
-/* Webview styles - placeholder */
+/* Webview styles — uses VS Code CSS variables for automatic theme awareness */
+
+/* ── Reset / Base ──────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--vscode-font-family, sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+  font-weight: var(--vscode-font-weight, normal);
+  color: var(--vscode-editor-foreground);
+  background-color: var(--vscode-editor-background);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* ── Tab Bar ─────────────────────────────────────────────────────────────── */
+
+#tab-bar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-shrink: 0;
+  height: 35px;
+  border-bottom: 1px solid var(--vscode-tab-border, #444);
+  background-color: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background));
+  overflow: hidden;
+}
+
+/* New session (+) button */
+#new-session-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 35px;
+  height: 100%;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.7;
+  border-right: 1px solid var(--vscode-tab-border, #444);
+  transition: opacity 0.1s, background-color 0.1s;
+}
+
+#new-session-btn:hover {
+  opacity: 1;
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+#new-session-btn:active {
+  background-color: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.25));
+}
+
+/* Scrollable tab strip */
+#tab-strip {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 100%;
+  /* Hide scrollbar visually but keep it functional */
+  scrollbar-width: none;
+}
+
+#tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* Placeholder text when no sessions */
+.tab-placeholder {
+  padding: 0 12px;
+  opacity: 0.5;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+/* ── Individual Tab ──────────────────────────────────────────────────────── */
+
+.tab {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-shrink: 0;
+  height: 100%;
+  padding: 0 4px 0 10px;
+  gap: 5px;
+  min-width: 80px;
+  max-width: 220px;
+  cursor: pointer;
+  border-right: 1px solid var(--vscode-tab-border, #444);
+  background-color: var(--vscode-tab-inactiveBackground, transparent);
+  color: var(--vscode-tab-inactiveForeground, var(--vscode-editor-foreground));
+  transition: background-color 0.1s;
+  user-select: none;
+  position: relative;
+}
+
+.tab:hover {
+  background-color: var(--vscode-tab-hoverBackground, var(--vscode-tab-activeBackground, rgba(128, 128, 128, 0.15)));
+  color: var(--vscode-tab-hoverForeground, var(--vscode-editor-foreground));
+}
+
+.tab:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.tab[aria-selected="true"] {
+  background: var(--vscode-tab-activeBackground, var(--vscode-focusBorder));
+  color: var(--vscode-tab-activeForeground, var(--vscode-editor-foreground));
+}
+
+/* Session title inside tab */
+.tab-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+/* Project badge */
+.tab-badge {
+  flex-shrink: 0;
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background-color: var(--vscode-badge-background, rgba(128, 128, 128, 0.25));
+  color: var(--vscode-badge-foreground, var(--vscode-editor-foreground));
+  opacity: 0.85;
+  max-width: 70px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Close (×) button inside each tab */
+.tab-close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  color: var(--vscode-editor-foreground);
+  transition: opacity 0.1s, background-color 0.1s;
+}
+
+/* Show close button when tab is hovered or focused */
+.tab:hover .tab-close,
+.tab:focus-visible .tab-close {
+  opacity: 0.7;
+}
+
+.tab:hover .tab-close:hover {
+  opacity: 1;
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.25));
+}
+
+.tab-close:active {
+  background-color: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.4));
+}
+
+/* ── History Section ─────────────────────────────────────────────────────── */
+
+#history-section {
+  flex-shrink: 0;
+  border-top: 1px solid var(--vscode-tab-border, #444);
+}
+
+#history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-editor-foreground));
+  background-color: var(--vscode-sideBarSectionHeader-background, transparent);
+  text-align: left;
+  opacity: 0.85;
+  transition: background-color 0.1s;
+}
+
+#history-toggle:hover {
+  opacity: 1;
+  background-color: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1));
+}
+
+.history-arrow {
+  font-size: 10px;
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+}
+
+.history-count-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 10px;
+  background-color: var(--vscode-badge-background, rgba(128, 128, 128, 0.25));
+  color: var(--vscode-badge-foreground, var(--vscode-editor-foreground));
+  margin-left: 2px;
+}
+
+#history-content {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.7;
+  font-style: italic;
+}
+
+.history-placeholder {
+  margin: 8px 12px;
+  opacity: 0.6;
+  font-style: italic;
+}
