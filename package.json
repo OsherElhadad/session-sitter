@@ -1,0 +1,58 @@
+{
+  "name": "claude-session-switcher",
+  "displayName": "Claude Session Switcher",
+  "description": "Tabbed session switcher for Claude Code in the Secondary Sidebar",
+  "version": "0.1.0",
+  "publisher": "eranra",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "extensionDependencies": ["Anthropic.claude-code"],
+  "contributes": {
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "claude-session-switcher",
+          "title": "Claude Sessions",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "claude-session-switcher": [
+        {
+          "type": "webview",
+          "id": "claudeSessionSwitcher.view",
+          "name": "Sessions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "claudeSessionSwitcher.refresh",
+        "title": "Refresh Sessions",
+        "category": "Claude Session Switcher"
+      },
+      {
+        "command": "claudeSessionSwitcher.newSession",
+        "title": "New Claude Session",
+        "category": "Claude Session Switcher"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0"
+  }
+}

@@ -1,0 +1,1 @@
+// Webview main script - placeholder
