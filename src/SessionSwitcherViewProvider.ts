@@ -1,20 +1,17 @@
 import * as vscode from 'vscode';
+import { randomBytes } from 'crypto';
 import { SessionManager, ClaudeSession } from './SessionManager';
 
 function getNonce(): string {
-  let text = '';
-  const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
+  return randomBytes(16).toString('hex');
 }
 
-export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider {
+export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewType = 'claudeSessionSwitcher.view';
 
   private _view?: vscode.WebviewView;
   private _removedSessionIds = new Set<string>();
+  private _viewDisposables: vscode.Disposable[] = [];
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -26,6 +23,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider {
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ): void {
+    // Dispose any listeners from a previous resolve
+    this._viewDisposables.forEach(d => d.dispose());
+    this._viewDisposables = [];
+
     this._view = webviewView;
 
     webviewView.webview.options = {
@@ -36,36 +37,56 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
     // Listen for session changes from SessionManager and push filtered updates
-    this._sessionManager.onDidChangeSessions(sessions => {
-      this._pushSessions(sessions);
-    });
+    this._viewDisposables.push(
+      this._sessionManager.onDidChangeSessions(sessions => {
+        this._pushSessions(sessions);
+      })
+    );
 
     // Handle messages from the webview
-    webviewView.webview.onDidReceiveMessage(message => {
-      switch (message.type) {
-        case 'switchSession': {
-          const sessionId = message.sessionId as string;
-          void vscode.env.openExternal(
-            vscode.Uri.parse('vscode://anthropic.claude-code/open?session=' + sessionId)
-          );
-          break;
+    this._viewDisposables.push(
+      webviewView.webview.onDidReceiveMessage(message => {
+        switch (message.type) {
+          case 'switchSession': {
+            const sessionId = message.sessionId;
+            if (typeof sessionId !== 'string' || sessionId.length === 0) { break; }
+            const known = this._sessionManager.getSessions();
+            if (!known.some(s => s.sessionId === sessionId)) { break; }
+            void vscode.env.openExternal(
+              vscode.Uri.parse('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(sessionId))
+            );
+            break;
+          }
+          case 'newSession': {
+            void vscode.commands.executeCommand('claude-vscode.newConversation');
+            break;
+          }
+          case 'removeTab': {
+            const sessionId = message.sessionId;
+            if (typeof sessionId !== 'string' || sessionId.length === 0) { break; }
+            this._removedSessionIds.add(sessionId);
+            this._pushSessions(this._sessionManager.getSessions());
+            break;
+          }
         }
-        case 'newSession': {
-          void vscode.commands.executeCommand('claude-vscode.newConversation');
-          break;
-        }
-        case 'removeTab': {
-          const sessionId = message.sessionId as string;
-          this._removedSessionIds.add(sessionId);
-          this._pushSessions(this._sessionManager.getSessions());
-          break;
-        }
-      }
-    });
+      })
+    );
+
+    // Clear _view when the webview is disposed
+    this._viewDisposables.push(
+      webviewView.onDidDispose(() => {
+        this._view = undefined;
+      })
+    );
 
     // Immediately push the current session list
     const sessions = this._sessionManager.getSessions();
     this._pushSessions(sessions);
+  }
+
+  public dispose(): void {
+    this._viewDisposables.forEach(d => d.dispose());
+    this._viewDisposables = [];
   }
 
   private _pushSessions(sessions: ClaudeSession[]): void {
@@ -103,7 +124,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider {
   </div>
   <div id="history-section">
     <button id="history-toggle" aria-expanded="false">
-      &#9658; History <span id="history-count"></span>
+      <span class="history-arrow">&#9658;</span> History <span id="history-count"></span>
     </button>
     <div id="history-content" hidden></div>
   </div>
