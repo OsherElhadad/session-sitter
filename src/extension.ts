@@ -21,7 +21,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeSessionSwitcher.refresh', () => {
       // SessionManager auto-refreshes via FileSystemWatcher
-      // This command is a no-op as the watcher handles updates
+      void vscode.window.showInformationMessage('Claude sessions update automatically.');
     })
   );
 

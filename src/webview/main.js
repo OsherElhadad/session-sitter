@@ -46,19 +46,6 @@
     return new Date(isoString).toLocaleDateString();
   }
 
-  /**
-   * Escape a string so it is safe to insert into HTML attribute values or text.
-   * @param {string} str
-   * @returns {string}
-   */
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
   // ── Render ───────────────────────────────────────────────────────────────
 
   /**
@@ -109,6 +96,7 @@
     // Keyboard accessibility: Enter/Space activates the tab
     tab.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
+        if (event.target === closeBtn) { return; } // Let close button handle its own click
         event.preventDefault();
         vscodeApi.postMessage({ type: 'switchSession', sessionId: session.sessionId });
       }

@@ -126,7 +126,9 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     <button id="history-toggle" aria-expanded="false">
       <span class="history-arrow">&#9658;</span> History <span id="history-count"></span>
     </button>
-    <div id="history-content" hidden></div>
+    <div id="history-content" hidden>
+      <p class="history-placeholder">History coming in a future version.</p>
+    </div>
   </div>
   <script nonce="${nonce}" src="${mainScriptUri}"></script>
 </body>
