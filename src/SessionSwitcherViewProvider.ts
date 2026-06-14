@@ -150,10 +150,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       // Tab API unavailable or no label matches (e.g. Claude Code is in the
       // sidebar, not editor tabs) — fall back to sessions active/waiting OR
       // modified in the last 8 hours.
-      const EIGHT_HOURS = 8 * 60 * 60 * 1000;
+      const TWO_HOURS = 2 * 60 * 60 * 1000;
       const now = Date.now();
       sessions = allSessions.filter(s =>
-        s.status !== 'idle' || (now - s.updatedAt.getTime()) < EIGHT_HOURS
+        s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
       );
     }
 
@@ -180,10 +180,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     if (tabMatched.size > 0) {
       history = allSessions.filter(s => !tabMatched.has(s.title));
     } else {
-      const EIGHT_HOURS = 8 * 60 * 60 * 1000;
+      const TWO_HOURS = 2 * 60 * 60 * 1000;
       const now = Date.now();
       history = allSessions.filter(s =>
-        s.status === 'idle' && (now - s.updatedAt.getTime()) >= EIGHT_HOURS
+        s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS
       );
     }
     void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
