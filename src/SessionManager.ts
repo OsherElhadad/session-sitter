@@ -38,6 +38,9 @@ export async function getActiveSessionIds(): Promise<Set<string>> {
   } catch {
     return active;
   }
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - DAY_MS;
+
   for (const file of files) {
     try {
       const raw = await fs.promises.readFile(path.join(sessionsDir, file), 'utf8');
@@ -46,9 +49,14 @@ export async function getActiveSessionIds(): Promise<Set<string>> {
         sessionId?: string;
         procStart?: string | number;
         entrypoint?: string;
+        startedAt?: number;
       };
       if (typeof data.pid !== 'number' || !data.sessionId) { continue; }
       if (data.entrypoint !== 'claude-vscode') { continue; }
+      // Exclude processes started before the 24-hour window — these are
+      // background sessions from a previous VS Code session that was never
+      // properly closed, not sessions the user opened today.
+      if (typeof data.startedAt === 'number' && data.startedAt < cutoff) { continue; }
       try {
         process.kill(data.pid, 0); // throws if process is dead
         // Verify the PID hasn't been recycled by comparing kernel start-times.
