@@ -152,17 +152,20 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       // host. If that PID is alive the window is open; we then keep sessions
       // whose projectPath lives inside one of those workspaces.
       const activeWorkspaces = await getActiveWorkspacePaths();
+      const TWO_HOURS = 2 * 60 * 60 * 1000;
+      const now = Date.now();
       if (activeWorkspaces.size > 0) {
+        // Session must be in an active workspace AND recently touched.
+        // This excludes old historical sessions from the same workspace.
         sessions = allSessions.filter(s =>
           s.projectPath &&
           [...activeWorkspaces].some(ws =>
             s.projectPath === ws || s.projectPath.startsWith(ws + '/')
-          )
+          ) &&
+          (s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS)
         );
       } else {
-        // No lock files readable — last-resort 2-hour time window.
-        const TWO_HOURS = 2 * 60 * 60 * 1000;
-        const now = Date.now();
+        // No lock files readable — fall back to 2-hour time window.
         sessions = allSessions.filter(s =>
           s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
         );
@@ -193,20 +196,17 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       history = allSessions.filter(s => !tabMatched.has(s.title));
     } else {
       const activeWorkspaces = await getActiveWorkspacePaths();
-      if (activeWorkspaces.size > 0) {
-        history = allSessions.filter(s =>
-          !s.projectPath ||
-          ![...activeWorkspaces].some(ws =>
+      const TWO_HOURS = 2 * 60 * 60 * 1000;
+      const now = Date.now();
+      // History = everything NOT shown in the main list
+      history = allSessions.filter(s => {
+        const inActiveWorkspace = s.projectPath &&
+          [...activeWorkspaces].some(ws =>
             s.projectPath === ws || s.projectPath.startsWith(ws + '/')
-          )
-        );
-      } else {
-        const TWO_HOURS = 2 * 60 * 60 * 1000;
-        const now = Date.now();
-        history = allSessions.filter(s =>
-          s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS
-        );
-      }
+          );
+        const isRecent = s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS;
+        return !(inActiveWorkspace && isRecent);
+      });
     }
     void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
   }
