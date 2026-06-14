@@ -305,6 +305,11 @@ export class SessionManager implements vscode.Disposable {
           return 'active';
         }
 
+        // Terminal records written at session end — session is done.
+        if (record.type === 'pr-link' || record.type === 'last-prompt') {
+          return 'idle';
+        }
+
         if (record.type === 'assistant') {
           // If the assistant message contains tool_use blocks, those tools are
           // still executing — keep green regardless of recency.
