@@ -44,6 +44,12 @@ Session titles match exactly what Claude Code shows in its own tab bar — the A
 
 ## Installation
 
+### Download the latest release (recommended)
+
+1. Go to the [**Releases page**](https://github.com/eranra/claude-session-switcher/releases/latest) and download `claude-session-switcher-0.0.2.vsix`
+2. In VS Code: **Extensions panel** → `···` menu → **Install from VSIX...** → select the file
+3. Reload the window when prompted
+
 ### Build from source
 
 ```bash
@@ -53,7 +59,7 @@ npm install
 npx @vscode/vsce package --no-dependencies
 ```
 
-Then in VS Code: **Extensions panel** → `···` → **Install from VSIX...** → select the `.vsix` → reload.
+Then install the generated `.vsix` as above.
 
 ### Development
 
