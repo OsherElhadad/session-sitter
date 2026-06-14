@@ -21,6 +21,11 @@ interface JsonlRecord {
   };
 }
 
+// Fingerprint used to skip firing the event when nothing changed.
+function sessionsFingerprint(sessions: ClaudeSession[]): string {
+  return sessions.map(s => `${s.sessionId}:${s.status}:${s.title}:${s.updatedAt.getTime()}`).join('|');
+}
+
 export class SessionManager implements vscode.Disposable {
   private readonly _onDidChangeSessions = new vscode.EventEmitter<ClaudeSession[]>();
   readonly onDidChangeSessions: vscode.Event<ClaudeSession[]> = this._onDidChangeSessions.event;
@@ -29,18 +34,18 @@ export class SessionManager implements vscode.Disposable {
   private readonly _watcher: vscode.FileSystemWatcher;
   private readonly _projectsDir: string;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly _pollTimer: ReturnType<typeof setInterval>;
 
   constructor(context: vscode.ExtensionContext) {
     this._projectsDir = path.join(os.homedir(), '.claude', 'projects');
 
-    // Initial scan (async; sessions will be populated shortly after construction)
+    // Initial scan
     void this._scanSessions().then(sessions => {
       this._sessions = sessions;
       this._onDidChangeSessions.fire([...this._sessions]);
     });
 
-    // Set up file system watcher for all .jsonl files under the projects directory
-    // VS Code handles watching non-existent paths without error.
+    // FileSystemWatcher as fast path (may not fire reliably in WSL2)
     const pattern = new vscode.RelativePattern(
       vscode.Uri.file(this._projectsDir),
       '**/*.jsonl'
@@ -48,30 +53,27 @@ export class SessionManager implements vscode.Disposable {
     this._watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
     const refresh = () => {
-      // Debounce rapid watcher events (~250ms) to avoid redundant scans
       if (this._debounceTimer !== undefined) {
         clearTimeout(this._debounceTimer);
       }
       this._debounceTimer = setTimeout(() => {
         this._debounceTimer = undefined;
-        void this._scanSessions().then(sessions => {
-          this._sessions = sessions;
-          this._onDidChangeSessions.fire([...this._sessions]);
-        });
+        void this._runScan();
       }, 250);
     };
 
-    // Do not pass context.subscriptions; the watcher handles cleanup when disposed.
     this._watcher.onDidCreate(refresh);
     this._watcher.onDidChange(refresh);
     this._watcher.onDidDelete(refresh);
 
-    // Register for automatic disposal
+    // Polling fallback: re-scan every 5 s so status indicators and new sessions
+    // stay current even when the FileSystemWatcher is silent (common in WSL2).
+    this._pollTimer = setInterval(() => { void this._runScan(); }, 5_000);
+
     context.subscriptions.push(this);
   }
 
   getSessions(): ClaudeSession[] {
-    // Return a shallow copy so callers cannot mutate internal state
     return [...this._sessions];
   }
 
@@ -79,8 +81,18 @@ export class SessionManager implements vscode.Disposable {
     if (this._debounceTimer !== undefined) {
       clearTimeout(this._debounceTimer);
     }
+    clearInterval(this._pollTimer);
     this._watcher.dispose();
     this._onDidChangeSessions.dispose();
+  }
+
+  // Run a full scan and fire onDidChangeSessions only when something changed.
+  private async _runScan(): Promise<void> {
+    const sessions = await this._scanSessions();
+    if (sessionsFingerprint(sessions) !== sessionsFingerprint(this._sessions)) {
+      this._sessions = sessions;
+      this._onDidChangeSessions.fire([...this._sessions]);
+    }
   }
 
   private async _scanSessions(): Promise<ClaudeSession[]> {
@@ -222,7 +234,9 @@ export class SessionManager implements vscode.Disposable {
     if (fileSize === 0) {
       return 'idle';
     }
-    const TAIL = 2048;
+    // 32 KB covers large VS Code session records (file-history-snapshot, etc.)
+    // that can otherwise push recognisable record types out of a smaller window.
+    const TAIL = 32768;
     const offset = Math.max(0, fileSize - TAIL);
     const size = fileSize - offset;
     const buf = Buffer.alloc(size);

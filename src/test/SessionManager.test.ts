@@ -200,9 +200,9 @@ describe('SessionManager._parseSessionFile', () => {
       const userLine = JSON.stringify({
         type: 'user', cwd: '/p', message: { content: 'early message' },
       });
-      // Each queue-operation line is ~50 bytes; 50 × 50 = ~2500 bytes > 2 KB tail.
-      const unknownLines = Array.from({ length: 50 }, (_, i) =>
-        JSON.stringify({ type: 'queue-operation', seq: i, padding: 'x'.repeat(30) })
+      // Each queue-operation line is ~70 bytes; 500 × 70 = ~35 KB > 32 KB tail.
+      const unknownLines = Array.from({ length: 500 }, (_, i) =>
+        JSON.stringify({ type: 'queue-operation', seq: i, padding: 'x'.repeat(50) })
       );
       const filePath = path.join(tmpDir, 'no-known-tail.jsonl');
       await fs.promises.writeFile(
