@@ -221,27 +221,37 @@ export class SessionManager implements vscode.Disposable {
 
       const title = (aiTitle ?? firstUserText).slice(0, 60);
       const projectName = projectPath ? path.basename(projectPath) : '';
-      const status = await this._readStatus(fh, stat.size);
+      const status = await this._readStatus(fh, stat.size, updatedAt);
       return { sessionId, projectName, projectPath, title, updatedAt, status };
     } finally {
       await fh.close();
     }
   }
 
-  // Read the last ~2 KB of the file and return the status inferred from the
-  // last parseable record type.
-  private async _readStatus(fh: Awaited<ReturnType<typeof fs.promises.open>>, fileSize: number): Promise<'idle' | 'waiting' | 'active'> {
+  // Read the tail of the file and infer session status.
+  //
+  // The VS Code Claude extension writes an `assistant` record as soon as it
+  // starts streaming a response — BEFORE tools finish executing. So seeing
+  // `assistant` as the last record does not mean the session is idle; Claude
+  // may still be mid-task. We therefore use a 30-second recency window: if
+  // the file was written to within the last 30 s and the last record is
+  // `assistant`, we report `active` rather than `idle`.
+  private async _readStatus(
+    fh: Awaited<ReturnType<typeof fs.promises.open>>,
+    fileSize: number,
+    updatedAt: Date,
+  ): Promise<'idle' | 'waiting' | 'active'> {
     if (fileSize === 0) {
       return 'idle';
     }
-    // 32 KB covers large VS Code session records (file-history-snapshot, etc.)
-    // that can otherwise push recognisable record types out of a smaller window.
-    const TAIL = 32768;
+    const TAIL = 32768; // 32 KB covers large file-history-snapshot records
     const offset = Math.max(0, fileSize - TAIL);
     const size = fileSize - offset;
     const buf = Buffer.alloc(size);
     const { bytesRead } = await fh.read(buf, 0, size, offset);
     const chunk = buf.subarray(0, bytesRead).toString('utf8');
+
+    const recentlyModified = (Date.now() - updatedAt.getTime()) < 30_000;
 
     // Walk lines in reverse to find the last parseable record
     const lines = chunk.split('\n');
@@ -250,14 +260,17 @@ export class SessionManager implements vscode.Disposable {
       if (!trimmed) { continue; }
       try {
         const record = JSON.parse(trimmed) as JsonlRecord;
-        if (record.type === 'assistant') { return 'idle'; }
+        if (record.type === 'assistant') {
+          // If the file is still being actively written, Claude is mid-task.
+          return recentlyModified ? 'active' : 'idle';
+        }
         if (record.type === 'user')      { return 'waiting'; }
         if (record.type === 'tool_use' || record.type === 'tool_result') { return 'active'; }
-        // Other record types (queue-operation, attachment, etc.) — keep scanning
+        // Other record types — keep scanning backward
       } catch {
         // Partial line at the start of the tail window — skip
       }
     }
-    return 'idle';
+    return recentlyModified ? 'active' : 'idle';
   }
 }

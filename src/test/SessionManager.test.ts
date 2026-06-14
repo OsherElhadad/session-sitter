@@ -148,13 +148,26 @@ describe('SessionManager._parseSessionFile', () => {
       expect(result?.status).toBe('waiting');
     });
 
-    it('completed session: last record is assistant → status = idle', async () => {
+    it('completed session: last record is assistant, old file → status = idle', async () => {
       const file = await writeTempJsonl(tmpDir, 'done-session', [
         { type: 'user', cwd: '/p', message: { content: 'do something' } },
         { type: 'assistant', message: { content: 'done' } },
       ]);
+      // Back-date mtime so the file looks older than the 30-second active window.
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
       const result = await manager._parseSessionFile(file);
       expect(result?.status).toBe('idle');
+    });
+
+    it('recent assistant record → status = active (mid-task heuristic)', async () => {
+      const file = await writeTempJsonl(tmpDir, 'recent-assistant', [
+        { type: 'user', cwd: '/p', message: { content: 'do something' } },
+        { type: 'assistant', message: { content: 'working...' } },
+      ]);
+      // File is freshly written (within 30 s) → report active, not idle.
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('active');
     });
 
     it('tool running: last record is tool_use → status = active', async () => {
@@ -210,6 +223,9 @@ describe('SessionManager._parseSessionFile', () => {
         [userLine, ...unknownLines].join('\n') + '\n',
         'utf8',
       );
+      // Back-date mtime so the file looks older than the 30-second active window.
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(filePath, old, old);
       const result = await manager._parseSessionFile(filePath);
       expect(result?.status).toBe('idle');
     });
