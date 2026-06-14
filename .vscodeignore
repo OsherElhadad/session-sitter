@@ -2,7 +2,8 @@
 .eslintrc.json
 tsconfig.json
 vitest.config.ts
-src/
+src/**/*.ts
+src/test/
 docs/
 out/**/*.js.map
 out/test/
