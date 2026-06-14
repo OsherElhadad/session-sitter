@@ -1,0 +1,9 @@
+.gitignore
+.eslintrc.json
+tsconfig.json
+vitest.config.ts
+src/
+docs/
+out/**/*.js.map
+out/test/
+node_modules/
