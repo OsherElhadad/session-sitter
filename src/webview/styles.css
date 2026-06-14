@@ -37,32 +37,32 @@ button:focus-visible {
   outline-offset: -1px;
 }
 
-/* ── Tab Bar ─────────────────────────────────────────────────────────────── */
+/* ── Session List Container ─────────────────────────────────────────────── */
 
 #tab-bar {
   display: flex;
-  flex-direction: row;
-  align-items: center;
-  flex-shrink: 0;
-  height: 35px;
-  border-bottom: 1px solid var(--vscode-tab-border, #444);
-  background-color: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background));
+  flex-direction: column;
+  flex: 1 1 auto;
   overflow: hidden;
 }
 
-/* New session (+) button */
+/* Toolbar row: "Sessions" label + new-session button */
 #new-session-btn {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 35px;
-  height: 100%;
-  font-size: 18px;
+  justify-content: flex-end;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 16px;
+  font-weight: bold;
   line-height: 1;
   color: var(--vscode-editor-foreground);
   opacity: 0.7;
-  border-right: 1px solid var(--vscode-tab-border, #444);
+  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-tab-border, #444));
+  background-color: var(--vscode-sideBarSectionHeader-background, transparent);
+  text-align: right;
   transition: opacity 0.1s, background-color 0.1s;
 }
 
@@ -75,55 +75,43 @@ button:focus-visible {
   background-color: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.25));
 }
 
-/* Scrollable tab strip */
+/* Scrollable vertical session list */
 #tab-strip {
   display: flex;
-  flex-direction: row;
-  align-items: center;
+  flex-direction: column;
   flex: 1 1 auto;
-  overflow-x: auto;
-  overflow-y: hidden;
-  height: 100%;
-  /* Hide scrollbar visually but keep it functional */
-  scrollbar-width: none;
-}
-
-#tab-strip::-webkit-scrollbar {
-  display: none;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Placeholder text when no sessions */
 .tab-placeholder {
-  padding: 0 12px;
+  padding: 8px 12px;
   opacity: 0.5;
   font-style: italic;
-  white-space: nowrap;
 }
 
-/* ── Individual Tab ──────────────────────────────────────────────────────── */
+/* ── Individual Session Row ──────────────────────────────────────────────── */
 
 .tab {
   display: flex;
   flex-direction: row;
   align-items: center;
-  flex-shrink: 0;
-  height: 100%;
-  padding: 0 4px 0 10px;
-  gap: 5px;
-  min-width: 80px;
-  max-width: 220px;
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 8px 6px 12px;
+  gap: 6px;
   cursor: pointer;
-  border-right: 1px solid var(--vscode-tab-border, #444);
-  background-color: var(--vscode-tab-inactiveBackground, transparent);
-  color: var(--vscode-tab-inactiveForeground, var(--vscode-editor-foreground));
+  border-bottom: 1px solid var(--vscode-list-inactiveFocusOutline, transparent);
+  background-color: transparent;
+  color: var(--vscode-list-inactiveFocusForeground, var(--vscode-editor-foreground));
   transition: background-color 0.1s;
   user-select: none;
-  position: relative;
 }
 
 .tab:hover {
-  background-color: var(--vscode-tab-hoverBackground, var(--vscode-tab-activeBackground, rgba(128, 128, 128, 0.15)));
-  color: var(--vscode-tab-hoverForeground, var(--vscode-editor-foreground));
+  background-color: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1));
+  color: var(--vscode-list-hoverForeground, var(--vscode-editor-foreground));
 }
 
 .tab:focus-visible {
@@ -132,22 +120,29 @@ button:focus-visible {
 }
 
 .tab[aria-selected="true"] {
-  background: var(--vscode-tab-activeBackground, var(--vscode-focusBorder));
-  color: var(--vscode-tab-activeForeground, var(--vscode-editor-foreground));
+  background-color: var(--vscode-list-activeSelectionBackground, var(--vscode-focusBorder));
+  color: var(--vscode-list-activeSelectionForeground, var(--vscode-editor-foreground));
 }
 
-/* Session title inside tab */
-.tab-title {
+/* Text block: title + badge stacked vertically */
+.tab-text {
   flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
-/* Project badge */
+/* Session title — full width, wraps if needed */
+.tab-title {
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Project badge below the title */
 .tab-badge {
-  flex-shrink: 0;
   display: inline-block;
   font-size: 10px;
   padding: 1px 5px;
@@ -155,13 +150,55 @@ button:focus-visible {
   background-color: var(--vscode-badge-background, rgba(128, 128, 128, 0.25));
   color: var(--vscode-badge-foreground, var(--vscode-editor-foreground));
   opacity: 0.85;
-  max-width: 70px;
+  align-self: flex-start;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Close (×) button inside each tab */
+/* ── Status Indicator ────────────────────────────────────────────────────── */
+
+.status-indicator {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 2px;
+  align-self: center;
+}
+
+/* idle: invisible placeholder so layout doesn't shift */
+.status-idle {
+  background: transparent;
+}
+
+/* waiting: slow pulse — user sent a message, Claude hasn't replied yet */
+.status-waiting {
+  background-color: var(--vscode-charts-yellow, #cca700);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+/* active: fast spin — Claude is executing tools */
+.status-active {
+  background: transparent;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--vscode-charts-green, #4caf50);
+  border-top-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%       { opacity: 0.3; transform: scale(0.75); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Close (×) button — right side, visible on hover */
 .tab-close {
   flex-shrink: 0;
   display: flex;
@@ -177,7 +214,6 @@ button:focus-visible {
   transition: opacity 0.1s, background-color 0.1s;
 }
 
-/* Show close button when tab is hovered or focused */
 .tab:hover .tab-close,
 .tab:focus-visible .tab-close {
   opacity: 0.7;
@@ -192,59 +228,78 @@ button:focus-visible {
   background-color: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.4));
 }
 
-/* ── History Section ─────────────────────────────────────────────────────── */
-
-#history-section {
-  flex-shrink: 0;
-  border-top: 1px solid var(--vscode-tab-border, #444);
-}
+/* ── History Toggle Button ───────────────────────────────────────────────── */
 
 #history-toggle {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
   width: 100%;
-  padding: 6px 10px;
-  font-size: 12px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 11px;
   font-weight: 600;
-  color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-editor-foreground));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.6;
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-tab-border, #444));
   background-color: var(--vscode-sideBarSectionHeader-background, transparent);
-  text-align: left;
-  opacity: 0.85;
-  transition: background-color 0.1s;
+  transition: opacity 0.1s, background-color 0.1s;
+  cursor: pointer;
+  gap: 6px;
 }
 
 #history-toggle:hover {
   opacity: 1;
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+/* ── History Panel ───────────────────────────────────────────────────────── */
+
+#history-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  max-height: 40vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-top: 1px solid var(--vscode-list-inactiveFocusOutline, transparent);
+}
+
+/* ── History Item Row ────────────────────────────────────────────────────── */
+
+.history-item {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px 8px 4px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--vscode-list-inactiveFocusOutline, transparent);
+  background-color: transparent;
+  color: var(--vscode-list-inactiveFocusForeground, var(--vscode-editor-foreground));
+  opacity: 0.8;
+  transition: background-color 0.1s, opacity 0.1s;
+  user-select: none;
+}
+
+.history-item:hover {
   background-color: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1));
+  color: var(--vscode-list-hoverForeground, var(--vscode-editor-foreground));
+  opacity: 1;
 }
 
-.history-arrow {
+.history-item:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.history-time {
+  display: block;
   font-size: 10px;
-  display: inline-block;
-  width: 10px;
-  text-align: center;
-}
-
-.history-count-badge {
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 10px;
-  background-color: var(--vscode-badge-background, rgba(128, 128, 128, 0.25));
-  color: var(--vscode-badge-foreground, var(--vscode-editor-foreground));
-  margin-left: 2px;
-}
-
-#history-content {
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--vscode-editor-foreground);
-  opacity: 0.7;
-  font-style: italic;
-}
-
-.history-placeholder {
-  margin: 8px 12px;
   opacity: 0.6;
-  font-style: italic;
+  margin-top: 1px;
 }
+
