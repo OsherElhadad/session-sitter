@@ -128,29 +128,32 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     const allSessions = this._sessionManager.getSessions();
     const openLabels = this._openClaudeTabLabels();
 
-    let sessions: ClaudeSession[];
+    // Try to match sessions to open Claude Code editor tabs.
+    const byTitle = new Map<string, ClaudeSession>();
+    for (const s of allSessions) {
+      const existing = byTitle.get(s.title);
+      if (!existing || s.updatedAt > existing.updatedAt) {
+        byTitle.set(s.title, s);
+      }
+    }
+    const tabMatchedSessions: ClaudeSession[] = [];
+    for (const label of openLabels) {
+      const session = byTitle.get(label);
+      if (session) { tabMatchedSessions.push(session); }
+    }
 
-    if (openLabels.size > 0) {
-      // Tab API working — show only sessions that have an open Claude Code tab
-      const byTitle = new Map<string, ClaudeSession>();
-      for (const s of allSessions) {
-        const existing = byTitle.get(s.title);
-        if (!existing || s.updatedAt > existing.updatedAt) {
-          byTitle.set(s.title, s);
-        }
-      }
-      sessions = [];
-      for (const label of openLabels) {
-        const session = byTitle.get(label);
-        if (session) { sessions.push(session); }
-      }
+    let sessions: ClaudeSession[];
+    if (tabMatchedSessions.length > 0) {
+      // Tab API produced real matches — show only sessions with open tabs.
+      sessions = tabMatchedSessions;
     } else {
-      // Tab API unavailable (remote extension host) — fall back to sessions
-      // that are active/waiting OR were modified in the last 2 hours.
-      const TWO_HOURS = 2 * 60 * 60 * 1000;
+      // Tab API unavailable or no label matches (e.g. Claude Code is in the
+      // sidebar, not editor tabs) — fall back to sessions active/waiting OR
+      // modified in the last 8 hours.
+      const EIGHT_HOURS = 8 * 60 * 60 * 1000;
       const now = Date.now();
       sessions = allSessions.filter(s =>
-        s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
+        s.status !== 'idle' || (now - s.updatedAt.getTime()) < EIGHT_HOURS
       );
     }
 
@@ -161,15 +164,27 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   private _pushHistory(): void {
     if (!this._view) { return; }
     const openLabels = this._openClaudeTabLabels();
+    const allSessions = this._sessionManager.getSessions();
+
+    // Mirror the same tab-matched-or-fallback logic used in _pushSessions.
+    const byTitle = new Map<string, ClaudeSession>();
+    for (const s of allSessions) {
+      if (!byTitle.has(s.title)) { byTitle.set(s.title, s); }
+    }
+    const tabMatched = new Set<string>();
+    for (const label of openLabels) {
+      if (byTitle.has(label)) { tabMatched.add(label); }
+    }
+
     let history: ClaudeSession[];
-    if (openLabels.size > 0) {
-      history = this._sessionManager.getSessions()
-        .filter(s => !openLabels.has(s.title));
+    if (tabMatched.size > 0) {
+      history = allSessions.filter(s => !tabMatched.has(s.title));
     } else {
-      const TWO_HOURS = 2 * 60 * 60 * 1000;
+      const EIGHT_HOURS = 8 * 60 * 60 * 1000;
       const now = Date.now();
-      history = this._sessionManager.getSessions()
-        .filter(s => s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS);
+      history = allSessions.filter(s =>
+        s.status === 'idle' && (now - s.updatedAt.getTime()) >= EIGHT_HOURS
+      );
     }
     void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
   }
