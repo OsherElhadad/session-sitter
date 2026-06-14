@@ -157,7 +157,7 @@ export class SessionManager implements vscode.Disposable {
       const entries = await fs.promises.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
+        if (entry.isDirectory() && entry.name !== 'subagents') {
           results.push(...(await this._findJsonlFiles(fullPath)));
         } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
           results.push(fullPath);
