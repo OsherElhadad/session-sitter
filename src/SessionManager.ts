@@ -7,13 +7,15 @@ export interface ClaudeSession {
   sessionId: string;    // UUID from filename (e.g. "d61ee3f8-38ea-4316-8b4e-c90a8dd2e45e")
   projectName: string;  // last path segment of cwd (e.g. "my-project")
   projectPath: string;  // full cwd from first user record
-  title: string;        // first user message text, truncated to 60 chars
+  title: string;        // AI-generated title if available, otherwise first user message (≤60 chars)
   updatedAt: Date;      // file mtime (last write time)
+  status: 'idle' | 'waiting' | 'active'; // idle=done, waiting=user sent/no reply yet, active=tools running
 }
 
 interface JsonlRecord {
   type?: string;
   cwd?: string;
+  aiTitle?: string;     // present in ai-title records written by Claude Code
   message?: {
     content?: string | unknown[];
   };
@@ -122,79 +124,126 @@ export class SessionManager implements vscode.Disposable {
   private async _parseSessionFile(filePath: string): Promise<ClaudeSession | null> {
     const sessionId = path.basename(filePath, '.jsonl');
 
-    // Get file mtime
     const stat = await fs.promises.stat(filePath);
     const updatedAt = stat.mtime;
 
-    // Read only the first ~4KB
-    let rawChunk: Buffer;
+    // VS Code plugin sessions can have large attachment records before the first
+    // user message. Read in 16 KB chunks up to 256 KB, collecting:
+    //   - firstUserText + projectPath  (from the first user record)
+    //   - aiTitle                      (from the ai-title record Claude Code writes)
+    // Use aiTitle as the display title when available — it matches what VS Code
+    // shows in the editor tab — and fall back to the raw first user message.
+    const CHUNK_SIZE = 16384;
+    const MAX_BYTES  = 262144;
+
     const fh = await fs.promises.open(filePath, 'r');
     try {
-      rawChunk = Buffer.alloc(4096);
-      const { bytesRead } = await fh.read(rawChunk, 0, 4096, 0);
-      rawChunk = rawChunk.subarray(0, bytesRead);
+      let fileOffset = 0;
+      let leftover = '';
+      let firstUserText: string | null = null;
+      let projectPath = '';
+      let aiTitle: string | null = null;
 
-      const chunk = rawChunk.toString('utf8');
-      const lines = chunk.split('\n');
+      outer: while (fileOffset < MAX_BYTES) {
+        const buf = Buffer.alloc(CHUNK_SIZE);
+        const { bytesRead } = await fh.read(buf, 0, CHUNK_SIZE, fileOffset);
+        if (bytesRead === 0) { break; }
+        fileOffset += bytesRead;
 
-      // When we hit the buffer boundary the last element may be a partial JSON
-      // record cut mid-line; drop it to avoid silent parse failures.
-      if (bytesRead === 4096) {
-        lines.pop();
-      }
+        const chunk = leftover + buf.subarray(0, bytesRead).toString('utf8');
+        const lines = chunk.split('\n');
+        leftover = lines.pop() ?? '';
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) {
-          continue;
-        }
-        try {
-          const record = JSON.parse(trimmed) as JsonlRecord;
-          if (record.type === 'user') {
-            const content = record.message?.content;
-            let text: string | null = null;
-            if (typeof content === 'string' && content.trim().length > 0) {
-              text = content.trim();
-            } else if (Array.isArray(content)) {
-              // Content may be an array of content blocks; find first text block
-              for (const block of content) {
-                const b = block as { type?: string; text?: string };
-                if (
-                  block !== null &&
-                  typeof block === 'object' &&
-                  b.type === 'text' &&
-                  typeof b.text === 'string' &&
-                  (b.text ?? '').trim().length > 0
-                ) {
-                  text = (b.text ?? '').trim();
-                  break;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) { continue; }
+          try {
+            const record = JSON.parse(trimmed) as JsonlRecord;
+
+            if (record.type === 'user' && firstUserText === null) {
+              const content = record.message?.content;
+              let text: string | null = null;
+              if (typeof content === 'string' && content.trim().length > 0) {
+                text = content.trim();
+              } else if (Array.isArray(content)) {
+                for (const block of content) {
+                  const b = block as { type?: string; text?: string };
+                  if (
+                    block !== null &&
+                    typeof block === 'object' &&
+                    b.type === 'text' &&
+                    typeof b.text === 'string' &&
+                    (b.text ?? '').trim().length > 0
+                  ) {
+                    text = (b.text ?? '').trim();
+                    break;
+                  }
                 }
+              }
+              if (text !== null) {
+                firstUserText = text;
+                projectPath = typeof record.cwd === 'string' && record.cwd.length > 0
+                  ? record.cwd : '';
               }
             }
 
-            if (text !== null) {
-              const projectPath = typeof record.cwd === 'string' && record.cwd.length > 0
-                ? record.cwd
-                : '';
-              const projectName = projectPath ? path.basename(projectPath) : '';
-              return {
-                sessionId,
-                projectName,
-                projectPath,
-                title: text.slice(0, 60),
-                updatedAt,
-              };
+            if (record.type === 'ai-title' &&
+                typeof record.aiTitle === 'string' &&
+                record.aiTitle.trim().length > 0) {
+              aiTitle = record.aiTitle.trim();
             }
+
+          } catch {
+            // Malformed JSON line — skip
           }
-        } catch {
-          // Malformed JSON line — skip
         }
+
+        // Stop once we have both pieces; ai-title appears shortly after the
+        // first assistant reply so we never need to read far.
+        if (firstUserText !== null && aiTitle !== null) { break outer; }
       }
+
+      if (firstUserText === null) {
+        return null;
+      }
+
+      const title = (aiTitle ?? firstUserText).slice(0, 60);
+      const projectName = projectPath ? path.basename(projectPath) : '';
+      const status = await this._readStatus(fh, stat.size);
+      return { sessionId, projectName, projectPath, title, updatedAt, status };
     } finally {
       await fh.close();
     }
+  }
 
-    // No valid user record found; exclude this file from the session list
-    return null;
+  // Read the last ~2 KB of the file and return the status inferred from the
+  // last parseable record type.
+  private async _readStatus(fh: Awaited<ReturnType<typeof fs.promises.open>>, fileSize: number): Promise<'idle' | 'waiting' | 'active'> {
+    if (fileSize === 0) {
+      return 'idle';
+    }
+    const TAIL = 2048;
+    const offset = Math.max(0, fileSize - TAIL);
+    const size = fileSize - offset;
+    const buf = Buffer.alloc(size);
+    const { bytesRead } = await fh.read(buf, 0, size, offset);
+    const chunk = buf.subarray(0, bytesRead).toString('utf8');
+
+    // Walk lines in reverse to find the last parseable record
+    const lines = chunk.split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const trimmed = lines[i].trim();
+      if (!trimmed) { continue; }
+      try {
+        const record = JSON.parse(trimmed) as JsonlRecord;
+        if (record.type === 'assistant') { return 'idle'; }
+        if (record.type === 'user')      { return 'waiting'; }
+        if (record.type === 'tool_use' || record.type === 'tool_result') { return 'active'; }
+        // Other record types (queue-operation, attachment, etc.) — keep scanning
+      } catch {
+        // Partial line at the start of the tail window — skip
+      }
+    }
+    return 'idle';
   }
 }
