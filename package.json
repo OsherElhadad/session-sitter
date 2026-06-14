@@ -8,7 +8,7 @@
     "type": "git",
     "url": "https://github.com/eranra/claude-session-switcher"
   },
-  "engines": { "vscode": "^1.64.0" },
+  "engines": { "vscode": "^1.65.0" },
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
@@ -54,7 +54,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.64.0",
+    "@types/vscode": "^1.65.0",
     "typescript": "^5.3.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",

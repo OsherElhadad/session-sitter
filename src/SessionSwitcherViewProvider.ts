@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
 import { SessionManager, ClaudeSession } from './SessionManager';
-import { LiveSessionRegistry } from './LiveSessionRegistry';
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -17,7 +16,6 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _sessionManager: SessionManager,
-    private readonly _registry: LiveSessionRegistry,
   ) {}
 
   public resolveWebviewView(
@@ -37,21 +35,19 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-    // Refresh tab metadata when session files change on disk.
-    // Also push history so it updates automatically when the panel is open.
+    // Refresh when session file metadata changes (status, titles)
     this._viewDisposables.push(
       this._sessionManager.onDidChangeSessions(() => {
         this._pushSessions();
-        if (this._historyOpen) {
-          this._pushHistory();
-        }
+        if (this._historyOpen) { this._pushHistory(); }
       })
     );
 
-    // Rebuild tab list when the registry changes (add/remove)
+    // Refresh when Claude Code tabs open, close, or get renamed
     this._viewDisposables.push(
-      this._registry.onDidChange(() => {
+      vscode.window.tabGroups.onDidChangeTabs(() => {
         this._pushSessions();
+        if (this._historyOpen) { this._pushHistory(); }
       })
     );
 
@@ -71,7 +67,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           case 'removeTab': {
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
-            this._registry.remove(sessionId);
+            this._closeTabForSession(sessionId);
             break;
           }
           case 'loadHistory': {
@@ -86,7 +82,6 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           case 'addFromHistory': {
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
-            this._registry.add(sessionId);
             void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
             break;
           }
@@ -99,9 +94,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     );
 
     this._viewDisposables.push(
-      webviewView.onDidDispose(() => {
-        this._view = undefined;
-      })
+      webviewView.onDidDispose(() => { this._view = undefined; })
     );
 
     this._pushSessions();
@@ -112,36 +105,75 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     this._viewDisposables = [];
   }
 
+  // Returns labels of all currently open Claude Code editor tabs.
+  private _openClaudeTabLabels(): Set<string> {
+    const labels = new Set<string>();
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (
+          tab.input instanceof vscode.TabInputWebview &&
+          tab.input.viewType.includes('claudeVSCodePanel')
+        ) {
+          labels.add(tab.label);
+        }
+      }
+    }
+    return labels;
+  }
+
   private _pushSessions(): void {
     if (!this._view) { return; }
 
-    const ids = this._registry.getIds();
-    const byId = new Map(this._sessionManager.getSessions().map(s => [s.sessionId, s]));
+    const allSessions = this._sessionManager.getSessions();
+    const openLabels = this._openClaudeTabLabels();
 
-    const sessions: ClaudeSession[] = ids.map(id => {
-      const found = byId.get(id);
-      if (found) { return found; }
-      // File not yet parseable (session just created) — show placeholder
-      return {
-        sessionId: id,
-        projectName: '',
-        projectPath: '',
-        title: 'Starting…',
-        updatedAt: new Date(),
-        status: 'waiting' as const,
-      };
-    });
+    // Build a title → session map (most-recently-updated wins on collisions)
+    const byTitle = new Map<string, ClaudeSession>();
+    for (const s of allSessions) {
+      const existing = byTitle.get(s.title);
+      if (!existing || s.updatedAt > existing.updatedAt) {
+        byTitle.set(s.title, s);
+      }
+    }
+
+    // Main list = sessions whose title matches an open Claude Code tab.
+    // Tabs still loading (label "Claude Code") are skipped — they appear
+    // once Claude Code sets their AI-generated title.
+    const sessions: ClaudeSession[] = [];
+    for (const label of openLabels) {
+      const session = byTitle.get(label);
+      if (session) { sessions.push(session); }
+    }
+    sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
 
     void this._view.webview.postMessage({ type: 'updateSessions', sessions });
   }
 
   private _pushHistory(): void {
     if (!this._view) { return; }
-    const registryIds = new Set(this._registry.getIds());
+    const openLabels = this._openClaudeTabLabels();
     const history = this._sessionManager.getSessions()
-      .filter(s => !registryIds.has(s.sessionId))
+      .filter(s => !openLabels.has(s.title))
       .slice(0, 50);
     void this._view.webview.postMessage({ type: 'updateHistory', sessions: history });
+  }
+
+  // Close the Claude Code editor tab whose label matches the session's title.
+  private _closeTabForSession(sessionId: string): void {
+    const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
+    if (!session) { return; }
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        if (
+          tab.input instanceof vscode.TabInputWebview &&
+          tab.input.viewType.includes('claudeVSCodePanel') &&
+          tab.label === session.title
+        ) {
+          void vscode.window.tabGroups.close(tab);
+          return;
+        }
+      }
+    }
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
