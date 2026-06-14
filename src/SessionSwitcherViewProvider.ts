@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
-import { SessionManager, ClaudeSession, getActiveWorkspacePaths } from './SessionManager';
+import { SessionManager, ClaudeSession, getActiveSessionIds } from './SessionManager';
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -147,25 +147,16 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       // Tab API produced real matches — show only sessions with open tabs.
       sessions = tabMatchedSessions;
     } else {
-      // Tab API unavailable — use lock-file workspace detection instead.
-      // ~/.claude/ide/*.lock files contain the PID of the VS Code extension
-      // host. If that PID is alive the window is open; we then keep sessions
-      // whose projectPath lives inside one of those workspaces.
-      const activeWorkspaces = await getActiveWorkspacePaths();
-      const TWO_HOURS = 2 * 60 * 60 * 1000;
-      const now = Date.now();
-      if (activeWorkspaces.size > 0) {
-        // Session must be in an active workspace AND recently touched.
-        // This excludes old historical sessions from the same workspace.
-        sessions = allSessions.filter(s =>
-          s.projectPath &&
-          [...activeWorkspaces].some(ws =>
-            s.projectPath === ws || s.projectPath.startsWith(ws + '/')
-          ) &&
-          (s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS)
-        );
+      // Tab API unavailable — use ~/.claude/sessions/ PID liveness instead.
+      // Each file maps a PID (with kernel start-time verification) to a
+      // sessionId, so we know exactly which sessions have a running process.
+      const activeIds = await getActiveSessionIds();
+      if (activeIds.size > 0) {
+        sessions = allSessions.filter(s => activeIds.has(s.sessionId));
       } else {
-        // No lock files readable — fall back to 2-hour time window.
+        // No session files readable — last-resort 2-hour time window.
+        const TWO_HOURS = 2 * 60 * 60 * 1000;
+        const now = Date.now();
         sessions = allSessions.filter(s =>
           s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
         );
@@ -195,18 +186,16 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     if (tabMatched.size > 0) {
       history = allSessions.filter(s => !tabMatched.has(s.title));
     } else {
-      const activeWorkspaces = await getActiveWorkspacePaths();
-      const TWO_HOURS = 2 * 60 * 60 * 1000;
-      const now = Date.now();
-      // History = everything NOT shown in the main list
-      history = allSessions.filter(s => {
-        const inActiveWorkspace = s.projectPath &&
-          [...activeWorkspaces].some(ws =>
-            s.projectPath === ws || s.projectPath.startsWith(ws + '/')
-          );
-        const isRecent = s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS;
-        return !(inActiveWorkspace && isRecent);
-      });
+      const activeIds = await getActiveSessionIds();
+      if (activeIds.size > 0) {
+        history = allSessions.filter(s => !activeIds.has(s.sessionId));
+      } else {
+        const TWO_HOURS = 2 * 60 * 60 * 1000;
+        const now = Date.now();
+        history = allSessions.filter(s =>
+          s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS
+        );
+      }
     }
     void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
   }

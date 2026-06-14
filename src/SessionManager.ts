@@ -25,33 +25,43 @@ interface JsonlRecord {
   };
 }
 
-// Read ~/.claude/ide/*.lock files and return workspace paths whose VS Code
-// extension host process (the pid field inside the JSON) is still running.
-// This is how we know which VS Code windows are actually open right now.
-export async function getActiveWorkspacePaths(): Promise<Set<string>> {
+// Read ~/.claude/sessions/*.json and return session IDs whose Claude process
+// is still running. Each file stores the PID and the kernel start-time
+// (procStart) of the Claude process so we can distinguish a live session
+// from a recycled PID.  Only interactive VS Code sessions are included.
+export async function getActiveSessionIds(): Promise<Set<string>> {
   const active = new Set<string>();
-  const ideDir = path.join(os.homedir(), '.claude', 'ide');
+  const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
   let files: string[];
   try {
-    files = (await fs.promises.readdir(ideDir)).filter(f => f.endsWith('.lock'));
+    files = (await fs.promises.readdir(sessionsDir)).filter(f => f.endsWith('.json'));
   } catch {
     return active;
   }
   for (const file of files) {
     try {
-      const raw = await fs.promises.readFile(path.join(ideDir, file), 'utf8');
-      const data = JSON.parse(raw) as { pid?: number; workspaceFolders?: string[] };
-      if (typeof data.pid !== 'number') { continue; }
+      const raw = await fs.promises.readFile(path.join(sessionsDir, file), 'utf8');
+      const data = JSON.parse(raw) as {
+        pid?: number;
+        sessionId?: string;
+        procStart?: string | number;
+        entrypoint?: string;
+      };
+      if (typeof data.pid !== 'number' || !data.sessionId) { continue; }
+      if (data.entrypoint !== 'claude-vscode') { continue; }
       try {
         process.kill(data.pid, 0); // throws if process is dead
-        for (const folder of data.workspaceFolders ?? []) {
-          active.add(folder);
+        // Verify the PID hasn't been recycled by comparing kernel start-times.
+        const stat = await fs.promises.readFile(`/proc/${data.pid}/stat`, 'utf8');
+        const actualStart = stat.split(' ')[21];
+        if (String(data.procStart) === actualStart) {
+          active.add(data.sessionId);
         }
       } catch {
-        // Stale lock — process is gone
+        // Dead or unreadable — skip
       }
     } catch {
-      // Unreadable or malformed lock file
+      // Malformed session file — skip
     }
   }
   return active;
