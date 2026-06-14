@@ -106,14 +106,15 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   }
 
   // Returns labels of all currently open Claude Code editor tabs.
+  // Uses duck-typing (not instanceof) so it works from both the local and
+  // remote extension hosts.
   private _openClaudeTabLabels(): Set<string> {
     const labels = new Set<string>();
     for (const group of vscode.window.tabGroups.all) {
       for (const tab of group.tabs) {
-        if (
-          tab.input instanceof vscode.TabInputWebview &&
-          tab.input.viewType.includes('claudeVSCodePanel')
-        ) {
+        // Duck-type: Claude Code panels have input.viewType containing 'claudeVSCodePanel'
+        const input = tab.input as { viewType?: string } | null | undefined;
+        if (input?.viewType?.includes('claudeVSCodePanel')) {
           labels.add(tab.label);
         }
       }
@@ -127,35 +128,50 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     const allSessions = this._sessionManager.getSessions();
     const openLabels = this._openClaudeTabLabels();
 
-    // Build a title → session map (most-recently-updated wins on collisions)
-    const byTitle = new Map<string, ClaudeSession>();
-    for (const s of allSessions) {
-      const existing = byTitle.get(s.title);
-      if (!existing || s.updatedAt > existing.updatedAt) {
-        byTitle.set(s.title, s);
+    let sessions: ClaudeSession[];
+
+    if (openLabels.size > 0) {
+      // Tab API working — show only sessions that have an open Claude Code tab
+      const byTitle = new Map<string, ClaudeSession>();
+      for (const s of allSessions) {
+        const existing = byTitle.get(s.title);
+        if (!existing || s.updatedAt > existing.updatedAt) {
+          byTitle.set(s.title, s);
+        }
       }
+      sessions = [];
+      for (const label of openLabels) {
+        const session = byTitle.get(label);
+        if (session) { sessions.push(session); }
+      }
+    } else {
+      // Tab API unavailable (remote extension host) — fall back to sessions
+      // that are active/waiting OR were modified in the last 2 hours.
+      const TWO_HOURS = 2 * 60 * 60 * 1000;
+      const now = Date.now();
+      sessions = allSessions.filter(s =>
+        s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
+      );
     }
 
-    // Main list = sessions whose title matches an open Claude Code tab.
-    // Tabs still loading (label "Claude Code") are skipped — they appear
-    // once Claude Code sets their AI-generated title.
-    const sessions: ClaudeSession[] = [];
-    for (const label of openLabels) {
-      const session = byTitle.get(label);
-      if (session) { sessions.push(session); }
-    }
     sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
-
     void this._view.webview.postMessage({ type: 'updateSessions', sessions });
   }
 
   private _pushHistory(): void {
     if (!this._view) { return; }
     const openLabels = this._openClaudeTabLabels();
-    const history = this._sessionManager.getSessions()
-      .filter(s => !openLabels.has(s.title))
-      .slice(0, 50);
-    void this._view.webview.postMessage({ type: 'updateHistory', sessions: history });
+    let history: ClaudeSession[];
+    if (openLabels.size > 0) {
+      history = this._sessionManager.getSessions()
+        .filter(s => !openLabels.has(s.title));
+    } else {
+      const TWO_HOURS = 2 * 60 * 60 * 1000;
+      const now = Date.now();
+      history = this._sessionManager.getSessions()
+        .filter(s => s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS);
+    }
+    void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
   }
 
   // Close the Claude Code editor tab whose label matches the session's title.
@@ -164,11 +180,8 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     if (!session) { return; }
     for (const group of vscode.window.tabGroups.all) {
       for (const tab of group.tabs) {
-        if (
-          tab.input instanceof vscode.TabInputWebview &&
-          tab.input.viewType.includes('claudeVSCodePanel') &&
-          tab.label === session.title
-        ) {
+        const input = tab.input as { viewType?: string } | null | undefined;
+        if (input?.viewType?.includes('claudeVSCodePanel') && tab.label === session.title) {
           void vscode.window.tabGroups.close(tab);
           return;
         }

@@ -162,7 +162,7 @@
     if (sessions.length === 0) {
       const placeholder = document.createElement('span');
       placeholder.className = 'tab-placeholder';
-      placeholder.textContent = 'No pinned sessions — click + or open History';
+      placeholder.textContent = 'No active sessions — click + to start one';
       tabStrip.appendChild(placeholder);
       return;
     }
