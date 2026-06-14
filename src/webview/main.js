@@ -4,53 +4,49 @@
 (function () {
   'use strict';
 
-  // Acquire the VS Code API once and store it.
   const vscodeApi = acquireVsCodeApi();
 
   // ── State ────────────────────────────────────────────────────────────────
 
-  /** @type {Array<{sessionId: string, projectName: string, title: string, updatedAt: string}>} */
+  /** @type {Array<{sessionId: string, projectName: string, title: string, updatedAt: string, status: string}>} */
   let sessions = [];
-  let historyExpanded = false;
 
-  // ── DOM References (populated after DOMContentLoaded) ───────────────────
+  /** @type {Array<{sessionId: string, projectName: string, title: string, updatedAt: string, status: string}>} */
+  let historySessions = [];
 
-  let tabStrip;        // the scrollable tab row (excluding the + button)
-  let historyContent;  // the collapsible content div
-  let historyToggle;   // the toggle button / heading
+  let historyOpen = false;
+
+  // ── DOM References ────────────────────────────────────────────────────────
+
+  let tabStrip;
+  let historyToggle;
+  let historyPanel;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   /**
-   * Format an ISO date string as a human-readable relative time string.
    * @param {string} isoString
    * @returns {string}
    */
   function formatRelativeTime(isoString) {
     const now = Date.now();
     const then = new Date(isoString).getTime();
-    if (isNaN(then)) {
-      return '';
-    }
-    const diffMs = now - then;
-    const diffSec = Math.floor(diffMs / 1000);
+    if (isNaN(then)) { return ''; }
+    const diffSec = Math.floor((now - then) / 1000);
     const diffMin = Math.floor(diffSec / 60);
     const diffHr  = Math.floor(diffMin / 60);
     const diffDay = Math.floor(diffHr  / 24);
-
     if (diffSec < 60)  { return 'just now'; }
     if (diffMin < 60)  { return diffMin === 1 ? '1 minute ago' : `${diffMin} minutes ago`; }
     if (diffHr  < 24)  { return diffHr  === 1 ? '1 hour ago'   : `${diffHr} hours ago`; }
     if (diffDay < 30)  { return diffDay === 1 ? '1 day ago'    : `${diffDay} days ago`; }
-    // Fall back to locale date for older items
     return new Date(isoString).toLocaleDateString();
   }
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Tab builder ───────────────────────────────────────────────────────────
 
   /**
-   * Build a single tab element for the tab strip.
-   * @param {{sessionId: string, projectName: string, title: string}} session
+   * @param {object} session
    * @returns {HTMLElement}
    */
   function buildTab(session) {
@@ -61,42 +57,47 @@
     tab.setAttribute('tabindex', '0');
     tab.setAttribute('title', (session.title || '(untitled)') + ' — ' + formatRelativeTime(session.updatedAt));
 
-    // Title label
+    const statusEl = document.createElement('span');
+    statusEl.className = 'status-indicator status-' + (session.status || 'idle');
+    statusEl.setAttribute('title',
+      session.status === 'active'  ? 'Running' :
+      session.status === 'waiting' ? 'Waiting for response' : '');
+
+    const textEl = document.createElement('div');
+    textEl.className = 'tab-text';
+
     const titleEl = document.createElement('span');
     titleEl.className = 'tab-title';
     titleEl.textContent = session.title || '(untitled)';
+    textEl.appendChild(titleEl);
 
-    // Project badge
-    const badgeEl = document.createElement('span');
-    badgeEl.className = 'tab-badge';
-    badgeEl.textContent = session.projectName || '';
+    if (session.projectName) {
+      const badgeEl = document.createElement('span');
+      badgeEl.className = 'tab-badge';
+      badgeEl.textContent = session.projectName;
+      textEl.appendChild(badgeEl);
+    }
 
-    // Close button
     const closeBtn = document.createElement('button');
     closeBtn.className = 'tab-close';
-    closeBtn.setAttribute('aria-label', 'Close tab');
-    closeBtn.setAttribute('title', 'Close tab');
+    closeBtn.setAttribute('aria-label', 'Remove from tab bar');
+    closeBtn.setAttribute('title', 'Remove from tab bar');
     closeBtn.textContent = '×';
     closeBtn.addEventListener('click', (event) => {
       event.stopPropagation();
       vscodeApi.postMessage({ type: 'removeTab', sessionId: session.sessionId });
     });
 
-    tab.appendChild(titleEl);
-    if (session.projectName) {
-      tab.appendChild(badgeEl);
-    }
+    tab.appendChild(statusEl);
+    tab.appendChild(textEl);
     tab.appendChild(closeBtn);
 
-    // Clicking the tab body (not the close button) switches to that session
     tab.addEventListener('click', () => {
       vscodeApi.postMessage({ type: 'switchSession', sessionId: session.sessionId });
     });
-
-    // Keyboard accessibility: Enter/Space activates the tab
     tab.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
-        if (event.target === closeBtn) { return; } // Let close button handle its own click
+        if (event.target === closeBtn) { return; }
         event.preventDefault();
         vscodeApi.postMessage({ type: 'switchSession', sessionId: session.sessionId });
       }
@@ -105,55 +106,90 @@
     return tab;
   }
 
+  // ── History item builder ──────────────────────────────────────────────────
+
   /**
-   * Fully re-render the tab strip from the current `sessions` array.
+   * @param {object} session
+   * @returns {HTMLElement}
    */
+  function buildHistoryItem(session) {
+    const item = document.createElement('div');
+    item.className = 'history-item';
+    item.setAttribute('tabindex', '0');
+    item.setAttribute('title', (session.title || '(untitled)') + ' — ' + formatRelativeTime(session.updatedAt));
+
+    const textEl = document.createElement('div');
+    textEl.className = 'tab-text';
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'tab-title';
+    titleEl.textContent = session.title || '(untitled)';
+    textEl.appendChild(titleEl);
+
+    if (session.projectName) {
+      const badgeEl = document.createElement('span');
+      badgeEl.className = 'tab-badge';
+      badgeEl.textContent = session.projectName;
+      textEl.appendChild(badgeEl);
+    }
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'history-time';
+    timeEl.textContent = formatRelativeTime(session.updatedAt);
+    textEl.appendChild(timeEl);
+
+    item.appendChild(textEl);
+
+    const activate = () => {
+      vscodeApi.postMessage({ type: 'addFromHistory', sessionId: session.sessionId });
+    };
+    item.addEventListener('click', activate);
+    item.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        activate();
+      }
+    });
+
+    return item;
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+
   function renderTabs() {
     if (!tabStrip) { return; }
-    // Clear existing tabs (everything except the + button, which is a sibling)
     tabStrip.innerHTML = '';
-
     if (sessions.length === 0) {
       const placeholder = document.createElement('span');
       placeholder.className = 'tab-placeholder';
-      placeholder.textContent = 'No open sessions';
+      placeholder.textContent = 'No pinned sessions — click + or open History';
       tabStrip.appendChild(placeholder);
       return;
     }
-
-    sessions.forEach((session) => {
-      tabStrip.appendChild(buildTab(session));
-    });
+    sessions.forEach(session => tabStrip.appendChild(buildTab(session)));
   }
 
-  /**
-   * Re-render the history section header count.
-   * (Content is a static placeholder for v1.)
-   */
   function renderHistory() {
-    const countEl = document.getElementById('history-count');
-    if (countEl) {
-      countEl.textContent = '';
+    if (!historyPanel) { return; }
+    historyPanel.innerHTML = '';
+    if (historySessions.length === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'tab-placeholder';
+      empty.textContent = 'No past sessions found';
+      historyPanel.appendChild(empty);
+      return;
     }
+    historySessions.forEach(session => historyPanel.appendChild(buildHistoryItem(session)));
   }
 
-  /**
-   * Full render pass.
-   */
-  function render() {
-    renderTabs();
-    renderHistory();
-  }
-
-  // ── History toggle ────────────────────────────────────────────────────────
-
-  function toggleHistory() {
-    historyExpanded = !historyExpanded;
-    historyContent.hidden = !historyExpanded;
-    historyToggle.setAttribute('aria-expanded', String(historyExpanded));
-    const arrow = historyToggle.querySelector('.history-arrow');
-    if (arrow) {
-      arrow.textContent = historyExpanded ? '▼' : '▶';
+  function setHistoryOpen(open) {
+    historyOpen = open;
+    if (!historyToggle || !historyPanel) { return; }
+    historyToggle.textContent = open ? 'History ▼' : 'History ▶';
+    historyToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    historyPanel.hidden = !open;
+    if (open) {
+      vscodeApi.postMessage({ type: 'loadHistory' });
     }
   }
 
@@ -161,17 +197,16 @@
 
   window.addEventListener('message', (event) => {
     const message = event.data;
-    if (!message || typeof message !== 'object') {
-      return;
-    }
+    if (!message || typeof message !== 'object') { return; }
 
     switch (message.type) {
       case 'updateSessions':
         sessions = Array.isArray(message.sessions) ? message.sessions : [];
-        render();
+        renderTabs();
         break;
-      default:
-        // Ignore unknown message types
+      case 'updateHistory':
+        historySessions = Array.isArray(message.sessions) ? message.sessions : [];
+        renderHistory();
         break;
     }
   });
@@ -180,10 +215,9 @@
 
   function init() {
     tabStrip      = document.getElementById('tab-strip');
-    historyContent = document.getElementById('history-content');
-    historyToggle  = document.getElementById('history-toggle');
+    historyToggle = document.getElementById('history-toggle');
+    historyPanel  = document.getElementById('history-panel');
 
-    // New session button
     const newBtn = document.getElementById('new-session-btn');
     if (newBtn) {
       newBtn.addEventListener('click', () => {
@@ -191,18 +225,19 @@
       });
     }
 
-    // History collapse/expand
     if (historyToggle) {
-      historyToggle.addEventListener('click', toggleHistory);
+      historyToggle.addEventListener('click', () => {
+        setHistoryOpen(!historyOpen);
+      });
     }
 
-    // Initial render (empty state)
-    render();
+    renderTabs();
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', () => { init(); vscodeApi.postMessage({ type: 'ready' }); });
   } else {
     init();
+    vscodeApi.postMessage({ type: 'ready' });
   }
 }());
