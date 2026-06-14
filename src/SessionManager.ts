@@ -12,12 +12,16 @@ export interface ClaudeSession {
   status: 'idle' | 'waiting' | 'active'; // idle=done, waiting=user sent/no reply yet, active=tools running
 }
 
+interface ContentBlock {
+  type?: string;
+}
+
 interface JsonlRecord {
   type?: string;
   cwd?: string;
   aiTitle?: string;     // present in ai-title records written by Claude Code
   message?: {
-    content?: string | unknown[];
+    content?: string | ContentBlock[];
   };
 }
 
@@ -228,14 +232,15 @@ export class SessionManager implements vscode.Disposable {
     }
   }
 
-  // Read the tail of the file and infer session status.
+  // Infer session status from the tail of the JSONL file.
   //
-  // The VS Code Claude extension writes an `assistant` record as soon as it
-  // starts streaming a response — BEFORE tools finish executing. So seeing
-  // `assistant` as the last record does not mean the session is idle; Claude
-  // may still be mid-task. We therefore use a 30-second recency window: if
-  // the file was written to within the last 30 s and the last record is
-  // `assistant`, we report `active` rather than `idle`.
+  // Status semantics:
+  //   'idle'    — Claude is done, session is waiting for the user to act
+  //   'waiting' — user sent a message, Claude has not yet started responding
+  //   'active'  — Claude is generating a response or executing tools
+  //
+  // Gray (idle) should mean "nothing is happening, your turn". Green (active)
+  // should cover everything Claude is actively doing.
   private async _readStatus(
     fh: Awaited<ReturnType<typeof fs.promises.open>>,
     fileSize: number,
@@ -251,22 +256,38 @@ export class SessionManager implements vscode.Disposable {
     const { bytesRead } = await fh.read(buf, 0, size, offset);
     const chunk = buf.subarray(0, bytesRead).toString('utf8');
 
+    // File modified in the last 30 s — Claude may be mid-stream even if the
+    // last JSONL record looks terminal.
     const recentlyModified = (Date.now() - updatedAt.getTime()) < 30_000;
 
-    // Walk lines in reverse to find the last parseable record
     const lines = chunk.split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       const trimmed = lines[i].trim();
       if (!trimmed) { continue; }
       try {
         const record = JSON.parse(trimmed) as JsonlRecord;
+
+        if (record.type === 'user') { return 'waiting'; }
+
+        if (record.type === 'tool_use' || record.type === 'tool_result') {
+          return 'active';
+        }
+
         if (record.type === 'assistant') {
-          // If the file is still being actively written, Claude is mid-task.
+          // If the assistant message contains tool_use blocks, those tools are
+          // still executing — keep green regardless of recency.
+          const content = record.message?.content;
+          if (Array.isArray(content)) {
+            const hasToolUse = content.some(b => b?.type === 'tool_use');
+            if (hasToolUse) { return 'active'; }
+          }
+          // Pure text response: green if file is still being written (streaming),
+          // gray once the file has been quiet for 30+ seconds.
           return recentlyModified ? 'active' : 'idle';
         }
-        if (record.type === 'user')      { return 'waiting'; }
-        if (record.type === 'tool_use' || record.type === 'tool_result') { return 'active'; }
-        // Other record types — keep scanning backward
+
+        // Other record types (queue-operation, ai-title, file-history-snapshot)
+        // are not meaningful for status — keep scanning backward.
       } catch {
         // Partial line at the start of the tail window — skip
       }

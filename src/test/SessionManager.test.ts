@@ -170,6 +170,26 @@ describe('SessionManager._parseSessionFile', () => {
       expect(result?.status).toBe('active');
     });
 
+    it('assistant with tool_use in content → status = active (tools executing)', async () => {
+      const file = await writeTempJsonl(tmpDir, 'tool-in-content', [
+        { type: 'user', cwd: '/p', message: { content: 'run bash' } },
+        {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'text', text: 'Running...' },
+              { type: 'tool_use', id: 't1', name: 'bash', input: { command: 'ls' } },
+            ],
+          },
+        },
+      ]);
+      // Back-date so recency heuristic doesn't interfere
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('active');
+    });
+
     it('tool running: last record is tool_use → status = active', async () => {
       const file = await writeTempJsonl(tmpDir, 'active-session', [
         { type: 'user', cwd: '/p', message: { content: 'run a tool' } },
