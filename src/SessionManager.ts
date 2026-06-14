@@ -25,6 +25,38 @@ interface JsonlRecord {
   };
 }
 
+// Read ~/.claude/ide/*.lock files and return workspace paths whose VS Code
+// extension host process (the pid field inside the JSON) is still running.
+// This is how we know which VS Code windows are actually open right now.
+export async function getActiveWorkspacePaths(): Promise<Set<string>> {
+  const active = new Set<string>();
+  const ideDir = path.join(os.homedir(), '.claude', 'ide');
+  let files: string[];
+  try {
+    files = (await fs.promises.readdir(ideDir)).filter(f => f.endsWith('.lock'));
+  } catch {
+    return active;
+  }
+  for (const file of files) {
+    try {
+      const raw = await fs.promises.readFile(path.join(ideDir, file), 'utf8');
+      const data = JSON.parse(raw) as { pid?: number; workspaceFolders?: string[] };
+      if (typeof data.pid !== 'number') { continue; }
+      try {
+        process.kill(data.pid, 0); // throws if process is dead
+        for (const folder of data.workspaceFolders ?? []) {
+          active.add(folder);
+        }
+      } catch {
+        // Stale lock — process is gone
+      }
+    } catch {
+      // Unreadable or malformed lock file
+    }
+  }
+  return active;
+}
+
 // Fingerprint used to skip firing the event when nothing changed.
 function sessionsFingerprint(sessions: ClaudeSession[]): string {
   return sessions.map(s => `${s.sessionId}:${s.status}:${s.title}:${s.updatedAt.getTime()}`).join('|');

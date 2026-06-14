@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
-import { SessionManager, ClaudeSession } from './SessionManager';
+import { SessionManager, ClaudeSession, getActiveWorkspacePaths } from './SessionManager';
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -38,16 +38,16 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     // Refresh when session file metadata changes (status, titles)
     this._viewDisposables.push(
       this._sessionManager.onDidChangeSessions(() => {
-        this._pushSessions();
-        if (this._historyOpen) { this._pushHistory(); }
+        void this._pushSessions();
+        if (this._historyOpen) { void this._pushHistory(); }
       })
     );
 
     // Refresh when Claude Code tabs open, close, or get renamed
     this._viewDisposables.push(
       vscode.window.tabGroups.onDidChangeTabs(() => {
-        this._pushSessions();
-        if (this._historyOpen) { this._pushHistory(); }
+        void this._pushSessions();
+        if (this._historyOpen) { void this._pushHistory(); }
       })
     );
 
@@ -72,7 +72,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           }
           case 'loadHistory': {
             this._historyOpen = true;
-            this._pushHistory();
+            void this._pushHistory();
             break;
           }
           case 'closeHistory': {
@@ -86,7 +86,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             break;
           }
           case 'ready': {
-            this._pushSessions();
+            void this._pushSessions();
             break;
           }
         }
@@ -97,7 +97,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       webviewView.onDidDispose(() => { this._view = undefined; })
     );
 
-    this._pushSessions();
+    void this._pushSessions();
   }
 
   public dispose(): void {
@@ -122,7 +122,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     return labels;
   }
 
-  private _pushSessions(): void {
+  private async _pushSessions(): Promise<void> {
     if (!this._view) { return; }
 
     const allSessions = this._sessionManager.getSessions();
@@ -147,21 +147,33 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       // Tab API produced real matches — show only sessions with open tabs.
       sessions = tabMatchedSessions;
     } else {
-      // Tab API unavailable or no label matches (e.g. Claude Code is in the
-      // sidebar, not editor tabs) — fall back to sessions active/waiting OR
-      // modified in the last 8 hours.
-      const TWO_HOURS = 2 * 60 * 60 * 1000;
-      const now = Date.now();
-      sessions = allSessions.filter(s =>
-        s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
-      );
+      // Tab API unavailable — use lock-file workspace detection instead.
+      // ~/.claude/ide/*.lock files contain the PID of the VS Code extension
+      // host. If that PID is alive the window is open; we then keep sessions
+      // whose projectPath lives inside one of those workspaces.
+      const activeWorkspaces = await getActiveWorkspacePaths();
+      if (activeWorkspaces.size > 0) {
+        sessions = allSessions.filter(s =>
+          s.projectPath &&
+          [...activeWorkspaces].some(ws =>
+            s.projectPath === ws || s.projectPath.startsWith(ws + '/')
+          )
+        );
+      } else {
+        // No lock files readable — last-resort 2-hour time window.
+        const TWO_HOURS = 2 * 60 * 60 * 1000;
+        const now = Date.now();
+        sessions = allSessions.filter(s =>
+          s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
+        );
+      }
     }
 
     sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     void this._view.webview.postMessage({ type: 'updateSessions', sessions });
   }
 
-  private _pushHistory(): void {
+  private async _pushHistory(): Promise<void> {
     if (!this._view) { return; }
     const openLabels = this._openClaudeTabLabels();
     const allSessions = this._sessionManager.getSessions();
@@ -180,11 +192,21 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     if (tabMatched.size > 0) {
       history = allSessions.filter(s => !tabMatched.has(s.title));
     } else {
-      const TWO_HOURS = 2 * 60 * 60 * 1000;
-      const now = Date.now();
-      history = allSessions.filter(s =>
-        s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS
-      );
+      const activeWorkspaces = await getActiveWorkspacePaths();
+      if (activeWorkspaces.size > 0) {
+        history = allSessions.filter(s =>
+          !s.projectPath ||
+          ![...activeWorkspaces].some(ws =>
+            s.projectPath === ws || s.projectPath.startsWith(ws + '/')
+          )
+        );
+      } else {
+        const TWO_HOURS = 2 * 60 * 60 * 1000;
+        const now = Date.now();
+        history = allSessions.filter(s =>
+          s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS
+        );
+      }
     }
     void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
   }
