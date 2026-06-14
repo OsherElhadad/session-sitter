@@ -12,6 +12,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
   private _view?: vscode.WebviewView;
   private _viewDisposables: vscode.Disposable[] = [];
+  private _historyOpen = false;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -36,10 +37,14 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-    // Refresh tab metadata when session files change on disk
+    // Refresh tab metadata when session files change on disk.
+    // Also push history so it updates automatically when the panel is open.
     this._viewDisposables.push(
       this._sessionManager.onDidChangeSessions(() => {
         this._pushSessions();
+        if (this._historyOpen) {
+          this._pushHistory();
+        }
       })
     );
 
@@ -70,7 +75,12 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             break;
           }
           case 'loadHistory': {
+            this._historyOpen = true;
             this._pushHistory();
+            break;
+          }
+          case 'closeHistory': {
+            this._historyOpen = false;
             break;
           }
           case 'addFromHistory': {

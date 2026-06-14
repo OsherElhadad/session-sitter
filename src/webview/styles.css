@@ -168,9 +168,10 @@ button:focus-visible {
   align-self: center;
 }
 
-/* idle: invisible placeholder so layout doesn't shift */
+/* idle: dim dot so the session is visibly tracked */
 .status-idle {
-  background: transparent;
+  background-color: var(--vscode-editor-foreground, #888);
+  opacity: 0.25;
 }
 
 /* waiting: slow pulse — user sent a message, Claude hasn't replied yet */

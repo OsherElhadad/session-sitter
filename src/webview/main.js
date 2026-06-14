@@ -190,6 +190,8 @@
     historyPanel.hidden = !open;
     if (open) {
       vscodeApi.postMessage({ type: 'loadHistory' });
+    } else {
+      vscodeApi.postMessage({ type: 'closeHistory' });
     }
   }
 
