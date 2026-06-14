@@ -1,115 +1,165 @@
 # Claude Session Switcher
 
-A lightweight VS Code extension that adds a **tabbed session browser** to the Secondary Sidebar — so you can switch between Claude Code sessions with a single click instead of hunting through the Command Palette.
+A VS Code extension that gives Claude Code what it's missing: a **live session panel** that shows exactly which Claude sessions are running right now, lets you switch between them with one click, and keeps every background session alive while you focus elsewhere.
 
 ---
 
-## Why This Exists
+## The Problem
 
-Claude Code supports multiple sessions, but switching between them requires navigating menus or remembering keyboard shortcuts. If you work across several projects or keep long-running conversations, context-switching becomes friction.
+Claude Code supports multiple concurrent sessions — each one keeps running in the background even when its tab is hidden. But there's no built-in way to see at a glance which sessions are active, what they're doing, or switch to one without hunting through tabs.
 
-This extension puts all your sessions in a persistent tab strip — always visible, always one click away.
-
----
-
-## Features
-
-- **Session tabs** — every Claude Code session appears as a named tab, showing the first message and the project it belongs to
-- **Live updates** — new sessions appear automatically the moment they're created (no refresh needed)
-- **One-click switching** — click any tab to immediately open that session in Claude Code
-- **Tab management** — close tabs you're done with; session data is never deleted
-- **New session button** — start a fresh Claude Code session directly from the panel
-- **Theme-aware UI** — automatically adapts to VS Code's dark, light, and high-contrast themes
+This extension adds a **Claude Sessions panel** to your Secondary Sidebar that solves exactly that.
 
 ---
 
-## Requirements
+## What It Does
 
-- [Claude Code](https://marketplace.visualstudio.com/items?itemName=Anthropic.claude-code) must be installed and activated
-- VS Code **1.85** or later
+### Live session list — not a history browser
 
-> The extension declares `Anthropic.claude-code` as a dependency, so VS Code will prompt you to install it if it's missing.
+The panel shows only sessions that have a **running Claude process right now**. It detects this by reading `~/.claude/sessions/<pid>.json` — files Claude Code writes for each active session — and verifying the PID is still alive using the Linux kernel's `procStart` timestamp (so recycled PIDs don't fool it). Sessions that end disappear automatically.
+
+### Status indicators
+
+Each session row shows a live status dot updated every 5 seconds:
+
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 Spinning green ring | Claude is actively running tools or computing |
+| 🟡 Pulsing yellow dot | You sent a message — Claude hasn't responded yet |
+| ⚫ Dim gray dot | Session is idle, waiting for your input |
+
+### One-click switching
+
+Click any session row to bring that Claude Code panel to the front — in the same window, no new windows opened. The `×` button closes the Claude Code editor tab entirely.
+
+### History panel
+
+Past conversations live in a collapsible **History ▶** section. Click any item to re-open it as a live session.
+
+### AI-generated titles
+
+Session titles match exactly what Claude Code shows in its own tab bar — the AI-generated summary (e.g. "Fix authentication bug"), not your raw first message.
 
 ---
 
 ## Installation
 
-### From a VSIX file
-
-1. Download the latest `.vsix` from the [Releases](https://github.com/eranra/claude-session-switcher/releases) page
-2. In VS Code, open the Extensions panel
-3. Click the **`···`** menu → **Install from VSIX...**
-4. Select the downloaded file
-
-### From source
+### Build from source
 
 ```bash
 git clone https://github.com/eranra/claude-session-switcher.git
 cd claude-session-switcher
 npm install
-npm run compile
+npx @vscode/vsce package --no-dependencies
 ```
 
-Then press **`F5`** in VS Code to launch an Extension Development Host with the extension loaded.
+Then in VS Code: **Extensions panel** → `···` → **Install from VSIX...** → select the `.vsix` → reload.
+
+### Development
+
+Press **F5** in VS Code to launch an Extension Development Host with live reloading.
+
+---
+
+## Requirements
+
+- [Claude Code](https://marketplace.visualstudio.com/items?itemName=Anthropic.claude-code) installed and activated
+- VS Code **1.65** or later
+- Linux or WSL (relies on `/proc` for PID liveness detection)
 
 ---
 
 ## Getting Started
 
-1. Open the **Secondary Sidebar** (`Ctrl+Alt+B` / `Cmd+Alt+B`, or **View → Secondary Side Bar**)
-2. Click the **Claude Sessions** icon in the Secondary Sidebar's activity bar
-3. Your recent Claude Code sessions appear as tabs
+1. Open the **Secondary Sidebar** (`Ctrl+Alt+B` or **View → Secondary Side Bar**)
+2. The **Claude Sessions** panel appears automatically
+3. Open Claude Code sessions — they appear in the panel in real time
 
 | Action | How |
 |--------|-----|
-| Switch to a session | Click the tab |
-| Close a tab | Click `×` on the tab |
-| Start a new session | Click the `+` button |
+| Switch to a session | Click the row |
+| Close a session tab | Click `×` on the row |
+| Start a new session | Click `+` |
+| Browse past sessions | Click **History ▶** |
+| Resume a past session | Click any History item |
 
 ---
 
 ## How It Works
 
-Claude Code stores session transcripts locally at:
+### Detecting live sessions
+
+Claude Code writes a JSON file to `~/.claude/sessions/<pid>.json` for every active session:
+
+```json
+{
+  "pid": 1641086,
+  "sessionId": "3bfad019-...",
+  "cwd": "/home/user/my-project",
+  "startedAt": 1781443340390,
+  "procStart": "33842439",
+  "entrypoint": "claude-vscode"
+}
+```
+
+For each file the extension checks:
+
+1. **PID alive?** — `process.kill(pid, 0)` (signal 0 checks existence without sending a signal)
+2. **Not a recycled PID?** — compares `procStart` to `/proc/<pid>/stat` field 21 (kernel start-time in jiffies)
+3. **VS Code session?** — `entrypoint === "claude-vscode"` (excludes CLI runs)
+4. **Started today?** — `startedAt` within the last 24 hours (excludes zombie processes from a VS Code that was never restarted)
+
+This is exact — no time-window guessing for active sessions.
+
+### Status detection
+
+The JSONL tail (last 32 KB) is scanned backward for the last meaningful record:
 
 ```
-~/.claude/projects/<project-path>/<session-uuid>.jsonl
+assistant with tool_use content  →  active  (tools are executing)
+file modified in last 30 s       →  active  (Claude may still be streaming)
+user record                      →  waiting (message sent, no response yet)
+pr-link / last-prompt record     →  idle    (CLI session ended cleanly)
+assistant + quiet 30 s           →  idle    (response complete)
 ```
 
-This extension reads those files to extract session titles (the first message you sent) and project names — **without any network requests or Claude Code APIs**. It watches the directory for changes using VS Code's file system watcher, so the tab strip stays in sync automatically.
+### Session titles
 
-When you click a tab, it calls:
+The extension reads the `ai-title` record Claude Code appends after the first exchange — the same title shown in Claude Code's tab bar. Falls back to the first user message for brand-new sessions.
 
-```
-vscode://anthropic.claude-code/open?session=<uuid>
-```
+### Switching sessions
 
-This routes through VS Code's URI handler directly to Claude Code, which loads the session in its panel. No reimplementation of Claude Code internals — just a URI call.
+Clicking a session calls `claude-vscode.primaryEditor.open(sessionId)` — Claude Code's own command — which either reveals an existing panel or opens a new editor tab in the current window. Background sessions stay alive with `retainContextWhenHidden: true`.
+
+### Reliability in WSL
+
+VS Code's file system watcher can silently stop delivering events in WSL2. A 5-second polling loop ensures status indicators and new sessions stay current even when watcher events are missing.
 
 ---
 
 ## Architecture
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a detailed breakdown of components, the session data format, and the end-to-end message flow.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a full breakdown of components, data flows, and design decisions.
 
 ---
 
 ## Known Limitations
 
-- **Session titles are approximate** — Claude Code's AI-generated session titles aren't accessible from outside the extension. Titles here come from the first message you typed, truncated to 60 characters.
-- **No active session indicator** — the tab strip cannot tell which session Claude Code currently has open.
-- **Switching speed** — session switching goes through VS Code's URI handler (a round-trip through the OS), so it may feel slightly slower than native tab switching (~50–200 ms extra).
+- **Linux / WSL only** for PID-based detection. On macOS/Windows the extension falls back to showing sessions active within the last 2 hours.
+- **Cannot detect which panel is visible** — the VS Code tab API is unavailable from the remote extension host in WSL, so the extension knows which sessions are *running* but not which is currently *on screen*.
+- **New sessions appear after first exchange** — Claude Code creates the session file when the first message is sent, so brand-new empty sessions aren't visible until then.
 
 ---
 
 ## Contributing
 
-Issues and pull requests welcome. Please open an issue first to discuss significant changes.
-
 ```bash
 npm run compile   # TypeScript → out/
-npm run lint      # ESLint check
+npm test          # vitest unit tests (29 tests)
+npm run lint      # ESLint
 ```
+
+Issues and pull requests welcome.
 
 ---
 
