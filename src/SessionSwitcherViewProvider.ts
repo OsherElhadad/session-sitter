@@ -1,6 +1,10 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { execFile } from 'child_process';
 import { randomBytes } from 'crypto';
-import { SessionManager, ClaudeSession, getActiveSessionIds } from './SessionManager';
+import { SessionManager, ClaudeSession, getActiveSessionIds, readActiveLockFiles, getIPCSocketForPid } from './SessionManager';
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -12,11 +16,14 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   private _view?: vscode.WebviewView;
   private _viewDisposables: vscode.Disposable[] = [];
   private _historyOpen = false;
+  private _focusWatcher: vscode.Disposable | undefined;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _sessionManager: SessionManager,
-  ) {}
+  ) {
+    this._focusWatcher = this._startFocusRequestWatcher();
+  }
 
   public resolveWebviewView(
     webviewView: vscode.WebviewView,
@@ -103,6 +110,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   public dispose(): void {
     this._viewDisposables.forEach(d => d.dispose());
     this._viewDisposables = [];
+    this._focusWatcher?.dispose();
   }
 
   // Returns labels of all currently open Claude Code editor tabs.
@@ -213,6 +221,34 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
         }
       }
     }
+  }
+
+  // Called when a focus-<pid>.json file is created/changed in the session-switcher dir.
+  // Reads the request, checks freshness, calls primaryEditor.open, and deletes the file.
+  async _handleFocusRequest(uri: { fsPath: string }): Promise<void> {
+    try {
+      const raw = await fs.promises.readFile(uri.fsPath, 'utf8');
+      const data = JSON.parse(raw) as { sessionId?: unknown; requestedAt?: unknown };
+      if (typeof data.sessionId !== 'string' || typeof data.requestedAt !== 'number') { return; }
+      if (Date.now() - data.requestedAt > 10_000) { return; }
+      void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', data.sessionId);
+    } catch { /* malformed or missing */ } finally {
+      try { await fs.promises.unlink(uri.fsPath); } catch { /* already gone */ }
+    }
+  }
+
+  // Watch for focus requests addressed to this window's PID and handle them.
+  private _startFocusRequestWatcher(): vscode.Disposable {
+    const dir = path.join(os.homedir(), '.claude', 'session-switcher');
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+    const pattern = new vscode.RelativePattern(
+      vscode.Uri.file(dir),
+      `focus-${process.pid}.json`,
+    );
+    const watcher = vscode.workspace.createFileSystemWatcher(pattern);
+    watcher.onDidCreate(uri => { void this._handleFocusRequest(uri); });
+    watcher.onDidChange(uri => { void this._handleFocusRequest(uri); });
+    return watcher;
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
