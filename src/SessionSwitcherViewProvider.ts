@@ -64,7 +64,13 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           case 'switchSession': {
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
-            void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+            void this._tryFocusForeignWindow(sessionId).then(result => {
+              if (result === 'local') {
+                void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+              } else if (result === 'foreign-failed') {
+                void vscode.window.showWarningMessage('Could not switch to the window containing this session.');
+              }
+            });
             break;
           }
           case 'newSession': {
@@ -249,6 +255,50 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     watcher.onDidCreate(uri => { void this._handleFocusRequest(uri); });
     watcher.onDidChange(uri => { void this._handleFocusRequest(uri); });
     return watcher;
+  }
+
+  private async _tryFocusForeignWindow(sessionId: string): Promise<'focused' | 'foreign-failed' | 'local'> {
+    const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
+    if (!session?.projectPath) { return 'local'; }
+
+    const locks = await readActiveLockFiles();
+    const ownerLock = locks.find(lock =>
+      lock.pid !== process.pid &&
+      lock.workspaceFolders.some(wf =>
+        session.projectPath === wf || session.projectPath.startsWith(wf + '/')
+      )
+    );
+
+    if (!ownerLock) { return 'local'; }
+
+    // Foreign owner found — must focus it; do not fall back to local.
+    try {
+      const ipcSocket = await getIPCSocketForPid(ownerLock.pid);
+      if (!ipcSocket) { return 'foreign-failed'; }
+
+      const dir = path.join(os.homedir(), '.claude', 'session-switcher');
+      await fs.promises.mkdir(dir, { recursive: true });
+
+      const focusFile = path.join(dir, `focus-${ownerLock.pid}.json`);
+      await fs.promises.writeFile(focusFile, JSON.stringify({
+        sessionId,
+        workspacePath: ownerLock.workspaceFolders[0],
+        requestedAt: Date.now(),
+      }), 'utf8');
+
+      await new Promise<void>((resolve, reject) => {
+        execFile(
+          'code',
+          [ownerLock.workspaceFolders[0]],
+          { env: { ...process.env, VSCODE_IPC_HOOK_CLI: ipcSocket }, timeout: 3000 },
+          err => { if (err) { reject(err); } else { resolve(); } },
+        );
+      });
+
+      return 'focused';
+    } catch {
+      return 'foreign-failed';
+    }
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
