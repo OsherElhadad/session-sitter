@@ -54,11 +54,20 @@ vi.mock('os', async (importOriginal) => {
 // ── SessionManager stub ────────────────────────────────────────────────────────
 vi.mock('../SessionManager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../SessionManager')>();
+  return { ...actual, getActiveSessionIds: vi.fn().mockResolvedValue(new Set()) };
+});
+
+// ── WindowRegistry stub ──────────────────────────────────────────────────────
+const { mockReadLiveWindows } = vi.hoisted(() => ({ mockReadLiveWindows: vi.fn().mockResolvedValue([]) }));
+vi.mock('../WindowRegistry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../WindowRegistry')>();
   return {
     ...actual,
-    readActiveLockFiles: vi.fn().mockResolvedValue([]),
-    getIPCSocketForPid: vi.fn().mockResolvedValue(null),
-    getActiveSessionIds: vi.fn().mockResolvedValue(new Set()),
+    readLiveWindows: mockReadLiveWindows,
+    writeWindowEntry: vi.fn().mockResolvedValue(undefined),
+    removeWindowEntry: vi.fn().mockResolvedValue(undefined),
+    discoverOwnIpcSocket: vi.fn().mockReturnValue('/run/self.sock'),
+    detectIdeCli: vi.fn().mockReturnValue('bobide'),
   };
 });
 
@@ -66,7 +75,7 @@ vi.mock('../SessionManager', async (importOriginal) => {
 vi.mock('child_process', () => ({ execFile: vi.fn() }));
 
 import { SessionSwitcherViewProvider } from '../SessionSwitcherViewProvider';
-import { SessionManager, readActiveLockFiles, getIPCSocketForPid } from '../SessionManager';
+import { SessionManager } from '../SessionManager';
 import { execFile } from 'child_process';
 
 function makeProvider(sessions: import('../SessionManager').ClaudeSession[] = []) {
@@ -154,10 +163,39 @@ describe('_handleFocusRequest', () => {
   });
 });
 
-// ── Tests: _tryFocusForeignWindow ─────────────────────────────────────────────
+// ── Tests: _findOwnerWindow & _tryFocusForeignWindow ──────────────────────────
 type PrivateProvider = {
+  _findOwnerWindow(id: string): Promise<unknown>;
   _tryFocusForeignWindow(id: string): Promise<'focused' | 'foreign-failed' | 'local'>;
 };
+
+function providerWithSession(projectPath: string): PrivateProvider {
+  const session = {
+    sessionId: 'S', projectPath, projectName: 'proj', title: 'S',
+    updatedAt: new Date(), status: 'idle' as const,
+  };
+  return makeProvider([session]) as unknown as PrivateProvider;
+}
+
+describe('_findOwnerWindow', () => {
+  beforeEach(() => {
+    mockReadLiveWindows.mockReset();
+    vi.mocked(os.homedir).mockReturnValue(os.tmpdir());
+  });
+
+  it('returns null when the only match is our own pid', async () => {
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: process.pid, workspaceFolders: ['/ws'], ideCli: 'bobide', ipcSocket: '/s', updatedAt: Date.now() },
+    ]);
+    expect(await providerWithSession('/ws/proj')._findOwnerWindow('S')).toBeNull();
+  });
+
+  it('returns a foreign window whose workspace contains the project', async () => {
+    const owner = { pid: process.pid + 1, workspaceFolders: ['/ws'], ideCli: 'bobide', ipcSocket: '/s.sock', updatedAt: Date.now() };
+    mockReadLiveWindows.mockResolvedValue([owner]);
+    expect(await providerWithSession('/ws/proj')._findOwnerWindow('S')).toEqual(owner);
+  });
+});
 
 describe('_tryFocusForeignWindow', () => {
   let tmpDir: string;
@@ -165,10 +203,8 @@ describe('_tryFocusForeignWindow', () => {
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'focus-send-'));
     vi.mocked(os.homedir).mockReturnValue(tmpDir);
-    mockExecuteCommand.mockClear();
-    mockShowWarningMessage.mockClear();
-    vi.mocked(readActiveLockFiles).mockResolvedValue([]);
-    vi.mocked(getIPCSocketForPid).mockResolvedValue(null);
+    mockReadLiveWindows.mockReset();
+    (execFile as unknown as ReturnType<typeof vi.fn>).mockReset();
   });
 
   afterEach(async () => {
@@ -176,96 +212,41 @@ describe('_tryFocusForeignWindow', () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('returns "local" when the session has no projectPath', async () => {
-    const session = {
-      sessionId: 'no-path', projectPath: '', projectName: '', title: 'T',
-      updatedAt: new Date(), status: 'idle' as const,
-    };
-    const provider = makeProvider([session]) as unknown as PrivateProvider;
-    expect(await provider._tryFocusForeignWindow('no-path')).toBe('local');
+  it('returns "local" when no foreign owner', async () => {
+    mockReadLiveWindows.mockResolvedValue([]);
+    expect(await providerWithSession('/ws/proj')._tryFocusForeignWindow('S')).toBe('local');
   });
 
-  it('returns "local" when no lock file matches the session workspace', async () => {
-    vi.mocked(readActiveLockFiles).mockResolvedValue([
-      { pid: process.pid + 1, workspaceFolders: ['/unrelated/path'], port: 1234 },
+  it('returns "foreign-failed" when owner has no ipcSocket', async () => {
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: process.pid + 1, workspaceFolders: ['/ws'], ideCli: 'bobide', ipcSocket: '', updatedAt: Date.now() },
     ]);
-    const session = {
-      sessionId: 'no-match', projectPath: '/home/user/myproject', projectName: 'myproject',
-      title: 'T', updatedAt: new Date(), status: 'idle' as const,
-    };
-    const provider = makeProvider([session]) as unknown as PrivateProvider;
-    expect(await provider._tryFocusForeignWindow('no-match')).toBe('local');
+    expect(await providerWithSession('/ws/proj')._tryFocusForeignWindow('S')).toBe('foreign-failed');
   });
 
-  it('returns "local" when the matching lock file has the current PID', async () => {
-    vi.mocked(readActiveLockFiles).mockResolvedValue([
-      { pid: process.pid, workspaceFolders: ['/home/user/myproject'], port: 1234 },
+  it('execs the owner CLI with its socket and returns "focused"', async () => {
+    (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (_c: string, _a: string[], _o: unknown, cb: (e: unknown) => void) => cb(null),
+    );
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: process.pid + 1, workspaceFolders: ['/ws'], ideCli: 'bobide', ipcSocket: '/s.sock', updatedAt: Date.now() },
     ]);
-    const session = {
-      sessionId: 'same-pid', projectPath: '/home/user/myproject', projectName: 'myproject',
-      title: 'T', updatedAt: new Date(), status: 'idle' as const,
-    };
-    const provider = makeProvider([session]) as unknown as PrivateProvider;
-    expect(await provider._tryFocusForeignWindow('same-pid')).toBe('local');
-  });
-
-  it('returns "foreign-failed" when getIPCSocketForPid returns null', async () => {
-    const foreignPid = process.pid + 1;
-    vi.mocked(readActiveLockFiles).mockResolvedValue([
-      { pid: foreignPid, workspaceFolders: ['/home/user/myproject'], port: 1234 },
-    ]);
-    vi.mocked(getIPCSocketForPid).mockResolvedValue(null);
-    const session = {
-      sessionId: 'no-socket', projectPath: '/home/user/myproject', projectName: 'myproject',
-      title: 'T', updatedAt: new Date(), status: 'idle' as const,
-    };
-    const provider = makeProvider([session]) as unknown as PrivateProvider;
-    expect(await provider._tryFocusForeignWindow('no-socket')).toBe('foreign-failed');
+    const result = await providerWithSession('/ws/proj')._tryFocusForeignWindow('S');
+    expect(result).toBe('focused');
+    const call = (execFile as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(call[0]).toBe('bobide');
+    expect(call[1]).toEqual(['--reuse-window', '/ws']);
+    expect(call[2].env.VSCODE_IPC_HOOK_CLI).toBe('/s.sock');
   });
 
   it('returns "foreign-failed" when execFile throws', async () => {
-    const foreignPid = process.pid + 1;
-    vi.mocked(readActiveLockFiles).mockResolvedValue([
-      { pid: foreignPid, workspaceFolders: ['/home/user/myproject'], port: 1234 },
-    ]);
-    vi.mocked(getIPCSocketForPid).mockResolvedValue('/run/user/1000/vscode-ipc-test.sock');
     (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      (_cmd: unknown, _args: unknown, _opts: unknown, cb: (err: Error | null) => void) => {
-        cb(new Error('ENOENT'));
-      }
+      (_c: string, _a: string[], _o: unknown, cb: (e: unknown) => void) => cb(new Error('ENOENT')),
     );
-    const session = {
-      sessionId: 'exec-fail', projectPath: '/home/user/myproject', projectName: 'myproject',
-      title: 'T', updatedAt: new Date(), status: 'idle' as const,
-    };
-    const provider = makeProvider([session]) as unknown as PrivateProvider;
-    expect(await provider._tryFocusForeignWindow('exec-fail')).toBe('foreign-failed');
-  });
-
-  it('returns "focused" on success and writes the signal file', async () => {
-    const foreignPid = process.pid + 1;
-    vi.mocked(readActiveLockFiles).mockResolvedValue([
-      { pid: foreignPid, workspaceFolders: ['/home/user/myproject'], port: 1234 },
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: process.pid + 1, workspaceFolders: ['/ws'], ideCli: 'bobide', ipcSocket: '/s.sock', updatedAt: Date.now() },
     ]);
-    vi.mocked(getIPCSocketForPid).mockResolvedValue('/run/user/1000/vscode-ipc-test.sock');
-    (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-      (_cmd: unknown, _args: unknown, _opts: unknown, cb: (err: Error | null) => void) => {
-        cb(null);
-      }
-    );
-    const session = {
-      sessionId: 'success-id', projectPath: '/home/user/myproject', projectName: 'myproject',
-      title: 'T', updatedAt: new Date(), status: 'idle' as const,
-    };
-    const provider = makeProvider([session]) as unknown as PrivateProvider;
-    const result = await provider._tryFocusForeignWindow('success-id');
-
-    expect(result).toBe('focused');
-    const focusFile = path.join(tmpDir, '.claude', 'session-switcher', `focus-${foreignPid}.json`);
-    const written = JSON.parse(await fs.promises.readFile(focusFile, 'utf8'));
-    expect(written.sessionId).toBe('success-id');
-    expect(written.workspacePath).toBe('/home/user/myproject');
-    expect(typeof written.requestedAt).toBe('number');
+    expect(await providerWithSession('/ws/proj')._tryFocusForeignWindow('S')).toBe('foreign-failed');
   });
 });
 

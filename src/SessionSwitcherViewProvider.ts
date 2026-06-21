@@ -4,7 +4,8 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { randomBytes } from 'crypto';
-import { SessionManager, ClaudeSession, MessageExchange, getActiveSessionIds, readActiveLockFiles, getIPCSocketForPid } from './SessionManager';
+import { SessionManager, ClaudeSession, MessageExchange, getActiveSessionIds } from './SessionManager';
+import { readLiveWindows, writeWindowEntry, removeWindowEntry, discoverOwnIpcSocket, detectIdeCli, type WindowEntry } from './WindowRegistry';
 import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
 
 function getNonce(): string {
@@ -293,40 +294,38 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     return watcher;
   }
 
-  private async _tryFocusForeignWindow(sessionId: string): Promise<'focused' | 'foreign-failed' | 'local'> {
+  // Find the live registry entry for a different window whose workspace owns the
+  // session's project. Returns null when the session belongs to this window (local)
+  // or has no live owner.
+  private async _findOwnerWindow(sessionId: string): Promise<WindowEntry | null> {
     const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
-    if (!session?.projectPath) { return 'local'; }
+    if (!session?.projectPath) { return null; }
+    const windows = await readLiveWindows();
+    return windows.find(w =>
+      w.pid !== process.pid &&
+      w.workspaceFolders.some(wf => session.projectPath === wf || session.projectPath.startsWith(wf + '/')),
+    ) ?? null;
+  }
 
-    const locks = await readActiveLockFiles();
-    const ownerLock = locks.find(lock =>
-      lock.pid !== process.pid &&
-      lock.workspaceFolders.some(wf =>
-        session.projectPath === wf || session.projectPath.startsWith(wf + '/')
-      )
-    );
+  private async _tryFocusForeignWindow(sessionId: string): Promise<'focused' | 'foreign-failed' | 'local'> {
+    const owner = await this._findOwnerWindow(sessionId);
+    if (!owner) { return 'local'; }
+    if (!owner.ipcSocket || !owner.ideCli) { return 'foreign-failed'; }
 
-    if (!ownerLock) { return 'local'; }
-
-    // Foreign owner found — must focus it; do not fall back to local.
     try {
-      const ipcSocket = await getIPCSocketForPid(ownerLock.pid);
-      if (!ipcSocket) { return 'foreign-failed'; }
-
       const dir = path.join(os.homedir(), '.claude', 'session-switcher');
       await fs.promises.mkdir(dir, { recursive: true });
-
-      const focusFile = path.join(dir, `focus-${ownerLock.pid}.json`);
-      await fs.promises.writeFile(focusFile, JSON.stringify({
-        sessionId,
-        workspacePath: ownerLock.workspaceFolders[0],
-        requestedAt: Date.now(),
-      }), 'utf8');
+      await fs.promises.writeFile(
+        path.join(dir, `focus-${owner.pid}.json`),
+        JSON.stringify({ sessionId, requestedAt: Date.now() }),
+        'utf8',
+      );
 
       await new Promise<void>((resolve, reject) => {
         execFile(
-          'code',
-          [ownerLock.workspaceFolders[0]],
-          { env: { ...process.env, VSCODE_IPC_HOOK_CLI: ipcSocket }, timeout: 3000 },
+          owner.ideCli,
+          ['--reuse-window', owner.workspaceFolders[0]],
+          { env: { ...process.env, VSCODE_IPC_HOOK_CLI: owner.ipcSocket }, timeout: 3000 },
           err => { if (err) { reject(err); } else { resolve(); } },
         );
       });
