@@ -50,13 +50,17 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       })
     );
 
-    // Refresh when Claude Code tabs open, close, or get renamed
-    this._viewDisposables.push(
-      vscode.window.tabGroups.onDidChangeTabs(() => {
-        void this._pushSessions();
-        if (this._historyOpen) { void this._pushHistory(); }
-      })
-    );
+    // Refresh when Claude Code tabs open, close, or get renamed (tabGroups API added in VS Code 1.65)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tabGroups = (vscode.window as any).tabGroups as { onDidChangeTabs: vscode.Event<unknown> } | undefined;
+    if (tabGroups) {
+      this._viewDisposables.push(
+        tabGroups.onDidChangeTabs(() => {
+          void this._pushSessions();
+          if (this._historyOpen) { void this._pushHistory(); }
+        })
+      );
+    }
 
     this._viewDisposables.push(
       webviewView.webview.onDidReceiveMessage(async message => {
@@ -137,7 +141,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   // remote extension hosts.
   private _openClaudeTabLabels(): Set<string> {
     const labels = new Set<string>();
-    for (const group of vscode.window.tabGroups.all) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tabGroups = (vscode.window as any).tabGroups as { all: readonly { tabs: readonly { input: unknown; label: string }[] }[] } | undefined;
+    if (!tabGroups) { return labels; }
+    for (const group of tabGroups.all) {
       for (const tab of group.tabs) {
         // Duck-type: Claude Code panels have input.viewType containing 'claudeVSCodePanel'
         const input = tab.input as { viewType?: string } | null | undefined;
@@ -229,13 +236,16 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
   // Close the Claude Code editor tab whose label matches the session's title.
   private _closeTabForSession(sessionId: string): void {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tabGroups = (vscode.window as any).tabGroups as { all: readonly { tabs: readonly { input: unknown; label: string }[] }[]; close(tab: unknown): unknown } | undefined;
+    if (!tabGroups) { return; }
     const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
     if (!session) { return; }
-    for (const group of vscode.window.tabGroups.all) {
+    for (const group of tabGroups.all) {
       for (const tab of group.tabs) {
         const input = tab.input as { viewType?: string } | null | undefined;
         if (input?.viewType?.includes('claudeVSCodePanel') && tab.label === session.title) {
-          void vscode.window.tabGroups.close(tab);
+          void tabGroups.close(tab);
           return;
         }
       }
