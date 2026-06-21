@@ -1,5 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { detectIdeCli, discoverOwnIpcSocket, type ProcFs } from '../WindowRegistry';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import {
+  detectIdeCli, discoverOwnIpcSocket, type ProcFs,
+  writeWindowEntry, readLiveWindows, removeWindowEntry, windowsDir, type WindowEntry,
+} from '../WindowRegistry';
 
 function fakeProc(tree: Record<number, { ppid: number; environ?: string }>): ProcFs {
   return {
@@ -54,5 +60,40 @@ describe('discoverOwnIpcSocket', () => {
   it('returns null when no descendant carries the var', () => {
     const proc = fakeProc({ 200: { ppid: 1 }, 300: { ppid: 200, environ: 'PATH=/x\0' } });
     expect(discoverOwnIpcSocket(200, proc)).toBeNull();
+  });
+});
+
+describe('window registry files', () => {
+  let home: string;
+  beforeEach(async () => { home = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wr-')); });
+  afterEach(async () => { await fs.promises.rm(home, { recursive: true, force: true }); });
+
+  const entry = (pid: number): WindowEntry => ({
+    pid, workspaceFolders: [`/ws/${pid}`], ideCli: 'bobide', ipcSocket: `/s/${pid}.sock`, updatedAt: 1000,
+  });
+
+  it('round-trips a live entry', async () => {
+    await writeWindowEntry(entry(42), home);
+    const live = await readLiveWindows({ homedir: home, isAlive: () => true, now: 2000 });
+    expect(live).toEqual([entry(42)]);
+  });
+
+  it('drops dead pids and unlinks their files', async () => {
+    await writeWindowEntry(entry(42), home);
+    const live = await readLiveWindows({ homedir: home, isAlive: () => false, now: 2000 });
+    expect(live).toEqual([]);
+    expect(fs.existsSync(path.join(windowsDir(home), '42.json'))).toBe(false);
+  });
+
+  it('drops entries older than 24h', async () => {
+    await writeWindowEntry(entry(42), home); // updatedAt 1000
+    const live = await readLiveWindows({ homedir: home, isAlive: () => true, now: 1000 + 25 * 3600 * 1000 });
+    expect(live).toEqual([]);
+  });
+
+  it('removeWindowEntry deletes the file', async () => {
+    await writeWindowEntry(entry(42), home);
+    await removeWindowEntry(42, home);
+    expect(fs.existsSync(path.join(windowsDir(home), '42.json'))).toBe(false);
   });
 });

@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 export interface WindowEntry {
@@ -76,4 +77,46 @@ export function discoverOwnIpcSocket(
     }
   }
   return null;
+}
+
+const STALE_MS = 24 * 60 * 60 * 1000;
+
+export function windowsDir(homedir: string = os.homedir()): string {
+  return path.join(homedir, '.claude', 'session-switcher', 'windows');
+}
+
+export async function writeWindowEntry(entry: WindowEntry, homedir: string = os.homedir()): Promise<void> {
+  const dir = windowsDir(homedir);
+  await fs.promises.mkdir(dir, { recursive: true });
+  await fs.promises.writeFile(path.join(dir, `${entry.pid}.json`), JSON.stringify(entry), 'utf8');
+}
+
+export async function removeWindowEntry(pid: number, homedir: string = os.homedir()): Promise<void> {
+  try { await fs.promises.unlink(path.join(windowsDir(homedir), `${pid}.json`)); } catch { /* gone */ }
+}
+
+export async function readLiveWindows(opts: {
+  homedir?: string;
+  isAlive?: (pid: number) => boolean;
+  now?: number;
+} = {}): Promise<WindowEntry[]> {
+  const homedir = opts.homedir ?? os.homedir();
+  const isAlive = opts.isAlive ?? ((pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } });
+  const now = opts.now ?? Date.now();
+  const dir = windowsDir(homedir);
+  let files: string[];
+  try { files = (await fs.promises.readdir(dir)).filter(f => f.endsWith('.json')); } catch { return []; }
+  const out: WindowEntry[] = [];
+  for (const file of files) {
+    try {
+      const data = JSON.parse(await fs.promises.readFile(path.join(dir, file), 'utf8')) as WindowEntry;
+      if (typeof data.pid !== 'number' || !Array.isArray(data.workspaceFolders)) { continue; }
+      if (!isAlive(data.pid) || now - data.updatedAt > STALE_MS) {
+        try { await fs.promises.unlink(path.join(dir, file)); } catch { /* ignore */ }
+        continue;
+      }
+      out.push(data);
+    } catch { /* malformed — skip */ }
+  }
+  return out;
 }
