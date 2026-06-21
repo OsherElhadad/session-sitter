@@ -2,7 +2,7 @@
   "name": "claude-session-switcher",
   "displayName": "Claude Session Switcher",
   "description": "Tabbed session switcher for Claude Code in the Secondary Sidebar",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "eranra",
   "repository": {
     "type": "git",
@@ -47,7 +47,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "node scripts/gen-build-info.js && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src",
     "test": "vitest run"

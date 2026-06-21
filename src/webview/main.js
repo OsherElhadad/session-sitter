@@ -28,6 +28,7 @@
   let historyToggle;
   let historyPanel;
   let previewEl;
+  let aboutEl;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -318,6 +319,7 @@
     historyToggle = document.getElementById('history-toggle');
     historyPanel  = document.getElementById('history-panel');
     previewEl     = document.getElementById('session-preview');
+    aboutEl       = document.getElementById('about-box');
 
     const newBtn = document.getElementById('new-session-btn');
     if (newBtn) {
@@ -325,6 +327,26 @@
         vscodeApi.postMessage({ type: 'newSession' });
       });
     }
+
+    const aboutBtn = document.getElementById('about-btn');
+    if (aboutBtn) {
+      aboutBtn.addEventListener('click', () => {
+        if (aboutEl) { aboutEl.hidden = !aboutEl.hidden; }
+      });
+    }
+
+    const aboutClose = document.getElementById('about-close');
+    if (aboutClose) {
+      aboutClose.addEventListener('click', () => {
+        if (aboutEl) { aboutEl.hidden = true; }
+      });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && aboutEl && !aboutEl.hidden) {
+        aboutEl.hidden = true;
+      }
+    });
 
     if (historyToggle) {
       historyToggle.addEventListener('click', () => {

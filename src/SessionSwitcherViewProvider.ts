@@ -5,6 +5,7 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { randomBytes } from 'crypto';
 import { SessionManager, ClaudeSession, MessageExchange, getActiveSessionIds, readActiveLockFiles, getIPCSocketForPid } from './SessionManager';
+import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -333,6 +334,8 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     );
     const nonce = getNonce();
 
+    const buildDisplay = BUILD_TIME.replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC');
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -345,10 +348,19 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 </head>
 <body>
   <div id="tab-bar">
-    <button id="new-session-btn" title="New Session">+</button>
+    <div id="toolbar">
+      <button id="about-btn" title="About Claude Session Switcher">&#x24D8;</button>
+      <button id="new-session-btn" title="New Session">+</button>
+    </div>
     <div id="tab-strip" role="tablist" aria-label="Claude Sessions"></div>
     <button id="history-toggle" aria-expanded="false">History &#x25B6;</button>
     <div id="history-panel" hidden></div>
+  </div>
+  <div id="about-box" hidden>
+    <div class="about-name">Claude Session Switcher</div>
+    <div class="about-version">v${BUILD_VERSION}</div>
+    <div class="about-built">Built ${buildDisplay}</div>
+    <button id="about-close">Close</button>
   </div>
   <div id="session-preview" hidden></div>
   <script nonce="${nonce}" src="${mainScriptUri}"></script>
