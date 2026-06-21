@@ -19,6 +19,9 @@
   /** @type {ReturnType<typeof setTimeout> | null} */
   let previewTimer = null;
 
+  /** @type {string | null} — sessionId of the row currently under the cursor */
+  let hoveredSessionId = null;
+
   // ── DOM References ────────────────────────────────────────────────────────
 
   let tabStrip;
@@ -177,12 +180,14 @@
     });
 
     tab.addEventListener('mouseenter', function () {
+      hoveredSessionId = session.sessionId;
       previewTimer = setTimeout(function () {
         vscodeApi.postMessage({ type: 'getSessionPreview', sessionId: session.sessionId });
       }, 250);
     });
 
     tab.addEventListener('mouseleave', function () {
+      hoveredSessionId = null;
       clearTimeout(previewTimer);
       hidePreview();
     });
@@ -295,9 +300,10 @@
         renderHistory();
         break;
       case 'sessionPreview': {
+        if (hoveredSessionId !== message.sessionId) { break; }
         const tabEl = tabStrip &&
           tabStrip.querySelector('[data-session-id="' + message.sessionId + '"]');
-        if (tabEl && tabEl.matches(':hover')) {
+        if (tabEl) {
           showPreview(message.projectPath || '', message.exchanges || [], tabEl);
         }
         break;
