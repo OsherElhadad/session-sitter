@@ -145,21 +145,32 @@ Talking to the owner window's own socket brings **that** window to the OS foregr
 
 Every switcher instance watches `~/.claude/session-switcher/focus-<process.pid>.json`.
 The sender writes `focus-<owner.pid>.json` (`{ sessionId, requestedAt }`). On receive,
-within the freshness window (≤10 s), the receiver reveals the session **location-aware**:
+within the freshness window (≤10 s), the receiver reveals the session **tab-aware**.
+
+`claudeCode.preferredLocation` was rejected as the signal: it is a single global value
+(observed `"panel"` on the dev machine) that cannot represent a mixed-mode layout where
+some sessions live in the editor and others in the side panel, and it is only updated
+when Claude is opened via its own commands — dragging Claude into the side panel does not
+update it. The reliable, observable signal is whether the session is currently an open
+**editor tab** (via the `tabGroups` API, already used by `_openClaudeTabLabels()`):
 
 ```ts
-const loc = vscode.workspace.getConfiguration('claudeCode').get('preferredLocation');
-if (loc === 'sidebar') {
-  // Secondary side panel: focus it. (No API to target a specific session — see Limitations.)
-  await vscode.commands.executeCommand('claude-vscode.sidebar.open');
-} else {
-  // Main editor: reveal the exact session.
-  await vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+private _openSessionLocal(sessionId: string): void {
+  const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
+  if (session && this._openClaudeTabLabels().has(session.title)) {
+    // Already an editor tab → reveal it there (createPanel reveals existing panels).
+    void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+  } else {
+    // Live session not in the editor → it lives in the secondary side panel; focus it.
+    void vscode.commands.executeCommand('claude-vscode.sidebar.open');
+  }
 }
 ```
 
-The **same location-aware helper** is used for purely local clicks (current window owns
-the session), replacing today's unconditional `primaryEditor.open`.
+The **same helper** is used for purely local clicks (`switchSession` when the current
+window owns the session) and the foreign-focus receiver. **`addFromHistory` is the
+exception:** history sessions are not running, so there is nothing in the side panel to
+focus — they always open fresh in the editor via `primaryEditor.open(sessionId)`.
 
 ## Data flow
 
@@ -231,11 +242,15 @@ Window B's FileSystemWatcher fires on focus-<B.pid>.json
 
 - **Secondary side panel cannot be switched to a *specific* session.** The Claude
   extension's `sidebar.open` command takes no `sessionId` (confirmed in the bundle), and
-  the sidebar webview has no per-session API. When the target window docks Claude in the
-  secondary panel, this design **focuses that panel** (eliminating the error and bringing
-  the window forward) but shows whatever session the panel currently holds. Switching to
-  the exact session is fully supported in the **main-editor** case. This is an upstream
+  the sidebar webview has no per-session API. When a session lives in the secondary panel,
+  this design **focuses that panel** (eliminating the error and bringing the window
+  forward) but shows whatever session the panel currently holds. Switching to the exact
+  session is fully supported only in the **main-editor** case. This is an upstream
   Claude-extension constraint, not something this extension can work around.
+- **A live session not shown as an editor tab is assumed to be in the side panel.** There
+  is no API to confirm a session is in the side panel, so the tab-aware rule infers it.
+  Consequence: clicking a live session that happens to be open in *neither* place will
+  focus the (possibly empty) side panel rather than reopen it in the editor.
 
 ## Testing
 

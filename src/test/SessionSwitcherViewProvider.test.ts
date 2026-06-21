@@ -74,9 +74,18 @@ vi.mock('../WindowRegistry', async (importOriginal) => {
 // ── child_process stub ─────────────────────────────────────────────────────────
 vi.mock('child_process', () => ({ execFile: vi.fn() }));
 
+import * as vscode from 'vscode';
 import { SessionSwitcherViewProvider } from '../SessionSwitcherViewProvider';
 import { SessionManager } from '../SessionManager';
 import { execFile } from 'child_process';
+
+// Set the Claude editor tabs the mocked tabGroups API reports as open.
+function setOpenClaudeTabs(labels: string[]): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (vscode.window as any).tabGroups.all = [{
+    tabs: labels.map(label => ({ input: { viewType: 'claudeVSCodePanel' }, label })),
+  }];
+}
 
 function makeProvider(sessions: import('../SessionManager').ClaudeSession[] = []) {
   const mockManager = {
@@ -104,7 +113,7 @@ describe('_handleFocusRequest', () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('calls primaryEditor.open with the sessionId for a fresh request', async () => {
+  it('triggers a local open for a fresh request', async () => {
     const focusFile = path.join(tmpDir, 'focus-req.json');
     await fs.promises.writeFile(focusFile, JSON.stringify({
       sessionId: 'abc-123',
@@ -116,7 +125,8 @@ describe('_handleFocusRequest', () => {
     await (provider as unknown as { _handleFocusRequest(u: { fsPath: string }): Promise<void> })
       ._handleFocusRequest({ fsPath: focusFile });
 
-    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'abc-123');
+    // Routes through _openSessionLocal; no matching tab → focuses the side panel.
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.sidebar.open');
   });
 
   it('deletes the file after handling', async () => {
@@ -252,21 +262,28 @@ describe('_tryFocusForeignWindow', () => {
 
 // ── Tests: _openSessionLocal ──────────────────────────────────────────────────
 describe('_openSessionLocal', () => {
+  const session = {
+    sessionId: 'sess-1', projectPath: '/p', projectName: 'p', title: 'My Session',
+    updatedAt: new Date(), status: 'idle' as const,
+  };
+
   beforeEach(() => {
     mockExecuteCommand.mockClear();
     vi.mocked(os.homedir).mockReturnValue(os.tmpdir());
+    setOpenClaudeTabs([]);
   });
+  afterEach(() => { setOpenClaudeTabs([]); });
 
-  it('opens in the primary editor when preferredLocation is panel', () => {
-    mockGetConfiguration.mockReturnValueOnce({ get: () => 'panel' });
-    const p = makeProvider() as unknown as { _openSessionLocal(id: string): void };
+  it('reveals in the editor when the session is an open editor tab', () => {
+    setOpenClaudeTabs(['My Session']);
+    const p = makeProvider([session]) as unknown as { _openSessionLocal(id: string): void };
     p._openSessionLocal('sess-1');
     expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
   });
 
-  it('focuses the sidebar when preferredLocation is sidebar', () => {
-    mockGetConfiguration.mockReturnValueOnce({ get: () => 'sidebar' });
-    const p = makeProvider() as unknown as { _openSessionLocal(id: string): void };
+  it('focuses the side panel when the session is not an open editor tab', () => {
+    setOpenClaudeTabs([]);
+    const p = makeProvider([session]) as unknown as { _openSessionLocal(id: string): void };
     p._openSessionLocal('sess-1');
     expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.sidebar.open');
   });

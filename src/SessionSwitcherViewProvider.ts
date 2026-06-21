@@ -116,7 +116,9 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           case 'addFromHistory': {
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
-            this._openSessionLocal(sessionId);
+            // History sessions are not running; open them fresh in the editor
+            // (there is no API to load a specific session into the side panel).
+            void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
             break;
           }
           case 'ready': {
@@ -159,15 +161,16 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     void removeWindowEntry(process.pid);
   }
 
-  // Reveal a session in the current window, respecting where Claude is docked.
-  // Sidebar mode can only be focused (the Claude extension exposes no per-session
-  // sidebar API); editor mode reveals the exact session.
+  // Reveal a live session in the current window. If it is already an open editor
+  // tab, reveal it there (unambiguous). Otherwise it lives in the secondary side
+  // panel, so focus that — the Claude extension exposes no per-session sidebar API,
+  // and `preferredLocation` is a single global that can't track mixed-mode layouts.
   private _openSessionLocal(sessionId: string): void {
-    const loc = vscode.workspace.getConfiguration('claudeCode').get<string>('preferredLocation');
-    if (loc === 'sidebar') {
-      void vscode.commands.executeCommand('claude-vscode.sidebar.open');
-    } else {
+    const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
+    if (session && this._openClaudeTabLabels().has(session.title)) {
       void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+    } else {
+      void vscode.commands.executeCommand('claude-vscode.sidebar.open');
     }
   }
 
