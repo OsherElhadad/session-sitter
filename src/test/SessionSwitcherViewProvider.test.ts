@@ -9,7 +9,7 @@ import * as path from 'path';
 const { mockExecuteCommand, mockShowWarningMessage, mockGetConfiguration } = vi.hoisted(() => ({
   mockExecuteCommand: vi.fn(),
   mockShowWarningMessage: vi.fn(),
-  mockGetConfiguration: vi.fn(() => ({ get: () => 'panel' })),
+  mockGetConfiguration: vi.fn((): { get: (key?: string) => string | undefined } => ({ get: () => 'panel' })),
 }));
 
 vi.mock('vscode', () => {

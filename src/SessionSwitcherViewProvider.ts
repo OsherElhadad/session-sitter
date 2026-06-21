@@ -19,12 +19,27 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   private _viewDisposables: vscode.Disposable[] = [];
   private _historyOpen = false;
   private _focusWatcher: vscode.Disposable | undefined;
+  private _registryTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _sessionManager: SessionManager,
   ) {
     this._focusWatcher = this._startFocusRequestWatcher();
+    void this._publishWindowEntry();
+    this._registryTimer = setInterval(() => { void this._publishWindowEntry(); }, 60_000);
+  }
+
+  // Publish this window's identity + IPC socket so other windows can focus it.
+  private async _publishWindowEntry(): Promise<void> {
+    const folders = (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+    await writeWindowEntry({
+      pid: process.pid,
+      workspaceFolders: folders,
+      ideCli: detectIdeCli(undefined, vscode.env.appName),
+      ipcSocket: discoverOwnIpcSocket() ?? process.env.VSCODE_IPC_HOOK_CLI ?? '',
+      updatedAt: Date.now(),
+    });
   }
 
   public resolveWebviewView(
@@ -126,6 +141,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     );
 
     this._viewDisposables.push(
+      vscode.window.onDidChangeWindowState(() => { void this._publishWindowEntry(); })
+    );
+
+    this._viewDisposables.push(
       webviewView.onDidDispose(() => { this._view = undefined; })
     );
 
@@ -136,6 +155,8 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     this._viewDisposables.forEach(d => d.dispose());
     this._viewDisposables = [];
     this._focusWatcher?.dispose();
+    if (this._registryTimer) { clearInterval(this._registryTimer); }
+    void removeWindowEntry(process.pid);
   }
 
   // Reveal a session in the current window, respecting where Claude is docked.
