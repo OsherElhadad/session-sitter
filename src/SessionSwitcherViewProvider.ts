@@ -71,7 +71,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             if (!sessionId) { break; }
             void this._tryFocusForeignWindow(sessionId).then(result => {
               if (result === 'local') {
-                void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+                this._openSessionLocal(sessionId);
               } else if (result === 'foreign-failed') {
                 void vscode.window.showWarningMessage('Could not switch to the window containing this session.');
               }
@@ -100,7 +100,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           case 'addFromHistory': {
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
-            void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+            this._openSessionLocal(sessionId);
             break;
           }
           case 'ready': {
@@ -135,6 +135,18 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     this._viewDisposables.forEach(d => d.dispose());
     this._viewDisposables = [];
     this._focusWatcher?.dispose();
+  }
+
+  // Reveal a session in the current window, respecting where Claude is docked.
+  // Sidebar mode can only be focused (the Claude extension exposes no per-session
+  // sidebar API); editor mode reveals the exact session.
+  private _openSessionLocal(sessionId: string): void {
+    const loc = vscode.workspace.getConfiguration('claudeCode').get<string>('preferredLocation');
+    if (loc === 'sidebar') {
+      void vscode.commands.executeCommand('claude-vscode.sidebar.open');
+    } else {
+      void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+    }
   }
 
   // Returns labels of all currently open Claude Code editor tabs.
@@ -261,7 +273,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       const data = JSON.parse(raw) as { sessionId?: unknown; requestedAt?: unknown };
       if (typeof data.sessionId !== 'string' || typeof data.requestedAt !== 'number') { return; }
       if (Date.now() - data.requestedAt > 10_000) { return; }
-      void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', data.sessionId);
+      this._openSessionLocal(data.sessionId);
     } catch { /* malformed or missing */ } finally {
       try { await fs.promises.unlink(uri.fsPath); } catch { /* already gone */ }
     }

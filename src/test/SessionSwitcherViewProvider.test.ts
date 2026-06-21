@@ -6,9 +6,10 @@ import * as path from 'path';
 // ── VS Code stub ──────────────────────────────────────────────────────────────
 // vi.mock factories are hoisted before variable declarations, so mock fns must
 // be created with vi.hoisted() to be accessible inside the factory.
-const { mockExecuteCommand, mockShowWarningMessage } = vi.hoisted(() => ({
+const { mockExecuteCommand, mockShowWarningMessage, mockGetConfiguration } = vi.hoisted(() => ({
   mockExecuteCommand: vi.fn(),
   mockShowWarningMessage: vi.fn(),
+  mockGetConfiguration: vi.fn(() => ({ get: () => 'panel' })),
 }));
 
 vi.mock('vscode', () => {
@@ -27,11 +28,15 @@ vi.mock('vscode', () => {
     EventEmitter,
     workspace: {
       createFileSystemWatcher: vi.fn(() => new FileSystemWatcher()),
+      getConfiguration: mockGetConfiguration,
+      workspaceFolders: [],
     },
     window: {
       tabGroups: { all: [], onDidChangeTabs: vi.fn(() => ({ dispose: vi.fn() })) },
       showWarningMessage: mockShowWarningMessage,
+      onDidChangeWindowState: vi.fn(() => ({ dispose: vi.fn() })),
     },
+    env: { appName: 'IBM Bob' },
     commands: { executeCommand: mockExecuteCommand },
     Uri: { file: (p: string) => ({ fsPath: p, toString: () => p }) },
     RelativePattern: class {
@@ -261,5 +266,27 @@ describe('_tryFocusForeignWindow', () => {
     expect(written.sessionId).toBe('success-id');
     expect(written.workspacePath).toBe('/home/user/myproject');
     expect(typeof written.requestedAt).toBe('number');
+  });
+});
+
+// ── Tests: _openSessionLocal ──────────────────────────────────────────────────
+describe('_openSessionLocal', () => {
+  beforeEach(() => {
+    mockExecuteCommand.mockClear();
+    vi.mocked(os.homedir).mockReturnValue(os.tmpdir());
+  });
+
+  it('opens in the primary editor when preferredLocation is panel', () => {
+    mockGetConfiguration.mockReturnValueOnce({ get: () => 'panel' });
+    const p = makeProvider() as unknown as { _openSessionLocal(id: string): void };
+    p._openSessionLocal('sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
+  });
+
+  it('focuses the sidebar when preferredLocation is sidebar', () => {
+    mockGetConfiguration.mockReturnValueOnce({ get: () => 'sidebar' });
+    const p = makeProvider() as unknown as { _openSessionLocal(id: string): void };
+    p._openSessionLocal('sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.sidebar.open');
   });
 });
