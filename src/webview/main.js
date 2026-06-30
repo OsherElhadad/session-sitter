@@ -148,6 +148,13 @@
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
 
+    if (session.source === 'bob') {
+      const sourceBadge = document.createElement('span');
+      sourceBadge.className = 'tab-badge tab-badge--bob';
+      sourceBadge.textContent = 'Bob';
+      textEl.appendChild(sourceBadge);
+    }
+
     if (session.projectName) {
       const badgeEl = document.createElement('span');
       badgeEl.className = 'tab-badge';
@@ -155,26 +162,28 @@
       textEl.appendChild(badgeEl);
     }
 
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'tab-close';
-    closeBtn.setAttribute('aria-label', 'Remove from tab bar');
-    closeBtn.setAttribute('title', 'Remove from tab bar');
-    closeBtn.textContent = '×';
-    closeBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      vscodeApi.postMessage({ type: 'removeTab', sessionId: session.sessionId });
-    });
-
     tab.appendChild(statusEl);
     tab.appendChild(textEl);
-    tab.appendChild(closeBtn);
+
+    if (session.source !== 'bob') {
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'tab-close';
+      closeBtn.setAttribute('aria-label', 'Remove from tab bar');
+      closeBtn.setAttribute('title', 'Remove from tab bar');
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        vscodeApi.postMessage({ type: 'removeTab', sessionId: session.sessionId });
+      });
+      tab.appendChild(closeBtn);
+    }
 
     tab.addEventListener('click', () => {
       vscodeApi.postMessage({ type: 'switchSession', sessionId: session.sessionId });
     });
     tab.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === ' ') {
-        if (event.target === closeBtn) { return; }
+        if (event.target && event.target.classList && event.target.classList.contains('tab-close')) { return; }
         event.preventDefault();
         vscodeApi.postMessage({ type: 'switchSession', sessionId: session.sessionId });
       }
@@ -215,6 +224,13 @@
     titleEl.className = 'tab-title';
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
+
+    if (session.source === 'bob') {
+      const sourceBadge = document.createElement('span');
+      sourceBadge.className = 'tab-badge tab-badge--bob';
+      sourceBadge.textContent = 'Bob';
+      textEl.appendChild(sourceBadge);
+    }
 
     if (session.projectName) {
       const badgeEl = document.createElement('span');
@@ -325,6 +341,13 @@
     if (newBtn) {
       newBtn.addEventListener('click', () => {
         vscodeApi.postMessage({ type: 'newSession' });
+      });
+    }
+
+    const newBobBtn = document.getElementById('new-bob-session-btn');
+    if (newBobBtn) {
+      newBobBtn.addEventListener('click', () => {
+        vscodeApi.postMessage({ type: 'newBobSession' });
       });
     }
 

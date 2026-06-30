@@ -74,7 +74,8 @@ button:focus-visible {
   background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
 }
 
-#new-session-btn {
+#new-session-btn,
+#new-bob-session-btn {
   flex: 1 1 auto;
   display: flex;
   align-items: center;
@@ -89,12 +90,14 @@ button:focus-visible {
   transition: opacity 0.1s, background-color 0.1s;
 }
 
-#new-session-btn:hover {
+#new-session-btn:hover,
+#new-bob-session-btn:hover {
   opacity: 1;
   background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
 }
 
-#new-session-btn:active {
+#new-session-btn:active,
+#new-bob-session-btn:active {
   background-color: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.25));
 }
 
@@ -231,6 +234,11 @@ button:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.tab-badge--bob {
+  background: #1f70c1;
+  color: #fff;
 }
 
 /* ── Status Indicator ────────────────────────────────────────────────────── */
