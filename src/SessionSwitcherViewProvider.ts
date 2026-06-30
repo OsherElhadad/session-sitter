@@ -95,7 +95,11 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             break;
           }
           case 'newSession': {
-            void vscode.commands.executeCommand('claude-vscode.newConversation');
+            this._openNewSession();
+            break;
+          }
+          case 'newBobSession': {
+            void vscode.commands.executeCommand('bob-code.task.pickWorkspace');
             break;
           }
           case 'removeTab': {
@@ -116,9 +120,13 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           case 'addFromHistory': {
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
-            // History sessions are not running; open them fresh in the editor
-            // (there is no API to load a specific session into the side panel).
-            void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+            const allSessions = this._sessionManager.getSessions();
+            const histSession = allSessions.find(s => s.sessionId === sessionId);
+            if (histSession?.source === 'bob') {
+              void vscode.commands.executeCommand('bobChatView.focus');
+            } else {
+              void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+            }
             break;
           }
           case 'ready': {
@@ -161,20 +169,36 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     void removeWindowEntry(process.pid);
   }
 
+  // Open a brand-new Claude conversation in the current window's editor.
+  // `primaryEditor.open` with no sessionId creates a fresh panel in the active
+  // editor column. We do NOT use `claude-vscode.newConversation` here: it only
+  // notifies already-open Claude panels and is a no-op when none exist.
+  private _openNewSession(): void {
+    void vscode.commands.executeCommand('claude-vscode.primaryEditor.open');
+  }
+
   // Reveal a live session in the current window. If it is already an open editor
   // tab, reveal it there (unambiguous). Otherwise it lives in the secondary side
   // panel, so focus that — the Claude extension exposes no per-session sidebar API,
   // and `preferredLocation` is a single global that can't track mixed-mode layouts.
   private _openSessionLocal(sessionId: string): void {
     const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
-    if (session && this._openClaudeTabLabels().has(session.title)) {
+    if (!session) { return; }
+
+    if (session.source === 'bob') {
+      void vscode.commands.executeCommand('bobChatView.focus');
+      return;
+    }
+
+    // Claude: prefer revealing in editor tab, fall back to sidebar
+    if (this._openClaudeTabLabels().has(session.title)) {
       void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
     } else {
       void vscode.commands.executeCommand('claude-vscode.sidebar.open');
     }
   }
 
-  // Returns labels of all currently open Claude Code editor tabs.
+  // Returns labels of all currently open Claude Code or Bob editor tabs.
   // Uses duck-typing (not instanceof) so it works from both the local and
   // remote extension hosts.
   private _openClaudeTabLabels(): Set<string> {
@@ -184,9 +208,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     if (!tabGroups) { return labels; }
     for (const group of tabGroups.all) {
       for (const tab of group.tabs) {
-        // Duck-type: Claude Code panels have input.viewType containing 'claudeVSCodePanel'
+        // Duck-type: Claude Code panels have 'claudeVSCodePanel', Bob panels have 'bobChatView'
         const input = tab.input as { viewType?: string } | null | undefined;
-        if (input?.viewType?.includes('claudeVSCodePanel')) {
+        if (input?.viewType?.includes('claudeVSCodePanel') ||
+            input?.viewType?.includes('bobChatView')) {
           labels.add(tab.label);
         }
       }
@@ -385,7 +410,8 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   <div id="tab-bar">
     <div id="toolbar">
       <button id="about-btn" title="About Claude Session Switcher">&#x24D8;</button>
-      <button id="new-session-btn" title="New Session">+</button>
+      <button id="new-session-btn" title="New Claude Session">+</button>
+      <button id="new-bob-session-btn" title="New Bob Session">+B</button>
     </div>
     <div id="tab-strip" role="tablist" aria-label="Claude Sessions"></div>
     <button id="history-toggle" aria-expanded="false">History &#x25B6;</button>

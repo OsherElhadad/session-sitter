@@ -38,7 +38,13 @@ vi.mock('vscode', () => {
     },
     env: { appName: 'IBM Bob' },
     commands: { executeCommand: mockExecuteCommand },
-    Uri: { file: (p: string) => ({ fsPath: p, toString: () => p }) },
+    Uri: {
+      file: (p: string) => ({ fsPath: p, toString: () => p }),
+      joinPath: (base: { fsPath: string }, ...parts: string[]) => ({
+        fsPath: [base.fsPath, ...parts].join('/'),
+        toString: () => [base.fsPath, ...parts].join('/'),
+      }),
+    },
     RelativePattern: class {
       constructor(public base: unknown, public pattern: string) {}
     },
@@ -121,7 +127,12 @@ describe('_handleFocusRequest', () => {
       requestedAt: Date.now(),
     }));
 
-    const provider = makeProvider();
+    // Provide the session so _openSessionLocal can find it and dispatch
+    const session = {
+      sessionId: 'abc-123', projectPath: '/home/user/project', projectName: 'project',
+      title: 'Test', updatedAt: new Date(), status: 'idle' as const, source: 'claude' as const,
+    };
+    const provider = makeProvider([session]);
     await (provider as unknown as { _handleFocusRequest(u: { fsPath: string }): Promise<void> })
       ._handleFocusRequest({ fsPath: focusFile });
 
@@ -182,7 +193,7 @@ type PrivateProvider = {
 function providerWithSession(projectPath: string): PrivateProvider {
   const session = {
     sessionId: 'S', projectPath, projectName: 'proj', title: 'S',
-    updatedAt: new Date(), status: 'idle' as const,
+    updatedAt: new Date(), status: 'idle' as const, source: 'claude' as const,
   };
   return makeProvider([session]) as unknown as PrivateProvider;
 }
@@ -264,7 +275,7 @@ describe('_tryFocusForeignWindow', () => {
 describe('_openSessionLocal', () => {
   const session = {
     sessionId: 'sess-1', projectPath: '/p', projectName: 'p', title: 'My Session',
-    updatedAt: new Date(), status: 'idle' as const,
+    updatedAt: new Date(), status: 'idle' as const, source: 'claude' as const,
   };
 
   beforeEach(() => {
@@ -288,3 +299,141 @@ describe('_openSessionLocal', () => {
     expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.sidebar.open');
   });
 });
+
+// ── Tests: _openNewSession ────────────────────────────────────────────────────
+describe('_openNewSession', () => {
+  beforeEach(() => { mockExecuteCommand.mockClear(); });
+
+  it('opens a fresh conversation in the current window editor', () => {
+    const p = makeProvider() as unknown as { _openNewSession(): void };
+    p._openNewSession();
+    // primaryEditor.open with no sessionId creates a new conversation panel in
+    // the active editor column — unlike newConversation, which only notifies
+    // already-open panels and is a no-op when none exist.
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open');
+  });
+});
+
+// ── Helpers for Bob sessions ──────────────────────────────────────────────────
+
+function makeBobSession(overrides: Partial<import('../SessionManager').ClaudeSession> = {}): import('../SessionManager').ClaudeSession {
+  return {
+    sessionId: 'bob-sess-1',
+    projectPath: '/home/user/proj',
+    projectName: 'proj',
+    title: 'My Bob Task',
+    updatedAt: new Date(),
+    status: 'idle' as const,
+    source: 'bob' as const,
+    ...overrides,
+  };
+}
+
+function setOpenBobTabs(labels: string[]): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (vscode.window as any).tabGroups.all = [{
+    tabs: labels.map(label => ({ input: { viewType: 'bobChatView' }, label })),
+  }];
+}
+
+// ── Tests: Bob session switching ──────────────────────────────────────────────
+describe('_openSessionLocal (Bob)', () => {
+  beforeEach(() => {
+    mockExecuteCommand.mockClear();
+    vi.mocked(os.homedir).mockReturnValue(os.tmpdir());
+    setOpenBobTabs([]);
+  });
+  afterEach(() => { setOpenBobTabs([]); });
+
+  it('calls bobChatView.focus for a Bob session', () => {
+    const p = makeProvider([makeBobSession()]) as unknown as { _openSessionLocal(id: string): void };
+    p._openSessionLocal('bob-sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('bobChatView.focus');
+  });
+
+  it('does NOT call claude-vscode commands for a Bob session', () => {
+    const p = makeProvider([makeBobSession()]) as unknown as { _openSessionLocal(id: string): void };
+    p._openSessionLocal('bob-sess-1');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.sidebar.open');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.primaryEditor.open', expect.anything());
+  });
+});
+
+// ── Tests: newBobSession ──────────────────────────────────────────────────────
+describe('webview message: newBobSession', () => {
+  beforeEach(() => { mockExecuteCommand.mockClear(); });
+
+  function resolveWebview(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
+    const webview = {
+      options: {},
+      html: '',
+      onDidReceiveMessage: vi.fn(),
+      postMessage: vi.fn(),
+      asWebviewUri: (u: unknown) => u,
+      cspSource: 'vscode-webview:',
+    };
+    const webviewView = {
+      webview,
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+      visible: true,
+    };
+    provider.resolveWebviewView(
+      webviewView as unknown as import('vscode').WebviewView,
+      {} as import('vscode').WebviewViewResolveContext,
+      { isCancellationRequested: false, onCancellationRequested: vi.fn() } as unknown as import('vscode').CancellationToken,
+    );
+    return (webview.onDidReceiveMessage as ReturnType<typeof vi.fn>).mock.calls[0][0] as (msg: unknown) => Promise<void>;
+  }
+
+  it('calls bob-code.task.pickWorkspace', async () => {
+    const handler = resolveWebview(makeProvider());
+    await handler({ type: 'newBobSession' });
+    expect(mockExecuteCommand).toHaveBeenCalledWith('bob-code.task.pickWorkspace');
+  });
+});
+
+// ── Tests: addFromHistory (Bob) ───────────────────────────────────────────────
+describe('webview message: addFromHistory (Bob)', () => {
+  beforeEach(() => { mockExecuteCommand.mockClear(); });
+
+  function resolveWebview(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
+    const webview = {
+      options: {},
+      html: '',
+      onDidReceiveMessage: vi.fn(),
+      postMessage: vi.fn(),
+      asWebviewUri: (u: unknown) => u,
+      cspSource: 'vscode-webview:',
+    };
+    const webviewView = {
+      webview,
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+      visible: true,
+    };
+    provider.resolveWebviewView(
+      webviewView as unknown as import('vscode').WebviewView,
+      {} as import('vscode').WebviewViewResolveContext,
+      { isCancellationRequested: false, onCancellationRequested: vi.fn() } as unknown as import('vscode').CancellationToken,
+    );
+    return (webview.onDidReceiveMessage as ReturnType<typeof vi.fn>).mock.calls[0][0] as (msg: unknown) => Promise<void>;
+  }
+
+  it('calls bobChatView.focus for a Bob history session', async () => {
+    const bobSession = makeBobSession({ sessionId: 'bob-hist-1' });
+    const handler = resolveWebview(makeProvider([bobSession]));
+    await handler({ type: 'addFromHistory', sessionId: 'bob-hist-1' });
+    expect(mockExecuteCommand).toHaveBeenCalledWith('bobChatView.focus');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.primaryEditor.open', expect.anything());
+  });
+
+  it('calls claude-vscode.primaryEditor.open for a Claude history session', async () => {
+    const claudeSession = {
+      sessionId: 'claude-hist-1', projectPath: '/p', projectName: 'p',
+      title: 'Claude task', updatedAt: new Date(), status: 'idle' as const, source: 'claude' as const,
+    };
+    const handler = resolveWebview(makeProvider([claudeSession]));
+    await handler({ type: 'addFromHistory', sessionId: 'claude-hist-1' });
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'claude-hist-1');
+  });
+});
+

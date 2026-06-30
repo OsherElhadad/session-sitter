@@ -25,7 +25,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeSessionSwitcher.newSession', () => {
-      void vscode.commands.executeCommand('claude-vscode.newConversation');
+      // Open a fresh conversation in the current window's editor. We avoid
+      // `claude-vscode.newConversation` — it only notifies already-open Claude
+      // panels and does nothing when none is open. `primaryEditor.open` with no
+      // sessionId creates a new panel in the active editor column.
+      void vscode.commands.executeCommand('claude-vscode.primaryEditor.open');
     })
   );
 
