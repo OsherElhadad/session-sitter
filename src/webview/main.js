@@ -55,8 +55,9 @@
    * @param {string} projectPath
    * @param {Array<{role: string, text: string, timestamp?: string}>} exchanges
    * @param {HTMLElement} anchorEl
+   * @param {string} assistantName
    */
-  function showPreview(projectPath, exchanges, anchorEl) {
+  function showPreview(projectPath, exchanges, anchorEl, assistantName) {
     if (!previewEl) { return; }
 
     previewEl.innerHTML = '';
@@ -78,7 +79,7 @@
       const roleEl = document.createElement('span');
       roleEl.className = 'preview-role ' +
         (exchange.role === 'user' ? 'preview-role-user' : 'preview-role-assistant');
-      roleEl.textContent = exchange.role === 'user' ? 'You' : 'Claude';
+      roleEl.textContent = exchange.role === 'user' ? 'You' : (assistantName || 'Claude');
       metaEl.appendChild(roleEl);
 
       if (exchange.timestamp) {
@@ -321,7 +322,10 @@
         const tabEl = tabStrip &&
           tabStrip.querySelector('[data-session-id="' + message.sessionId + '"]');
         if (tabEl) {
-          showPreview(message.projectPath || '', message.exchanges || [], tabEl);
+          const previewSession = sessions.find(function (s) { return s.sessionId === message.sessionId; })
+            || historySessions.find(function (s) { return s.sessionId === message.sessionId; });
+          const assistantName = previewSession && previewSession.source === 'bob' ? 'Bob' : 'Claude';
+          showPreview(message.projectPath || '', message.exchanges || [], tabEl, assistantName);
         }
         break;
       }

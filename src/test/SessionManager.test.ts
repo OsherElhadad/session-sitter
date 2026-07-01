@@ -380,39 +380,126 @@ describe('SessionManager.getRecentExchanges', () => {
   });
 });
 
+// ── Helper: create a temporary Bob SQLite DB ─────────────────────────────────
+
+import { execFileSync } from 'child_process';
+
+function createBobDb(dbPath: string): void {
+  execFileSync('python3', ['-c', `
+import sqlite3
+conn = sqlite3.connect('${dbPath}')
+conn.execute("""
+  CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    parent_id TEXT,
+    title TEXT,
+    status TEXT,
+    first_message TEXT,
+    directory TEXT,
+    version TEXT,
+    git_sha TEXT,
+    git_branch TEXT,
+    env TEXT,
+    costs TEXT,
+    created_at INTEGER,
+    updated_at INTEGER,
+    time_archived INTEGER,
+    locked_by TEXT,
+    lock_lease_until INTEGER,
+    approval_config TEXT,
+    message_queue TEXT,
+    task_type TEXT,
+    last_error TEXT,
+    is_pinned INTEGER
+  )
+""")
+conn.execute("""
+  CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    task_id TEXT,
+    role TEXT,
+    data TEXT,
+    created_at INTEGER
+  )
+""")
+conn.commit()
+conn.close()
+`]);
+}
+
+function insertBobTask(dbPath: string, task: {
+  id: string; projectId: string; title: string; status: string;
+  firstMessage: string; updatedAt: number; env?: string;
+}): void {
+  const env = task.env ?? JSON.stringify({ workspace: task.projectId.replace('file:', ''), staticEnvInfo: { primaryWorkspace: task.projectId.replace('file:', '') } });
+  execFileSync('python3', ['-c', `
+import sqlite3
+conn = sqlite3.connect('${dbPath}')
+conn.execute(
+    "INSERT INTO tasks (id, project_id, title, status, first_message, created_at, updated_at, env) VALUES (?,?,?,?,?,?,?,?)",
+    ('${task.id}', '${task.projectId}', ${JSON.stringify(task.title)}, '${task.status}', ${JSON.stringify(task.firstMessage)}, ${task.updatedAt}, ${task.updatedAt}, ${JSON.stringify(env)})
+)
+conn.commit()
+conn.close()
+`]);
+}
+
+function insertBobMessage(dbPath: string, msg: {
+  id: string; taskId: string; role: string; content: string; ts: number;
+}): void {
+  const data = JSON.stringify({ role: msg.role, content: msg.content });
+  execFileSync('python3', ['-c', `
+import sqlite3, json
+conn = sqlite3.connect('${dbPath}')
+conn.execute(
+    "INSERT INTO messages (id, task_id, role, data, created_at) VALUES (?,?,?,?,?)",
+    ('${msg.id}', '${msg.taskId}', '${msg.role}', json.dumps({'role':'${msg.role}','content':${JSON.stringify(msg.content)}}), ${msg.ts})
+)
+conn.commit()
+conn.close()
+`]);
+}
+
+type PrivateManagerBob = {
+  _parseSessionFile(filePath: string): Promise<import('../SessionManager').ClaudeSession | null>;
+  _scanBobSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
+  _scanSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
+  _projectsDir: string;
+  _bobDbPath: string;
+};
+
 describe('SessionManager.getRecentExchanges (Bob)', () => {
   let tmpDir: string;
   let sm: SessionManager;
+  let dbPath: string;
 
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bob-preview-'));
+    dbPath = path.join(tmpDir, 'bob.db');
+    createBobDb(dbPath);
     sm = new SessionManager(makeContext());
+    (sm as unknown as PrivateManagerBob)._bobDbPath = dbPath;
   });
 
   afterEach(async () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  function seedBobPath(sessionId: string, filePath: string) {
+  function seedBobSession(sessionId: string) {
     (sm as unknown as { _sessionFilePaths: Map<string, string> })
-      ._sessionFilePaths.set(sessionId, filePath);
+      ._sessionFilePaths.set(sessionId, sessionId);
     (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob'> })
       ._sessionSources.set(sessionId, 'bob');
   }
 
-  it('extracts user and assistant exchanges from ui_messages.json', async () => {
+  it('extracts user and assistant exchanges from messages table', async () => {
     const id = 'bob-preview-1';
-    const uiPath = path.join(tmpDir, 'ui_messages.json');
-    const messages = [
-      { ts: 1000, type: 'say', say: 'text', text: 'Hello Bob', images: [] },
-      { ts: 2000, type: 'say', say: 'api_req_started', text: '{}' },
-      { ts: 3000, type: 'say', say: 'text', text: 'Bob response', partial: false },
-      { ts: 4000, type: 'say', say: 'text', text: 'Second user message', images: [] },
-      { ts: 5000, type: 'say', say: 'api_req_started', text: '{}' },
-      { ts: 6000, type: 'say', say: 'text', text: 'Second Bob response', partial: false },
-    ];
-    await fs.promises.writeFile(uiPath, JSON.stringify(messages), 'utf8');
-    seedBobPath(id, uiPath);
+    seedBobSession(id);
+    insertBobMessage(dbPath, { id: 'm1', taskId: id, role: 'user', content: 'Hello Bob', ts: 1000 });
+    insertBobMessage(dbPath, { id: 'm2', taskId: id, role: 'assistant', content: 'Bob response', ts: 2000 });
+    insertBobMessage(dbPath, { id: 'm3', taskId: id, role: 'user', content: 'Second user message', ts: 3000 });
+    insertBobMessage(dbPath, { id: 'm4', taskId: id, role: 'assistant', content: 'Second Bob response', ts: 4000 });
 
     const result = await sm.getRecentExchanges(id);
     expect(result.length).toBeGreaterThan(0);
@@ -428,221 +515,99 @@ describe('SessionManager.getRecentExchanges (Bob)', () => {
 
   it('truncates long user messages to 150 chars with ellipsis', async () => {
     const id = 'bob-trunc-user';
-    const uiPath = path.join(tmpDir, 'ui_messages_trunc_user.json');
-    await fs.promises.writeFile(uiPath, JSON.stringify([
-      { ts: 1000, type: 'say', say: 'text', text: 'U'.repeat(200), images: [] },
-    ]), 'utf8');
-    seedBobPath(id, uiPath);
+    seedBobSession(id);
+    insertBobMessage(dbPath, { id: 'm1', taskId: id, role: 'user', content: 'U'.repeat(200), ts: 1000 });
     const result = await sm.getRecentExchanges(id);
     expect(result[0].text).toBe('U'.repeat(150) + '…');
   });
 
   it('truncates long assistant messages to 250 chars with ellipsis', async () => {
     const id = 'bob-trunc-asst';
-    const uiPath = path.join(tmpDir, 'ui_messages_trunc_asst.json');
-    await fs.promises.writeFile(uiPath, JSON.stringify([
-      { ts: 1000, type: 'say', say: 'text', text: 'Q', images: [] },
-      { ts: 2000, type: 'say', say: 'api_req_started', text: '{}' },
-      { ts: 3000, type: 'say', say: 'text', text: 'A'.repeat(300), partial: false },
-    ]), 'utf8');
-    seedBobPath(id, uiPath);
+    seedBobSession(id);
+    insertBobMessage(dbPath, { id: 'm1', taskId: id, role: 'user', content: 'Q', ts: 1000 });
+    insertBobMessage(dbPath, { id: 'm2', taskId: id, role: 'assistant', content: 'A'.repeat(300), ts: 2000 });
     const result = await sm.getRecentExchanges(id);
     const asst = result.find(e => e.role === 'assistant');
     expect(asst?.text).toBe('A'.repeat(250) + '…');
   });
 });
 
-
-
-// ── Helpers for Bob task directories ─────────────────────────────────────────
-
-async function writeBobTask(
-  dir: string,
-  taskId: string,
-  uiMessages: object[],
-  apiHistory: object[] = [],
-): Promise<string> {
-  const taskDir = path.join(dir, taskId);
-  await fs.promises.mkdir(taskDir, { recursive: true });
-  await fs.promises.writeFile(
-    path.join(taskDir, 'ui_messages.json'),
-    JSON.stringify(uiMessages),
-    'utf8',
-  );
-  if (apiHistory.length > 0) {
-    await fs.promises.writeFile(
-      path.join(taskDir, 'api_conversation_history.json'),
-      JSON.stringify(apiHistory),
-      'utf8',
-    );
-  }
-  return taskDir;
-}
-
-type PrivateManagerBob = {
-  _parseSessionFile(filePath: string): Promise<import('../SessionManager').ClaudeSession | null>;
-  _parseBobTaskDir(dir: string): Promise<import('../SessionManager').ClaudeSession | null>;
-  _scanBobSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
-  _scanSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
-  _projectsDir: string;
-  _bobTasksDir: string;
-};
-
-describe('SessionManager._parseBobTaskDir', () => {
+describe('SessionManager._scanBobSessions', () => {
   let tmpDir: string;
-  let manager: PrivateManagerBob;
+  let sm: SessionManager;
+  let dbPath: string;
 
   beforeEach(async () => {
-    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bob-test-'));
-    const sm = new SessionManager(makeContext());
-    manager = sm as unknown as PrivateManagerBob;
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bob-scan-'));
+    dbPath = path.join(tmpDir, 'bob.db');
+    createBobDb(dbPath);
+    sm = new SessionManager(makeContext());
+    (sm as unknown as PrivateManagerBob)._bobDbPath = dbPath;
   });
 
   afterEach(async () => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('returns null when ui_messages.json is missing', async () => {
-    const taskDir = path.join(tmpDir, 'missing-ui');
-    await fs.promises.mkdir(taskDir);
-    expect(await manager._parseBobTaskDir(taskDir)).toBeNull();
+  it('returns empty array when DB does not exist', async () => {
+    (sm as unknown as PrivateManagerBob)._bobDbPath = '/nonexistent/bob.db';
+    const sessions = await (sm as unknown as PrivateManagerBob)._scanBobSessions();
+    expect(sessions).toEqual([]);
   });
 
-  it('returns null when ui_messages.json has no say:text user message', async () => {
-    const taskDir = await writeBobTask(tmpDir, 'no-user', [
-      { ts: Date.now(), type: 'say', say: 'api_req_started', text: '{}' },
-    ]);
-    expect(await manager._parseBobTaskDir(taskDir)).toBeNull();
+  it('skips tasks with no first_message', async () => {
+    insertBobTask(dbPath, { id: 'no-msg', projectId: 'file:/proj', title: '', status: 'active', firstMessage: '', updatedAt: Date.now() });
+    // The query filters WHERE first_message IS NOT NULL, and title || first_message must be non-empty
+    const sessions = await (sm as unknown as PrivateManagerBob)._scanBobSessions();
+    expect(sessions.find(s => s.sessionId === 'no-msg')).toBeUndefined();
   });
 
-  it('uses directory name as sessionId', async () => {
-    const id = 'f5e315d3-d883-4ec8-9ba5-7cd4865b9a45';
-    const taskDir = await writeBobTask(tmpDir, id, [
-      { ts: Date.now(), type: 'say', say: 'text', text: 'Hello Bob', images: [] },
-    ]);
-    const result = await manager._parseBobTaskDir(taskDir);
-    expect(result?.sessionId).toBe(id);
+  it('maps running status to active', async () => {
+    insertBobTask(dbPath, { id: 'task-running', projectId: 'file:/proj', title: 'Running task', status: 'running', firstMessage: 'Running task', updatedAt: Date.now() });
+    const sessions = await (sm as unknown as PrivateManagerBob)._scanBobSessions();
+    const s = sessions.find(s => s.sessionId === 'task-running');
+    expect(s?.status).toBe('active');
   });
 
-  it('uses first say:text record as title, truncated to 60 chars', async () => {
-    const taskDir = await writeBobTask(tmpDir, 'title-test', [
-      { ts: Date.now(), type: 'say', say: 'text', text: 'A'.repeat(80), images: [] },
-    ]);
-    const result = await manager._parseBobTaskDir(taskDir);
-    expect(result?.title).toBe('A'.repeat(60));
+  it('maps active status to idle', async () => {
+    insertBobTask(dbPath, { id: 'task-idle', projectId: 'file:/proj', title: 'Done task', status: 'active', firstMessage: 'Done task', updatedAt: Date.now() });
+    const sessions = await (sm as unknown as PrivateManagerBob)._scanBobSessions();
+    const s = sessions.find(s => s.sessionId === 'task-idle');
+    expect(s?.status).toBe('idle');
   });
 
-  it('source is always "bob"', async () => {
-    const taskDir = await writeBobTask(tmpDir, 'source-test', [
-      { ts: Date.now(), type: 'say', say: 'text', text: 'Hello', images: [] },
-    ]);
-    const result = await manager._parseBobTaskDir(taskDir);
-    expect(result?.source).toBe('bob');
+  it('extracts projectPath from env.staticEnvInfo.primaryWorkspace', async () => {
+    const env = JSON.stringify({ workspace: '/proj', staticEnvInfo: { primaryWorkspace: '/home/user/my-project' } });
+    insertBobTask(dbPath, { id: 'task-proj', projectId: 'file:/proj', title: 'Task', status: 'active', firstMessage: 'Task', updatedAt: Date.now(), env });
+    const sessions = await (sm as unknown as PrivateManagerBob)._scanBobSessions();
+    const s = sessions.find(s => s.sessionId === 'task-proj');
+    expect(s?.projectPath).toBe('/home/user/my-project');
+    expect(s?.projectName).toBe('my-project');
+    expect(s?.source).toBe('bob');
   });
 
-  it('extracts projectPath from api_conversation_history.json', async () => {
-    const taskDir = await writeBobTask(
-      tmpDir, 'cwd-test',
-      [{ ts: Date.now(), type: 'say', say: 'text', text: 'Test task', images: [] }],
-      [{
-        role: 'user',
-        content: [{
-          type: 'text',
-          text: '<environment_details>\n# Current Workspace Directory (/home/user/my-project) Files\nREADME.md\n</environment_details>',
-        }],
-      }],
-    );
-    const result = await manager._parseBobTaskDir(taskDir);
-    expect(result?.projectPath).toBe('/home/user/my-project');
-    expect(result?.projectName).toBe('my-project');
-  });
-
-  it('projectPath defaults to empty string when api_conversation_history.json is absent', async () => {
-    const taskDir = await writeBobTask(tmpDir, 'no-cwd', [
-      { ts: Date.now(), type: 'say', say: 'text', text: 'Hello', images: [] },
-    ]);
-    const result = await manager._parseBobTaskDir(taskDir);
-    expect(result?.projectPath).toBe('');
-    expect(result?.projectName).toBe('');
-  });
-
-  describe('Bob status inference', () => {
-    it('api_req_started as last record → active', async () => {
-      const taskDir = await writeBobTask(tmpDir, 'bob-active', [
-        { ts: Date.now() - 5000, type: 'say', say: 'text', text: 'Do thing', images: [] },
-        { ts: Date.now(), type: 'say', say: 'api_req_started', text: '{}' },
-      ]);
-      const result = await manager._parseBobTaskDir(taskDir);
-      expect(result?.status).toBe('active');
-    });
-
-    it('ask:tool as last record → active', async () => {
-      const taskDir = await writeBobTask(tmpDir, 'bob-tool', [
-        { ts: Date.now() - 5000, type: 'say', say: 'text', text: 'Do thing', images: [] },
-        { ts: Date.now(), type: 'ask', ask: 'tool', text: '{}' },
-      ]);
-      const result = await manager._parseBobTaskDir(taskDir);
-      expect(result?.status).toBe('active');
-    });
-
-    it('ask:completion_result as last record (old file) → idle', async () => {
-      const taskDir = await writeBobTask(tmpDir, 'bob-idle', [
-        { ts: Date.now() - 5000, type: 'say', say: 'text', text: 'Do thing', images: [] },
-        { ts: Date.now() - 60000, type: 'ask', ask: 'completion_result', text: 'Done!' },
-      ]);
-      const uiPath = path.join(taskDir, 'ui_messages.json');
-      const old = new Date(Date.now() - 120_000);
-      await fs.promises.utimes(uiPath, old, old);
-      const result = await manager._parseBobTaskDir(taskDir);
-      expect(result?.status).toBe('idle');
-    });
-
-    it('say:completion_result as last record (old file) → idle', async () => {
-      const taskDir = await writeBobTask(tmpDir, 'bob-idle2', [
-        { ts: Date.now() - 5000, type: 'say', say: 'text', text: 'Do thing', images: [] },
-        { ts: Date.now() - 60000, type: 'say', say: 'completion_result', text: 'Done!' },
-      ]);
-      const uiPath = path.join(taskDir, 'ui_messages.json');
-      const old = new Date(Date.now() - 120_000);
-      await fs.promises.utimes(uiPath, old, old);
-      const result = await manager._parseBobTaskDir(taskDir);
-      expect(result?.status).toBe('idle');
-    });
-
-    it('user say:text with no api_req_started → waiting (old file)', async () => {
-      const taskDir = await writeBobTask(tmpDir, 'bob-waiting', [
-        { ts: Date.now(), type: 'say', say: 'text', text: 'New request', images: [] },
-      ]);
-      const uiPath = path.join(taskDir, 'ui_messages.json');
-      const old = new Date(Date.now() - 120_000);
-      await fs.promises.utimes(uiPath, old, old);
-      const result = await manager._parseBobTaskDir(taskDir);
-      expect(result?.status).toBe('waiting');
-    });
-
-    it('recently modified file → active regardless of last record', async () => {
-      const taskDir = await writeBobTask(tmpDir, 'bob-recent', [
-        { ts: Date.now() - 60000, type: 'say', say: 'text', text: 'Old message', images: [] },
-        { ts: Date.now() - 60000, type: 'ask', ask: 'completion_result', text: 'Done' },
-      ]);
-      // ui_messages.json was just written so its mtime is within 30 s → active
-      const result = await manager._parseBobTaskDir(taskDir);
-      expect(result?.status).toBe('active');
-    });
+  it('falls back to project_id for projectPath when env has no workspace', async () => {
+    const env = JSON.stringify({});
+    insertBobTask(dbPath, { id: 'task-fallback', projectId: 'file:/home/user/fallback-proj', title: 'Fallback', status: 'active', firstMessage: 'Fallback', updatedAt: Date.now(), env });
+    const sessions = await (sm as unknown as PrivateManagerBob)._scanBobSessions();
+    const s = sessions.find(s => s.sessionId === 'task-fallback');
+    expect(s?.projectPath).toBe('/home/user/fallback-proj');
   });
 });
 
 describe('SessionManager._scanSessions merges Claude and Bob sessions', () => {
   let tmpDir: string;
   let sm: SessionManager;
+  let dbPath: string;
 
   beforeEach(async () => {
     tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'merged-test-'));
+    dbPath = path.join(tmpDir, 'bob.db');
+    createBobDb(dbPath);
     sm = new SessionManager(makeContext());
     (sm as unknown as PrivateManagerBob)._projectsDir = path.join(tmpDir, 'claude-projects');
-    (sm as unknown as PrivateManagerBob)._bobTasksDir = path.join(tmpDir, 'bob-tasks');
+    (sm as unknown as PrivateManagerBob)._bobDbPath = dbPath;
     await fs.promises.mkdir(path.join(tmpDir, 'claude-projects'), { recursive: true });
-    await fs.promises.mkdir(path.join(tmpDir, 'bob-tasks'), { recursive: true });
   });
 
   afterEach(async () => {
@@ -650,14 +615,10 @@ describe('SessionManager._scanSessions merges Claude and Bob sessions', () => {
   });
 
   it('returns both claude and bob sessions sorted by updatedAt descending', async () => {
+    const olderTs = Date.now() - 10_000;
+
     // Bob task (back-dated to be older)
-    const bobTasksDir = path.join(tmpDir, 'bob-tasks');
-    await writeBobTask(bobTasksDir, 'bob-uuid-1', [
-      { ts: Date.now() - 10000, type: 'say', say: 'text', text: 'Bob task', images: [] },
-    ]);
-    const bobUiPath = path.join(bobTasksDir, 'bob-uuid-1', 'ui_messages.json');
-    const olderDate = new Date(Date.now() - 10_000);
-    await fs.promises.utimes(bobUiPath, olderDate, olderDate);
+    insertBobTask(dbPath, { id: 'bob-uuid-1', projectId: 'file:/home/user/proj', title: 'Bob task', status: 'active', firstMessage: 'Bob task', updatedAt: olderTs });
 
     // Claude session (just written → newer mtime)
     const claudeDir = path.join(tmpDir, 'claude-projects', '-home-user-proj');
