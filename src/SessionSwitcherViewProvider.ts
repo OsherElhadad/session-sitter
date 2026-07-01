@@ -239,26 +239,38 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       if (session) { tabMatchedSessions.push(session); }
     }
 
-    let sessions: ClaudeSession[];
+    // Bob sessions: status='running' (DB running→active) means actively executing;
+    // status='idle' (DB active→idle) means completed. Apply the same recency filter
+    // as Claude — always show non-idle, show idle only within a 2-hour window.
+    // Bob has no open-tab signal and no PID file, so we always use the time window.
+    const TWO_HOURS = 2 * 60 * 60 * 1000;
+    const now = Date.now();
+    const bobActive = allSessions.filter(s =>
+      s.source === 'bob' && (
+        s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
+      )
+    );
+    const claudeSessions = allSessions.filter(s => s.source !== 'bob');
+
+    let claudeActive: ClaudeSession[];
     if (tabMatchedSessions.length > 0) {
-      // Tab API produced real matches — show only sessions with open tabs.
-      sessions = tabMatchedSessions;
+      // Tab API produced real matches — show only Claude sessions with open tabs.
+      claudeActive = tabMatchedSessions.filter(s => s.source !== 'bob');
     } else {
       // Tab API unavailable — use ~/.claude/sessions/ PID liveness instead.
       // Each file maps a PID (with kernel start-time verification) to a
       // sessionId, so we know exactly which sessions have a running process.
       const activeIds = await getActiveSessionIds();
       if (activeIds.size > 0) {
-        sessions = allSessions.filter(s => activeIds.has(s.sessionId));
+        claudeActive = claudeSessions.filter(s => activeIds.has(s.sessionId));
       } else {
         // No session files readable — last-resort 2-hour time window.
-        const TWO_HOURS = 2 * 60 * 60 * 1000;
-        const now = Date.now();
-        sessions = allSessions.filter(s =>
+        claudeActive = claudeSessions.filter(s =>
           s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
         );
       }
     }
+    const sessions = [...claudeActive, ...bobActive];
 
     sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     void this._view.webview.postMessage({ type: 'updateSessions', sessions });
@@ -279,18 +291,27 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       if (byTitle.has(label)) { tabMatched.add(label); }
     }
 
+    const TWO_HOURS_HIST = 2 * 60 * 60 * 1000;
+    const nowHist = Date.now();
     let history: ClaudeSession[];
     if (tabMatched.size > 0) {
-      history = allSessions.filter(s => !tabMatched.has(s.title));
+      // Bob sessions are never tab-matched; show idle Bob sessions as history.
+      history = allSessions.filter(s =>
+        s.source === 'bob'
+          ? s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
+          : !tabMatched.has(s.title)
+      );
     } else {
       const activeIds = await getActiveSessionIds();
       if (activeIds.size > 0) {
-        history = allSessions.filter(s => !activeIds.has(s.sessionId));
-      } else {
-        const TWO_HOURS = 2 * 60 * 60 * 1000;
-        const now = Date.now();
         history = allSessions.filter(s =>
-          s.status === 'idle' && (now - s.updatedAt.getTime()) >= TWO_HOURS
+          s.source === 'bob'
+            ? s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
+            : !activeIds.has(s.sessionId)
+        );
+      } else {
+        history = allSessions.filter(s =>
+          s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
         );
       }
     }

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { execFile } from 'child_process';
 
 export interface MessageExchange {
   role: 'user' | 'assistant';
@@ -88,6 +89,16 @@ function sessionsFingerprint(sessions: ClaudeSession[]): string {
   return sessions.map(s => `${s.sessionId}:${s.status}:${s.title}:${s.updatedAt.getTime()}`).join('|');
 }
 
+// Run python3 with the given args and return stdout. Rejects on non-zero exit.
+function _execPython3(args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('python3', args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) { reject(new Error(stderr || String(err))); return; }
+      resolve(stdout);
+    });
+  });
+}
+
 export class SessionManager implements vscode.Disposable {
   private readonly _onDidChangeSessions = new vscode.EventEmitter<ClaudeSession[]>();
   readonly onDidChangeSessions: vscode.Event<ClaudeSession[]> = this._onDidChangeSessions.event;
@@ -97,16 +108,13 @@ export class SessionManager implements vscode.Disposable {
   private _sessionSources = new Map<string, 'claude' | 'bob'>();
   private readonly _watcher: vscode.FileSystemWatcher;
   private readonly _projectsDir: string;
-  private _bobTasksDir: string;
+  private readonly _bobDbPath: string;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly _pollTimer: ReturnType<typeof setInterval>;
 
   constructor(context: vscode.ExtensionContext) {
     this._projectsDir = path.join(os.homedir(), '.claude', 'projects');
-    this._bobTasksDir = path.join(
-      os.homedir(),
-      '.config', 'IBM Bob', 'User', 'globalStorage', 'ibm.bob-code', 'tasks',
-    );
+    this._bobDbPath = path.join(os.homedir(), '.bob', 'db', 'bob.db');
 
     // Initial scan
     void this._scanSessions().then(sessions => {
@@ -135,15 +143,16 @@ export class SessionManager implements vscode.Disposable {
     this._watcher.onDidChange(refresh);
     this._watcher.onDidDelete(refresh);
 
-    // Watch Bob task JSON files for changes
+    // Watch Bob DB WAL file for changes (written on every transaction commit)
+    const bobDbDir = path.dirname(this._bobDbPath);
+    const bobDbName = path.basename(this._bobDbPath);
     const bobPattern = new vscode.RelativePattern(
-      vscode.Uri.file(this._bobTasksDir),
-      '**/*.json',
+      vscode.Uri.file(bobDbDir),
+      `${bobDbName}-wal`,
     );
     const bobWatcher = vscode.workspace.createFileSystemWatcher(bobPattern);
     bobWatcher.onDidCreate(refresh);
     bobWatcher.onDidChange(refresh);
-    bobWatcher.onDidDelete(refresh);
     context.subscriptions.push({ dispose: () => bobWatcher.dispose() });
 
     // Polling fallback: re-scan every 5 s so status indicators and new sessions
@@ -249,40 +258,47 @@ export class SessionManager implements vscode.Disposable {
     this._onDidChangeSessions.dispose();
   }
 
-  private async _getBobRecentExchanges(uiPath: string): Promise<MessageExchange[]> {
-    let uiMessages: Array<{
-      ts?: number;
-      type?: string;
-      say?: string;
-      text?: string;
-      partial?: boolean;
-    }>;
+  private async _getBobRecentExchanges(taskId: string): Promise<MessageExchange[]> {
+    const script = `
+import sqlite3, json, sys
+conn = sqlite3.connect(sys.argv[1])
+cur = conn.cursor()
+cur.execute(
+    "SELECT role, data, created_at FROM messages WHERE task_id=? AND role IN ('user','assistant') ORDER BY created_at",
+    (sys.argv[2],)
+)
+rows = [{'role': r[0], 'data': r[1], 'ts': r[2]} for r in cur.fetchall()]
+print(json.dumps(rows))
+conn.close()
+`;
+    let rows: Array<{ role: string; data: string; ts: number }>;
     try {
-      const raw = await fs.promises.readFile(uiPath, 'utf8');
-      uiMessages = JSON.parse(raw) as typeof uiMessages;
-      if (!Array.isArray(uiMessages)) { return []; }
+      const out = await _execPython3(['-c', script, this._bobDbPath, taskId]);
+      rows = JSON.parse(out) as typeof rows;
     } catch {
       return [];
     }
 
     const collected: MessageExchange[] = [];
-    let inAssistantTurn = false;
-
-    for (const msg of uiMessages) {
-      if (msg.type === 'say' && msg.say === 'api_req_started') {
-        inAssistantTurn = true;
-        continue;
-      }
-      if (msg.type === 'say' && msg.say === 'text' && msg.text?.trim()) {
-        if (inAssistantTurn && msg.partial === false) {
-          const text = msg.text.length > 250 ? msg.text.slice(0, 250) + '…' : msg.text;
-          collected.push({ role: 'assistant', text, timestamp: msg.ts ? new Date(msg.ts).toISOString() : undefined });
-          inAssistantTurn = false;
-        } else if (!inAssistantTurn) {
-          const text = msg.text.length > 150 ? msg.text.slice(0, 150) + '…' : msg.text;
-          collected.push({ role: 'user', text, timestamp: msg.ts ? new Date(msg.ts).toISOString() : undefined });
+    for (const row of rows) {
+      try {
+        const d = JSON.parse(row.data) as { content?: unknown };
+        let text: string | null = null;
+        const content = d.content;
+        if (typeof content === 'string' && content.trim()) {
+          text = content.trim();
+        } else if (Array.isArray(content)) {
+          for (const block of content) {
+            const b = block as { type?: string; text?: string };
+            if (b.type === 'text' && b.text?.trim()) { text = b.text.trim(); break; }
+          }
         }
-      }
+        if (text === null) { continue; }
+        const role = row.role === 'user' ? 'user' : 'assistant';
+        const maxLen = role === 'user' ? 150 : 250;
+        const truncated = text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
+        collected.push({ role, text: truncated, timestamp: new Date(row.ts).toISOString() });
+      } catch { /* skip malformed */ }
     }
 
     return collected.slice(-6);
@@ -298,10 +314,10 @@ export class SessionManager implements vscode.Disposable {
   }
 
   private async _scanSessions(): Promise<ClaudeSession[]> {
-    const [claudeSessions, bobSessions] = await Promise.all([
-      this._scanClaudeSessions(),
-      this._scanBobSessions(),
-    ]);
+    // Run sequentially to avoid the clear() in _scanClaudeSessions racing with
+    // the map writes in _scanBobSessions.
+    const claudeSessions = await this._scanClaudeSessions();
+    const bobSessions = await this._scanBobSessions();
     const merged = [...claudeSessions, ...bobSessions];
     merged.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     return merged;
@@ -328,100 +344,73 @@ export class SessionManager implements vscode.Disposable {
   }
 
   private async _scanBobSessions(): Promise<ClaudeSession[]> {
-    const sessions: ClaudeSession[] = [];
-    let entries: import('fs').Dirent[];
+    // Bob IDE stores sessions in a SQLite DB at ~/.bob/db/bob.db.
+    // We query it via python3 (always available) since there is no bundled
+    // Node SQLite driver in the extension.
+    const script = `
+import sqlite3, json, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
+cur.execute(
+    "SELECT id, project_id, title, status, first_message, created_at, updated_at, env "
+    "FROM tasks WHERE time_archived IS NULL AND first_message IS NOT NULL "
+    "ORDER BY updated_at DESC LIMIT 100"
+)
+rows = [dict(r) for r in cur.fetchall()]
+print(json.dumps(rows))
+conn.close()
+`;
+    let rows: Array<{
+      id: string;
+      project_id: string;
+      title: string;
+      status: string;
+      first_message: string;
+      created_at: number;
+      updated_at: number;
+      env: string;
+    }>;
     try {
-      entries = await fs.promises.readdir(this._bobTasksDir, { withFileTypes: true });
+      const out = await _execPython3(['-c', script, this._bobDbPath]);
+      rows = JSON.parse(out) as typeof rows;
     } catch {
-      return sessions; // directory doesn't exist (not running in Bob)
+      return []; // DB absent or python3 unavailable
     }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) { continue; }
+
+    const sessions: ClaudeSession[] = [];
+    for (const row of rows) {
       try {
-        const session = await this._parseBobTaskDir(
-          path.join(this._bobTasksDir, entry.name),
-        );
-        if (session !== null) { sessions.push(session); }
-      } catch {
-        // Silently skip malformed task directories
-      }
+        const sessionId = row.id;
+        const title = (row.title || row.first_message || '').slice(0, 60);
+        if (!title) { continue; }
+        const updatedAt = new Date(row.updated_at);
+
+        // Extract workspace path from env JSON
+        let projectPath = '';
+        try {
+          const env = JSON.parse(row.env) as {
+            workspace?: string;
+            staticEnvInfo?: { primaryWorkspace?: string };
+          };
+          projectPath = env.staticEnvInfo?.primaryWorkspace ?? env.workspace ?? '';
+          // project_id is "file:/path" — use as fallback
+          if (!projectPath && row.project_id.startsWith('file:')) {
+            projectPath = row.project_id.slice('file:'.length);
+          }
+        } catch { /* leave empty */ }
+        const projectName = projectPath ? path.basename(projectPath) : '';
+
+        // Map DB status to ClaudeSession status
+        // 'running' = actively processing, 'active' = completed task (idle)
+        const status: ClaudeSession['status'] = row.status === 'running' ? 'active' : 'idle';
+
+        this._sessionFilePaths.set(sessionId, sessionId); // store id as key for lookup
+        this._sessionSources.set(sessionId, 'bob');
+        sessions.push({ sessionId, projectName, projectPath, title, updatedAt, status, source: 'bob' });
+      } catch { /* skip malformed row */ }
     }
     return sessions;
-  }
-
-  private async _parseBobTaskDir(taskDir: string): Promise<ClaudeSession | null> {
-    const sessionId = path.basename(taskDir);
-    const uiPath = path.join(taskDir, 'ui_messages.json');
-
-    let uiStat: { mtime: Date };
-    let uiMessages: Array<{ ts?: number; type?: string; say?: string; ask?: string; text?: string }>;
-    try {
-      uiStat = await fs.promises.stat(uiPath);
-      const raw = await fs.promises.readFile(uiPath, 'utf8');
-      uiMessages = JSON.parse(raw) as typeof uiMessages;
-      if (!Array.isArray(uiMessages)) { return null; }
-    } catch {
-      return null;
-    }
-
-    // Title: first say:text record (user message)
-    const firstUserMsg = uiMessages.find(m => m.type === 'say' && m.say === 'text');
-    if (!firstUserMsg?.text) { return null; }
-    const title = firstUserMsg.text.slice(0, 60);
-    const updatedAt = uiStat.mtime;
-
-    // Project path: extract from api_conversation_history.json
-    let projectPath = '';
-    let projectName = '';
-    try {
-      const histPath = path.join(taskDir, 'api_conversation_history.json');
-      const histRaw = await fs.promises.readFile(histPath, 'utf8');
-      const history = JSON.parse(histRaw) as Array<{
-        role?: string;
-        content?: Array<{ type?: string; text?: string }>;
-      }>;
-      for (const msg of history.slice(0, 1)) {
-        for (const block of msg.content ?? []) {
-          if (block.type === 'text' && block.text) {
-            const m = block.text.match(/# Current Workspace Directory \((.+?)\)/);
-            if (m) { projectPath = m[1]; projectName = path.basename(projectPath); break; }
-          }
-        }
-        if (projectPath) { break; }
-      }
-    } catch {
-      // api_conversation_history.json absent or malformed — leave projectPath empty
-    }
-
-    const status = this._readBobStatus(uiMessages, updatedAt);
-    this._sessionFilePaths.set(sessionId, uiPath);
-    this._sessionSources.set(sessionId, 'bob');
-    return { sessionId, projectName, projectPath, title, updatedAt, status, source: 'bob' as const };
-  }
-
-  private _readBobStatus(
-    messages: Array<{ type?: string; say?: string; ask?: string }>,
-    updatedAt: Date,
-  ): 'idle' | 'waiting' | 'active' {
-    const recentlyModified = (Date.now() - updatedAt.getTime()) < 30_000;
-    const hasApiReqStarted = messages.some(m => m.type === 'say' && m.say === 'api_req_started');
-
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.type === 'say' && m.say === 'api_req_started') { return 'active'; }
-      if (m.type === 'ask' && m.ask === 'tool') { return 'active'; }
-      if (m.type === 'ask' && m.ask === 'completion_result') {
-        return recentlyModified ? 'active' : 'idle';
-      }
-      if (m.type === 'say' && m.say === 'completion_result') {
-        return recentlyModified ? 'active' : 'idle';
-      }
-      if (m.type === 'say' && m.say === 'text') {
-        if (!hasApiReqStarted) { return recentlyModified ? 'active' : 'waiting'; }
-        return recentlyModified ? 'active' : 'idle';
-      }
-    }
-    return recentlyModified ? 'active' : 'idle';
   }
 
   private async _findJsonlFiles(dir: string): Promise<string[]> {

@@ -175,7 +175,7 @@ button:focus-visible {
 .tab {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
   min-height: 40px;
   padding: 6px 8px 6px 12px;
@@ -249,7 +249,8 @@ button:focus-visible {
   height: 8px;
   border-radius: 50%;
   margin-right: 2px;
-  align-self: center;
+  margin-top: 4px;
+  align-self: auto;
 }
 
 /* idle: dim dot so the session is visibly tracked */
@@ -297,6 +298,8 @@ button:focus-visible {
   opacity: 0;
   color: var(--vscode-editor-foreground);
   transition: opacity 0.1s, background-color 0.1s;
+  align-self: flex-start;
+  margin-top: 1px;
 }
 
 .tab:hover .tab-close,
@@ -357,7 +360,7 @@ button:focus-visible {
 .history-item {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
   min-height: 36px;
   padding: 4px 8px 4px 12px;
@@ -368,6 +371,7 @@ button:focus-visible {
   opacity: 0.8;
   transition: background-color 0.1s, opacity 0.1s;
   user-select: none;
+  overflow: hidden;
 }
 
 .history-item:hover {
@@ -381,11 +385,23 @@ button:focus-visible {
   outline-offset: -1px;
 }
 
+/* In history rows, truncate title to one line to prevent overlap */
+.history-item .tab-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
 .history-time {
   display: block;
   font-size: 10px;
   opacity: 0.6;
   margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Session Preview Card ───────────────────────────────────────────────── */
