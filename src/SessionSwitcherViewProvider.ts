@@ -238,6 +238,12 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       const session = byTitle.get(label);
       if (session) { tabMatchedSessions.push(session); }
     }
+    // Partition by source: Claude tab matches drive the Claude tab-driven
+    // path only, so an open Bob tab can't hide Claude sessions.
+    const claudeTabMatched = tabMatchedSessions.filter(s => s.source !== 'bob');
+    const bobTabMatchedIds = new Set(
+      tabMatchedSessions.filter(s => s.source === 'bob').map(s => s.sessionId),
+    );
 
     // Bob sessions: status='running' (DB running→active) means actively executing;
     // status='idle' (DB active→idle) means the session is available but not running.
@@ -245,10 +251,9 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     // executing, or it was updated within the recency window.
     const TWO_HOURS = 2 * 60 * 60 * 1000;
     const now = Date.now();
-    const tabMatchedIds = new Set(tabMatchedSessions.map(s => s.sessionId));
     const bobActive = allSessions.filter(s =>
       s.source === 'bob' && (
-        tabMatchedIds.has(s.sessionId) ||
+        bobTabMatchedIds.has(s.sessionId) ||
         s.status !== 'idle' ||
         (now - s.updatedAt.getTime()) < TWO_HOURS
       )
@@ -256,9 +261,9 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     const claudeSessions = allSessions.filter(s => s.source !== 'bob');
 
     let claudeActive: ClaudeSession[];
-    if (tabMatchedSessions.length > 0) {
+    if (claudeTabMatched.length > 0) {
       // Tab API produced real matches — show only Claude sessions with open tabs.
-      claudeActive = tabMatchedSessions.filter(s => s.source !== 'bob');
+      claudeActive = claudeTabMatched;
     } else {
       // Tab API unavailable — use ~/.claude/sessions/ PID liveness instead.
       // Each file maps a PID (with kernel start-time verification) to a
@@ -289,9 +294,16 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     for (const s of allSessions) {
       if (!byTitle.has(s.title)) { byTitle.set(s.title, s); }
     }
-    const tabMatched = new Set<string>();
+    // Partition matches by source so an open Bob tab doesn't force the
+    // Claude tab-driven path (which would skip PID/recency fallback and
+    // wrongly park active Claude sessions in History).
+    const claudeTabMatched = new Set<string>();
+    const bobTabMatched = new Set<string>();
     for (const label of openLabels) {
-      if (byTitle.has(label)) { tabMatched.add(label); }
+      const s = byTitle.get(label);
+      if (!s) { continue; }
+      if (s.source === 'bob') { bobTabMatched.add(label); }
+      else { claudeTabMatched.add(label); }
     }
 
     const TWO_HOURS_HIST = 2 * 60 * 60 * 1000;
@@ -300,13 +312,13 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     // idle AND older than the recency window — mirror of the _pushSessions
     // filter so an open Bob tab never appears in both places.
     const isBobHistorical = (s: ClaudeSession): boolean =>
-      !tabMatched.has(s.title)
+      !bobTabMatched.has(s.title)
       && s.status === 'idle'
       && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST;
     let history: ClaudeSession[];
-    if (tabMatched.size > 0) {
+    if (claudeTabMatched.size > 0) {
       history = allSessions.filter(s =>
-        s.source === 'bob' ? isBobHistorical(s) : !tabMatched.has(s.title)
+        s.source === 'bob' ? isBobHistorical(s) : !claudeTabMatched.has(s.title)
       );
     } else {
       const activeIds = await getActiveSessionIds();

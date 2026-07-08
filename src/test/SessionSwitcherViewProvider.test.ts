@@ -522,5 +522,71 @@ describe('Bob open tab surfacing (_pushSessions / _pushHistory)', () => {
     expect(sessionsMsg?.sessions.map(s => s.sessionId)).not.toContain('bob-old-idle');
     expect(historyMsg?.sessions.map(s => s.sessionId)).toContain('bob-old-idle');
   });
+
+  it('does not hide recent Claude sessions when only a Bob tab is open', async () => {
+    // Regression: openLabels includes Bob tabs. Before this fix, any open Bob
+    // tab made tabMatchedSessions.length > 0, which forced the Claude branch
+    // down the tab-driven path and set claudeActive = [] (no Claude tabs).
+    const bobWithTab = makeBobSession({
+      sessionId: 'bob-open',
+      title: 'Bob open task',
+      status: 'idle',
+      updatedAt: new Date(Date.now() - 10 * 60 * 1000),
+    });
+    const recentClaude: import('../SessionManager').ClaudeSession = {
+      sessionId: 'claude-recent',
+      projectPath: '/p', projectName: 'p',
+      title: 'Recent Claude task',
+      updatedAt: new Date(Date.now() - 5 * 60 * 1000),
+      status: 'idle',
+      source: 'claude',
+    };
+    setOpenBobTabs(['Bob open task']);
+
+    const provider = makeProvider([bobWithTab, recentClaude]);
+    const postMessage = resolveWebviewCapturing(provider);
+    const priv = provider as unknown as { _pushSessions(): Promise<void> };
+    await priv._pushSessions();
+
+    const sessionsMsg = postMessage.mock.calls
+      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
+      .find(m => m.type === 'updateSessions');
+    expect(sessionsMsg?.sessions.map(s => s.sessionId)).toEqual(
+      expect.arrayContaining(['claude-recent', 'bob-open']),
+    );
+  });
+
+  it('does not push a recent Claude session into History just because a Bob tab is open', async () => {
+    // Regression for _pushHistory mirror: openLabels contains Bob tabs too.
+    // Pre-fix, tabMatched.size > 0 (from a Bob-only open tab) forced the
+    // tab-driven history branch, whose Claude filter is !tabMatched.has(title).
+    // Since tabMatched only had the Bob title, a recent (still-active) Claude
+    // session slipped into History instead of being handled by PID/recency.
+    const bobWithTab = makeBobSession({
+      sessionId: 'bob-open',
+      title: 'Bob open task',
+      status: 'idle',
+      updatedAt: new Date(Date.now() - 10 * 60 * 1000),
+    });
+    const recentClaude: import('../SessionManager').ClaudeSession = {
+      sessionId: 'claude-recent',
+      projectPath: '/p', projectName: 'p',
+      title: 'Recent Claude task',
+      updatedAt: new Date(Date.now() - 5 * 60 * 1000),
+      status: 'idle',
+      source: 'claude',
+    };
+    setOpenBobTabs(['Bob open task']);
+
+    const provider = makeProvider([bobWithTab, recentClaude]);
+    const postMessage = resolveWebviewCapturing(provider);
+    const priv = provider as unknown as { _pushHistory(): Promise<void> };
+    await priv._pushHistory();
+
+    const historyMsg = postMessage.mock.calls
+      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
+      .find(m => m.type === 'updateHistory');
+    expect(historyMsg?.sessions.map(s => s.sessionId)).not.toContain('claude-recent');
+  });
 });
 
