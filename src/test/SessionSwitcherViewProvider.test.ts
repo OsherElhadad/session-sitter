@@ -437,3 +437,90 @@ describe('webview message: addFromHistory (Bob)', () => {
   });
 });
 
+// ── Tests: idle Bob session with open tab appears in Sessions, not History ────
+describe('Bob open tab surfacing (_pushSessions / _pushHistory)', () => {
+  afterEach(() => { setOpenBobTabs([]); });
+
+  function resolveWebviewCapturing(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
+    const postMessage = vi.fn();
+    const webview = {
+      options: {},
+      html: '',
+      onDidReceiveMessage: vi.fn(),
+      postMessage,
+      asWebviewUri: (u: unknown) => u,
+      cspSource: 'vscode-webview:',
+    };
+    const webviewView = {
+      webview,
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+      visible: true,
+    };
+    provider.resolveWebviewView(
+      webviewView as unknown as import('vscode').WebviewView,
+      {} as import('vscode').WebviewViewResolveContext,
+      { isCancellationRequested: false, onCancellationRequested: vi.fn() } as unknown as import('vscode').CancellationToken,
+    );
+    return postMessage;
+  }
+
+  it('surfaces an idle-and-old Bob session in Sessions when its tab is open, and keeps it out of History', async () => {
+    // Idle Bob task last updated well outside the 2-hour recency window.
+    const oldIdleBob = makeBobSession({
+      sessionId: 'bob-old-idle',
+      title: 'Old Bob task',
+      status: 'idle',
+      updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+    setOpenBobTabs(['Old Bob task']);
+
+    const provider = makeProvider([oldIdleBob]);
+    const postMessage = resolveWebviewCapturing(provider);
+    const priv = provider as unknown as {
+      _pushSessions(): Promise<void>;
+      _pushHistory(): Promise<void>;
+    };
+    await priv._pushSessions();
+    await priv._pushHistory();
+
+    const sessionsMsg = postMessage.mock.calls
+      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
+      .find(m => m.type === 'updateSessions');
+    const historyMsg = postMessage.mock.calls
+      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
+      .find(m => m.type === 'updateHistory');
+
+    expect(sessionsMsg?.sessions.map(s => s.sessionId)).toContain('bob-old-idle');
+    expect(historyMsg?.sessions.map(s => s.sessionId)).not.toContain('bob-old-idle');
+  });
+
+  it('leaves an idle-and-old Bob session out of Sessions when no tab is open (unchanged behavior)', async () => {
+    const oldIdleBob = makeBobSession({
+      sessionId: 'bob-old-idle',
+      title: 'Old Bob task',
+      status: 'idle',
+      updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+    setOpenBobTabs([]);
+
+    const provider = makeProvider([oldIdleBob]);
+    const postMessage = resolveWebviewCapturing(provider);
+    const priv = provider as unknown as {
+      _pushSessions(): Promise<void>;
+      _pushHistory(): Promise<void>;
+    };
+    await priv._pushSessions();
+    await priv._pushHistory();
+
+    const sessionsMsg = postMessage.mock.calls
+      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
+      .find(m => m.type === 'updateSessions');
+    const historyMsg = postMessage.mock.calls
+      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
+      .find(m => m.type === 'updateHistory');
+
+    expect(sessionsMsg?.sessions.map(s => s.sessionId)).not.toContain('bob-old-idle');
+    expect(historyMsg?.sessions.map(s => s.sessionId)).toContain('bob-old-idle');
+  });
+});
+

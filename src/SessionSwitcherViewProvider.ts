@@ -240,14 +240,17 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     }
 
     // Bob sessions: status='running' (DB running→active) means actively executing;
-    // status='idle' (DB active→idle) means completed. Apply the same recency filter
-    // as Claude — always show non-idle, show idle only within a 2-hour window.
-    // Bob has no open-tab signal and no PID file, so we always use the time window.
+    // status='idle' (DB active→idle) means the session is available but not running.
+    // Show a Bob session if its chat tab is currently open, or it's actively
+    // executing, or it was updated within the recency window.
     const TWO_HOURS = 2 * 60 * 60 * 1000;
     const now = Date.now();
+    const tabMatchedIds = new Set(tabMatchedSessions.map(s => s.sessionId));
     const bobActive = allSessions.filter(s =>
       s.source === 'bob' && (
-        s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
+        tabMatchedIds.has(s.sessionId) ||
+        s.status !== 'idle' ||
+        (now - s.updatedAt.getTime()) < TWO_HOURS
       )
     );
     const claudeSessions = allSessions.filter(s => s.source !== 'bob');
@@ -293,25 +296,29 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
     const TWO_HOURS_HIST = 2 * 60 * 60 * 1000;
     const nowHist = Date.now();
+    // A Bob session belongs in History only when its tab is not open AND it's
+    // idle AND older than the recency window — mirror of the _pushSessions
+    // filter so an open Bob tab never appears in both places.
+    const isBobHistorical = (s: ClaudeSession): boolean =>
+      !tabMatched.has(s.title)
+      && s.status === 'idle'
+      && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST;
     let history: ClaudeSession[];
     if (tabMatched.size > 0) {
-      // Bob sessions are never tab-matched; show idle Bob sessions as history.
       history = allSessions.filter(s =>
-        s.source === 'bob'
-          ? s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
-          : !tabMatched.has(s.title)
+        s.source === 'bob' ? isBobHistorical(s) : !tabMatched.has(s.title)
       );
     } else {
       const activeIds = await getActiveSessionIds();
       if (activeIds.size > 0) {
         history = allSessions.filter(s =>
-          s.source === 'bob'
-            ? s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
-            : !activeIds.has(s.sessionId)
+          s.source === 'bob' ? isBobHistorical(s) : !activeIds.has(s.sessionId)
         );
       } else {
         history = allSessions.filter(s =>
-          s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
+          s.source === 'bob'
+            ? isBobHistorical(s)
+            : s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
         );
       }
     }
