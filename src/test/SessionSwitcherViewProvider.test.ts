@@ -437,3 +437,125 @@ describe('webview message: addFromHistory (Bob)', () => {
   });
 });
 
+// ── Tests: latest-sessions-by-activity view (_pushSessions / _pushHistory) ────
+describe('Sessions view: top-N-by-recency slice', () => {
+  function resolveWebviewCapturing(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
+    const postMessage = vi.fn();
+    const webview = {
+      options: {},
+      html: '',
+      onDidReceiveMessage: vi.fn(),
+      postMessage,
+      asWebviewUri: (u: unknown) => u,
+      cspSource: 'vscode-webview:',
+    };
+    const webviewView = {
+      webview,
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+      visible: true,
+    };
+    provider.resolveWebviewView(
+      webviewView as unknown as import('vscode').WebviewView,
+      {} as import('vscode').WebviewViewResolveContext,
+      { isCancellationRequested: false, onCancellationRequested: vi.fn() } as unknown as import('vscode').CancellationToken,
+    );
+    return postMessage;
+  }
+
+  function makeSession(
+    sessionId: string,
+    minutesAgo: number,
+    source: 'claude' | 'bob' = 'claude',
+    status: 'active' | 'idle' = 'idle',
+  ): import('../SessionManager').ClaudeSession {
+    return {
+      sessionId,
+      projectPath: '/p',
+      projectName: 'p',
+      title: `t-${sessionId}`,
+      updatedAt: new Date(Date.now() - minutesAgo * 60 * 1000),
+      status,
+      source,
+    };
+  }
+
+  function capture(postMessage: ReturnType<typeof vi.fn>, type: 'updateSessions' | 'updateHistory') {
+    return postMessage.mock.calls
+      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
+      .find(m => m.type === type);
+  }
+
+  it('Sessions returns top 20 across sources, sorted by updatedAt desc', async () => {
+    // 25 sessions, oldest first in the getSessions() return, monotonically newer with each entry.
+    const all = Array.from({ length: 25 }, (_, i) => makeSession(`s${i}`, 25 - i, i % 2 === 0 ? 'claude' : 'bob'));
+    const provider = makeProvider(all);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    const msg = capture(postMessage, 'updateSessions');
+    expect(msg?.sessions).toHaveLength(20);
+    // Newest 20 are s24..s5 (s24 is 1 min ago, s5 is 20 min ago).
+    const expectedIds = Array.from({ length: 20 }, (_, i) => `s${24 - i}`);
+    expect(msg?.sessions.map(s => s.sessionId)).toEqual(expectedIds);
+  });
+
+  it('History skips the first 20 and caps at 50', async () => {
+    // 75 sessions. History should get positions 20..69 (50 items), dropping the last 5.
+    const all = Array.from({ length: 75 }, (_, i) => makeSession(`s${i}`, 75 - i));
+    const provider = makeProvider(all);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
+
+    const msg = capture(postMessage, 'updateHistory');
+    expect(msg?.sessions).toHaveLength(50);
+    // Newest is s74 (1 min ago). Sessions covers s74..s55 (top 20).
+    // History covers s54..s5 (next 50).
+    const expectedIds = Array.from({ length: 50 }, (_, i) => `s${54 - i}`);
+    expect(msg?.sessions.map(s => s.sessionId)).toEqual(expectedIds);
+  });
+
+  it('with fewer than 20 total sessions, all go to Sessions and History is empty', async () => {
+    const all = Array.from({ length: 5 }, (_, i) => makeSession(`s${i}`, 5 - i));
+    const provider = makeProvider(all);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as {
+      _pushSessions(): Promise<void>;
+      _pushHistory(): Promise<void>;
+    })._pushSessions();
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions).toHaveLength(5);
+    expect(capture(postMessage, 'updateHistory')?.sessions).toHaveLength(0);
+  });
+
+  it('Sessions mixes Claude and Bob interleaved by updatedAt', async () => {
+    // Alternating sources with strictly descending timestamps.
+    const all: import('../SessionManager').ClaudeSession[] = [
+      makeSession('b1', 1, 'bob'),
+      makeSession('c1', 2, 'claude'),
+      makeSession('b2', 3, 'bob'),
+      makeSession('c2', 4, 'claude'),
+    ];
+    const provider = makeProvider(all);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(
+      ['b1', 'c1', 'b2', 'c2'],
+    );
+  });
+
+  it("Bob status='active' does not force position; only updatedAt determines order", async () => {
+    // Older Bob marked 'active' vs newer Claude 'idle' — Claude comes first.
+    const olderBobRunning = makeSession('bob-running', 60, 'bob', 'active');
+    const newerClaudeIdle = makeSession('claude-fresh', 5, 'claude', 'idle');
+    const provider = makeProvider([olderBobRunning, newerClaudeIdle]);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(
+      ['claude-fresh', 'bob-running'],
+    );
+  });
+});
+

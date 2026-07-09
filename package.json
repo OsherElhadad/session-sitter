@@ -18,7 +18,7 @@
       "secondarySidebar": [
         {
           "id": "claude-session-switcher",
-          "title": "Claude Sessions",
+          "title": "AI Sessions",
           "icon": "resources/icon.svg"
         }
       ]

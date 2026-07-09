@@ -269,7 +269,7 @@
     if (sessions.length === 0) {
       const placeholder = document.createElement('span');
       placeholder.className = 'tab-placeholder';
-      placeholder.textContent = 'No active sessions — click + to start one';
+      placeholder.textContent = 'No sessions yet — click + to start one';
       tabStrip.appendChild(placeholder);
       return;
     }
