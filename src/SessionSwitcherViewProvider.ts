@@ -345,11 +345,9 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   private async _uploadSessionToReckon(sessionId: string): Promise<void> {
     const config = vscode.workspace.getConfiguration('reckon');
     const scriptPath: string = config.get('uploadScriptPath') ?? '';
-    if (!scriptPath) {
-      void vscode.window.showErrorMessage(
-        'reckon: upload script path not configured. ' +
-        'Set reckon.uploadScriptPath in your VS Code settings.',
-      );
+    if (!scriptPath || !fs.existsSync(scriptPath)) {
+      // Script not configured or not found — fail silently.
+      console.log('[reckon] upload_session.py not found (reckon.uploadScriptPath:', scriptPath || '(unset)', ')');
       return;
     }
 
