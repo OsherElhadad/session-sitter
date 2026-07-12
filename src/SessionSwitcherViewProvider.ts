@@ -151,6 +151,13 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             });
             break;
           }
+          case 'copyToClipboard': {
+            const text = message.text as string | undefined;
+            if (typeof text === 'string') {
+              void vscode.env.clipboard.writeText(text);
+            }
+            break;
+          }
         }
       })
     );

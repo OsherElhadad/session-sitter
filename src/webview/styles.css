@@ -178,10 +178,10 @@ button:focus-visible {
   align-items: flex-start;
   width: 100%;
   min-height: 40px;
-  padding: 6px 8px 6px 12px;
+  padding: 10px 8px 10px 12px;
   gap: 6px;
   cursor: pointer;
-  border-bottom: 1px solid var(--vscode-list-inactiveFocusOutline, transparent);
+  border-bottom: 1px solid rgba(128, 128, 128, 0.14);
   background-color: transparent;
   color: var(--vscode-list-inactiveFocusForeground, var(--vscode-editor-foreground));
   transition: background-color 0.1s;
@@ -208,7 +208,7 @@ button:focus-visible {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -239,6 +239,16 @@ button:focus-visible {
 .tab-badge--bob {
   background: #1f70c1;
   color: #fff;
+}
+
+/* Inline relative time on the Sessions row (e.g. "5 minutes ago") */
+.tab-time {
+  display: block;
+  font-size: 10px;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Status Indicator ────────────────────────────────────────────────────── */
@@ -363,9 +373,9 @@ button:focus-visible {
   align-items: flex-start;
   width: 100%;
   min-height: 36px;
-  padding: 4px 8px 4px 12px;
+  padding: 8px 8px 8px 12px;
   cursor: pointer;
-  border-bottom: 1px solid var(--vscode-list-inactiveFocusOutline, transparent);
+  border-bottom: 1px solid rgba(128, 128, 128, 0.14);
   background-color: transparent;
   color: var(--vscode-list-inactiveFocusForeground, var(--vscode-editor-foreground));
   opacity: 0.8;
@@ -470,5 +480,41 @@ button:focus-visible {
   line-height: 1.45;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+/* ── Right-click context menu ────────────────────────────────────────────── */
+
+.session-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  padding: 4px 0;
+  background-color: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
+  border-radius: 3px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-context-menu-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.session-context-menu-item:hover,
+.session-context-menu-item:focus {
+  background-color: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, 0.25)));
+  color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground, inherit));
+  outline: none;
 }
 

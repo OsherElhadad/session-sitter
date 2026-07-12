@@ -16,11 +16,14 @@
 
   let historyOpen = false;
 
-  /** @type {ReturnType<typeof setTimeout> | null} */
-  let previewTimer = null;
+  /** @type {string | null} — sessionId whose preview we've requested via "Show details" */
+  let pendingPreviewSessionId = null;
 
-  /** @type {string | null} — sessionId of the row currently under the cursor */
-  let hoveredSessionId = null;
+  /** @type {HTMLElement | null} — row element to anchor the preview against when it arrives */
+  let pendingPreviewAnchor = null;
+
+  /** @type {HTMLElement | null} — visible context menu element, or null */
+  let contextMenuEl = null;
 
   // ── DOM References ────────────────────────────────────────────────────────
 
@@ -119,6 +122,73 @@
     if (!previewEl) { return; }
     previewEl.hidden = true;
     previewEl.innerHTML = '';
+    pendingPreviewSessionId = null;
+    pendingPreviewAnchor = null;
+  }
+
+  // ── Context menu ──────────────────────────────────────────────────────────
+
+  function closeContextMenu() {
+    if (contextMenuEl) {
+      contextMenuEl.remove();
+      contextMenuEl = null;
+    }
+  }
+
+  /**
+   * @param {number} x
+   * @param {number} y
+   * @param {object} session
+   * @param {HTMLElement} anchorEl
+   */
+  function openContextMenu(x, y, session, anchorEl) {
+    closeContextMenu();
+    hidePreview();
+
+    const menu = document.createElement('div');
+    menu.className = 'session-context-menu';
+    menu.setAttribute('role', 'menu');
+
+    const items = [
+      { label: 'Show details', action: function () {
+          pendingPreviewSessionId = session.sessionId;
+          pendingPreviewAnchor = anchorEl;
+          vscodeApi.postMessage({ type: 'getSessionPreview', sessionId: session.sessionId });
+      }},
+      { label: 'Copy title', action: function () {
+          vscodeApi.postMessage({ type: 'copyToClipboard', text: session.title || '' });
+      }},
+      { label: 'Copy session ID', action: function () {
+          vscodeApi.postMessage({ type: 'copyToClipboard', text: session.sessionId });
+      }},
+    ];
+
+    items.forEach(function (itemDef) {
+      const btn = document.createElement('button');
+      btn.className = 'session-context-menu-item';
+      btn.setAttribute('role', 'menuitem');
+      btn.type = 'button';
+      btn.textContent = itemDef.label;
+      btn.addEventListener('click', function () {
+        itemDef.action();
+        closeContextMenu();
+      });
+      menu.appendChild(btn);
+    });
+
+    // Measure before placing so we can clamp against viewport edges.
+    menu.style.left = '-9999px';
+    menu.style.top = '-9999px';
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    const finalX = Math.min(x, window.innerWidth  - rect.width  - 4);
+    const finalY = Math.min(y, window.innerHeight - rect.height - 4);
+    menu.style.left = Math.max(4, finalX) + 'px';
+    menu.style.top  = Math.max(4, finalY) + 'px';
+
+    contextMenuEl = menu;
+    const firstItem = menu.querySelector('.session-context-menu-item');
+    if (firstItem) { firstItem.focus(); }
   }
 
   // ── Tab builder ───────────────────────────────────────────────────────────
@@ -163,6 +233,11 @@
       textEl.appendChild(badgeEl);
     }
 
+    const timeEl = document.createElement('span');
+    timeEl.className = 'tab-time';
+    timeEl.textContent = formatRelativeTime(session.updatedAt);
+    textEl.appendChild(timeEl);
+
     tab.appendChild(statusEl);
     tab.appendChild(textEl);
 
@@ -190,17 +265,9 @@
       }
     });
 
-    tab.addEventListener('mouseenter', function () {
-      hoveredSessionId = session.sessionId;
-      previewTimer = setTimeout(function () {
-        vscodeApi.postMessage({ type: 'getSessionPreview', sessionId: session.sessionId });
-      }, 250);
-    });
-
-    tab.addEventListener('mouseleave', function () {
-      hoveredSessionId = null;
-      clearTimeout(previewTimer);
-      hidePreview();
+    tab.addEventListener('contextmenu', function (event) {
+      event.preventDefault();
+      openContextMenu(event.clientX, event.clientY, session, tab);
     });
 
     return tab;
@@ -256,6 +323,11 @@
         event.preventDefault();
         activate();
       }
+    });
+
+    item.addEventListener('contextmenu', function (event) {
+      event.preventDefault();
+      openContextMenu(event.clientX, event.clientY, session, item);
     });
 
     return item;
@@ -318,14 +390,15 @@
         renderHistory();
         break;
       case 'sessionPreview': {
-        if (hoveredSessionId !== message.sessionId) { break; }
-        const tabEl = tabStrip &&
-          tabStrip.querySelector('[data-session-id="' + message.sessionId + '"]');
-        if (tabEl) {
+        if (pendingPreviewSessionId !== message.sessionId) { break; }
+        const anchorEl = pendingPreviewAnchor;
+        pendingPreviewSessionId = null;
+        pendingPreviewAnchor = null;
+        if (anchorEl) {
           const previewSession = sessions.find(function (s) { return s.sessionId === message.sessionId; })
             || historySessions.find(function (s) { return s.sessionId === message.sessionId; });
           const assistantName = previewSession && previewSession.source === 'bob' ? 'Bob' : 'Claude';
-          showPreview(message.projectPath || '', message.exchanges || [], tabEl, assistantName);
+          showPreview(message.projectPath || '', message.exchanges || [], anchorEl, assistantName);
         }
         break;
       }
@@ -370,8 +443,20 @@
     }
 
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && aboutEl && !aboutEl.hidden) {
-        aboutEl.hidden = true;
+      if (event.key === 'Escape') {
+        if (aboutEl && !aboutEl.hidden) { aboutEl.hidden = true; }
+        if (contextMenuEl) { closeContextMenu(); }
+        if (previewEl && !previewEl.hidden) { hidePreview(); }
+      }
+    });
+
+    // Dismiss context menu / preview when clicking outside of them.
+    document.addEventListener('mousedown', (event) => {
+      if (contextMenuEl && !contextMenuEl.contains(event.target)) {
+        closeContextMenu();
+      }
+      if (previewEl && !previewEl.hidden && !previewEl.contains(event.target)) {
+        hidePreview();
       }
     });
 
