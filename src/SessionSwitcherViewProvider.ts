@@ -369,7 +369,6 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       },
       () =>
         new Promise<void>(resolve => {
-          const { execFile } = require('child_process') as typeof import('child_process');
           execFile(
             'python3',
             [scriptPath, exported.filePath, '--source', source, '--slug', slug],
