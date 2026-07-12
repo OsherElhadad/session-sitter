@@ -176,6 +176,7 @@ button:focus-visible {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
+  flex-shrink: 0;
   width: 100%;
   min-height: 40px;
   padding: 10px 8px 10px 12px;
@@ -371,6 +372,7 @@ button:focus-visible {
   display: flex;
   flex-direction: row;
   align-items: flex-start;
+  flex-shrink: 0;
   width: 100%;
   min-height: 36px;
   padding: 8px 8px 8px 12px;
