@@ -437,10 +437,8 @@ describe('webview message: addFromHistory (Bob)', () => {
   });
 });
 
-// ── Tests: idle Bob session with open tab appears in Sessions, not History ────
-describe('Bob open tab surfacing (_pushSessions / _pushHistory)', () => {
-  afterEach(() => { setOpenBobTabs([]); });
-
+// ── Tests: latest-sessions-by-activity view (_pushSessions / _pushHistory) ────
+describe('Sessions view: top-N-by-recency slice', () => {
   function resolveWebviewCapturing(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
     const postMessage = vi.fn();
     const webview = {
@@ -464,129 +462,100 @@ describe('Bob open tab surfacing (_pushSessions / _pushHistory)', () => {
     return postMessage;
   }
 
-  it('surfaces an idle-and-old Bob session in Sessions when its tab is open, and keeps it out of History', async () => {
-    // Idle Bob task last updated well outside the 2-hour recency window.
-    const oldIdleBob = makeBobSession({
-      sessionId: 'bob-old-idle',
-      title: 'Old Bob task',
-      status: 'idle',
-      updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
-    });
-    setOpenBobTabs(['Old Bob task']);
-
-    const provider = makeProvider([oldIdleBob]);
-    const postMessage = resolveWebviewCapturing(provider);
-    const priv = provider as unknown as {
-      _pushSessions(): Promise<void>;
-      _pushHistory(): Promise<void>;
+  function makeSession(
+    sessionId: string,
+    minutesAgo: number,
+    source: 'claude' | 'bob' = 'claude',
+    status: 'active' | 'idle' = 'idle',
+  ): import('../SessionManager').ClaudeSession {
+    return {
+      sessionId,
+      projectPath: '/p',
+      projectName: 'p',
+      title: `t-${sessionId}`,
+      updatedAt: new Date(Date.now() - minutesAgo * 60 * 1000),
+      status,
+      source,
     };
-    await priv._pushSessions();
-    await priv._pushHistory();
+  }
 
-    const sessionsMsg = postMessage.mock.calls
+  function capture(postMessage: ReturnType<typeof vi.fn>, type: 'updateSessions' | 'updateHistory') {
+    return postMessage.mock.calls
       .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
-      .find(m => m.type === 'updateSessions');
-    const historyMsg = postMessage.mock.calls
-      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
-      .find(m => m.type === 'updateHistory');
+      .find(m => m.type === type);
+  }
 
-    expect(sessionsMsg?.sessions.map(s => s.sessionId)).toContain('bob-old-idle');
-    expect(historyMsg?.sessions.map(s => s.sessionId)).not.toContain('bob-old-idle');
+  it('Sessions returns top 20 across sources, sorted by updatedAt desc', async () => {
+    // 25 sessions, oldest first in the getSessions() return, monotonically newer with each entry.
+    const all = Array.from({ length: 25 }, (_, i) => makeSession(`s${i}`, 25 - i, i % 2 === 0 ? 'claude' : 'bob'));
+    const provider = makeProvider(all);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    const msg = capture(postMessage, 'updateSessions');
+    expect(msg?.sessions).toHaveLength(20);
+    // Newest 20 are s24..s5 (s24 is 1 min ago, s5 is 20 min ago).
+    const expectedIds = Array.from({ length: 20 }, (_, i) => `s${24 - i}`);
+    expect(msg?.sessions.map(s => s.sessionId)).toEqual(expectedIds);
   });
 
-  it('leaves an idle-and-old Bob session out of Sessions when no tab is open (unchanged behavior)', async () => {
-    const oldIdleBob = makeBobSession({
-      sessionId: 'bob-old-idle',
-      title: 'Old Bob task',
-      status: 'idle',
-      updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
-    });
-    setOpenBobTabs([]);
-
-    const provider = makeProvider([oldIdleBob]);
+  it('History skips the first 20 and caps at 50', async () => {
+    // 75 sessions. History should get positions 20..69 (50 items), dropping the last 5.
+    const all = Array.from({ length: 75 }, (_, i) => makeSession(`s${i}`, 75 - i));
+    const provider = makeProvider(all);
     const postMessage = resolveWebviewCapturing(provider);
-    const priv = provider as unknown as {
-      _pushSessions(): Promise<void>;
-      _pushHistory(): Promise<void>;
-    };
-    await priv._pushSessions();
-    await priv._pushHistory();
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
 
-    const sessionsMsg = postMessage.mock.calls
-      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
-      .find(m => m.type === 'updateSessions');
-    const historyMsg = postMessage.mock.calls
-      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
-      .find(m => m.type === 'updateHistory');
-
-    expect(sessionsMsg?.sessions.map(s => s.sessionId)).not.toContain('bob-old-idle');
-    expect(historyMsg?.sessions.map(s => s.sessionId)).toContain('bob-old-idle');
+    const msg = capture(postMessage, 'updateHistory');
+    expect(msg?.sessions).toHaveLength(50);
+    // Newest is s74 (1 min ago). Sessions covers s74..s55 (top 20).
+    // History covers s54..s5 (next 50).
+    const expectedIds = Array.from({ length: 50 }, (_, i) => `s${54 - i}`);
+    expect(msg?.sessions.map(s => s.sessionId)).toEqual(expectedIds);
   });
 
-  it('does not hide recent Claude sessions when only a Bob tab is open', async () => {
-    // Regression: openLabels includes Bob tabs. Before this fix, any open Bob
-    // tab made tabMatchedSessions.length > 0, which forced the Claude branch
-    // down the tab-driven path and set claudeActive = [] (no Claude tabs).
-    const bobWithTab = makeBobSession({
-      sessionId: 'bob-open',
-      title: 'Bob open task',
-      status: 'idle',
-      updatedAt: new Date(Date.now() - 10 * 60 * 1000),
-    });
-    const recentClaude: import('../SessionManager').ClaudeSession = {
-      sessionId: 'claude-recent',
-      projectPath: '/p', projectName: 'p',
-      title: 'Recent Claude task',
-      updatedAt: new Date(Date.now() - 5 * 60 * 1000),
-      status: 'idle',
-      source: 'claude',
-    };
-    setOpenBobTabs(['Bob open task']);
-
-    const provider = makeProvider([bobWithTab, recentClaude]);
+  it('with fewer than 20 total sessions, all go to Sessions and History is empty', async () => {
+    const all = Array.from({ length: 5 }, (_, i) => makeSession(`s${i}`, 5 - i));
+    const provider = makeProvider(all);
     const postMessage = resolveWebviewCapturing(provider);
-    const priv = provider as unknown as { _pushSessions(): Promise<void> };
-    await priv._pushSessions();
+    await (provider as unknown as {
+      _pushSessions(): Promise<void>;
+      _pushHistory(): Promise<void>;
+    })._pushSessions();
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
 
-    const sessionsMsg = postMessage.mock.calls
-      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
-      .find(m => m.type === 'updateSessions');
-    expect(sessionsMsg?.sessions.map(s => s.sessionId)).toEqual(
-      expect.arrayContaining(['claude-recent', 'bob-open']),
+    expect(capture(postMessage, 'updateSessions')?.sessions).toHaveLength(5);
+    expect(capture(postMessage, 'updateHistory')?.sessions).toHaveLength(0);
+  });
+
+  it('Sessions mixes Claude and Bob interleaved by updatedAt', async () => {
+    // Alternating sources with strictly descending timestamps.
+    const all: import('../SessionManager').ClaudeSession[] = [
+      makeSession('b1', 1, 'bob'),
+      makeSession('c1', 2, 'claude'),
+      makeSession('b2', 3, 'bob'),
+      makeSession('c2', 4, 'claude'),
+    ];
+    const provider = makeProvider(all);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(
+      ['b1', 'c1', 'b2', 'c2'],
     );
   });
 
-  it('does not push a recent Claude session into History just because a Bob tab is open', async () => {
-    // Regression for _pushHistory mirror: openLabels contains Bob tabs too.
-    // Pre-fix, tabMatched.size > 0 (from a Bob-only open tab) forced the
-    // tab-driven history branch, whose Claude filter is !tabMatched.has(title).
-    // Since tabMatched only had the Bob title, a recent (still-active) Claude
-    // session slipped into History instead of being handled by PID/recency.
-    const bobWithTab = makeBobSession({
-      sessionId: 'bob-open',
-      title: 'Bob open task',
-      status: 'idle',
-      updatedAt: new Date(Date.now() - 10 * 60 * 1000),
-    });
-    const recentClaude: import('../SessionManager').ClaudeSession = {
-      sessionId: 'claude-recent',
-      projectPath: '/p', projectName: 'p',
-      title: 'Recent Claude task',
-      updatedAt: new Date(Date.now() - 5 * 60 * 1000),
-      status: 'idle',
-      source: 'claude',
-    };
-    setOpenBobTabs(['Bob open task']);
-
-    const provider = makeProvider([bobWithTab, recentClaude]);
+  it("Bob status='active' does not force position; only updatedAt determines order", async () => {
+    // Older Bob marked 'active' vs newer Claude 'idle' — Claude comes first.
+    const olderBobRunning = makeSession('bob-running', 60, 'bob', 'active');
+    const newerClaudeIdle = makeSession('claude-fresh', 5, 'claude', 'idle');
+    const provider = makeProvider([olderBobRunning, newerClaudeIdle]);
     const postMessage = resolveWebviewCapturing(provider);
-    const priv = provider as unknown as { _pushHistory(): Promise<void> };
-    await priv._pushHistory();
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
 
-    const historyMsg = postMessage.mock.calls
-      .map(c => c[0] as { type: string; sessions: import('../SessionManager').ClaudeSession[] })
-      .find(m => m.type === 'updateHistory');
-    expect(historyMsg?.sessions.map(s => s.sessionId)).not.toContain('claude-recent');
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(
+      ['claude-fresh', 'bob-running'],
+    );
   });
 });
 

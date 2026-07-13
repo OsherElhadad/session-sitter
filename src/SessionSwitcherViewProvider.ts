@@ -4,9 +4,14 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { randomBytes } from 'crypto';
-import { SessionManager, ClaudeSession, MessageExchange, getActiveSessionIds } from './SessionManager';
+import { SessionManager, ClaudeSession, MessageExchange } from './SessionManager';
 import { readLiveWindows, writeWindowEntry, removeWindowEntry, discoverOwnIpcSocket, detectIdeCli, type WindowEntry } from './WindowRegistry';
 import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
+
+// Sessions view shows the N most recently updated sessions across all sources.
+// The remainder go to History (capped separately below).
+const SESSIONS_LIMIT = 20;
+const HISTORY_LIMIT = 50;
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -146,6 +151,13 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             });
             break;
           }
+          case 'copyToClipboard': {
+            const text = message.text as string | undefined;
+            if (typeof text === 'string') {
+              void vscode.env.clipboard.writeText(text);
+            }
+            break;
+          }
         }
       })
     );
@@ -219,122 +231,21 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     return labels;
   }
 
+  private _sortedByRecency(): ClaudeSession[] {
+    return [...this._sessionManager.getSessions()]
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
   private async _pushSessions(): Promise<void> {
     if (!this._view) { return; }
-
-    const allSessions = this._sessionManager.getSessions();
-    const openLabels = this._openClaudeTabLabels();
-
-    // Try to match sessions to open Claude Code editor tabs.
-    const byTitle = new Map<string, ClaudeSession>();
-    for (const s of allSessions) {
-      const existing = byTitle.get(s.title);
-      if (!existing || s.updatedAt > existing.updatedAt) {
-        byTitle.set(s.title, s);
-      }
-    }
-    const tabMatchedSessions: ClaudeSession[] = [];
-    for (const label of openLabels) {
-      const session = byTitle.get(label);
-      if (session) { tabMatchedSessions.push(session); }
-    }
-    // Partition by source: Claude tab matches drive the Claude tab-driven
-    // path only, so an open Bob tab can't hide Claude sessions.
-    const claudeTabMatched = tabMatchedSessions.filter(s => s.source !== 'bob');
-    const bobTabMatchedIds = new Set(
-      tabMatchedSessions.filter(s => s.source === 'bob').map(s => s.sessionId),
-    );
-
-    // Bob sessions: status='running' (DB running→active) means actively executing;
-    // status='idle' (DB active→idle) means the session is available but not running.
-    // Show a Bob session if its chat tab is currently open, or it's actively
-    // executing, or it was updated within the recency window.
-    const TWO_HOURS = 2 * 60 * 60 * 1000;
-    const now = Date.now();
-    const bobActive = allSessions.filter(s =>
-      s.source === 'bob' && (
-        bobTabMatchedIds.has(s.sessionId) ||
-        s.status !== 'idle' ||
-        (now - s.updatedAt.getTime()) < TWO_HOURS
-      )
-    );
-    const claudeSessions = allSessions.filter(s => s.source !== 'bob');
-
-    let claudeActive: ClaudeSession[];
-    if (claudeTabMatched.length > 0) {
-      // Tab API produced real matches — show only Claude sessions with open tabs.
-      claudeActive = claudeTabMatched;
-    } else {
-      // Tab API unavailable — use ~/.claude/sessions/ PID liveness instead.
-      // Each file maps a PID (with kernel start-time verification) to a
-      // sessionId, so we know exactly which sessions have a running process.
-      const activeIds = await getActiveSessionIds();
-      if (activeIds.size > 0) {
-        claudeActive = claudeSessions.filter(s => activeIds.has(s.sessionId));
-      } else {
-        // No session files readable — last-resort 2-hour time window.
-        claudeActive = claudeSessions.filter(s =>
-          s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
-        );
-      }
-    }
-    const sessions = [...claudeActive, ...bobActive];
-
-    sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    const sessions = this._sortedByRecency().slice(0, SESSIONS_LIMIT);
     void this._view.webview.postMessage({ type: 'updateSessions', sessions });
   }
 
   private async _pushHistory(): Promise<void> {
     if (!this._view) { return; }
-    const openLabels = this._openClaudeTabLabels();
-    const allSessions = this._sessionManager.getSessions();
-
-    // Mirror the same tab-matched-or-fallback logic used in _pushSessions.
-    const byTitle = new Map<string, ClaudeSession>();
-    for (const s of allSessions) {
-      if (!byTitle.has(s.title)) { byTitle.set(s.title, s); }
-    }
-    // Partition matches by source so an open Bob tab doesn't force the
-    // Claude tab-driven path (which would skip PID/recency fallback and
-    // wrongly park active Claude sessions in History).
-    const claudeTabMatched = new Set<string>();
-    const bobTabMatched = new Set<string>();
-    for (const label of openLabels) {
-      const s = byTitle.get(label);
-      if (!s) { continue; }
-      if (s.source === 'bob') { bobTabMatched.add(label); }
-      else { claudeTabMatched.add(label); }
-    }
-
-    const TWO_HOURS_HIST = 2 * 60 * 60 * 1000;
-    const nowHist = Date.now();
-    // A Bob session belongs in History only when its tab is not open AND it's
-    // idle AND older than the recency window — mirror of the _pushSessions
-    // filter so an open Bob tab never appears in both places.
-    const isBobHistorical = (s: ClaudeSession): boolean =>
-      !bobTabMatched.has(s.title)
-      && s.status === 'idle'
-      && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST;
-    let history: ClaudeSession[];
-    if (claudeTabMatched.size > 0) {
-      history = allSessions.filter(s =>
-        s.source === 'bob' ? isBobHistorical(s) : !claudeTabMatched.has(s.title)
-      );
-    } else {
-      const activeIds = await getActiveSessionIds();
-      if (activeIds.size > 0) {
-        history = allSessions.filter(s =>
-          s.source === 'bob' ? isBobHistorical(s) : !activeIds.has(s.sessionId)
-        );
-      } else {
-        history = allSessions.filter(s =>
-          s.source === 'bob'
-            ? isBobHistorical(s)
-            : s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
-        );
-      }
-    }
-    void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
+    const sessions = this._sortedByRecency().slice(SESSIONS_LIMIT, SESSIONS_LIMIT + HISTORY_LIMIT);
+    void this._view.webview.postMessage({ type: 'updateHistory', sessions });
   }
 
   // Close the Claude Code editor tab whose label matches the session's title.
