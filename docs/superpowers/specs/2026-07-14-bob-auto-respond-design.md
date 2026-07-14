@@ -188,6 +188,20 @@ _runScan() every 5 s
 
 ---
 
+## Spike results (2026-07-14)
+
+- **Spike A — `InspectorBobSender`: PASS.** Built the throwaway
+  `claudeSessionSwitcher.spikeInspectorSend` command, installed the extension into
+  the live Bob, and ran it. Result toast: `[spike] OK: sent to 2349128589afc99…`.
+  The message `SPIKE OK — auto-respond test` appeared as a **user message in the
+  existing conversation** (not a new task) and Bob began responding. Confirms:
+  our extension shares the ext-host with `IBM.bob-code`; the exported API method's
+  `[[Scopes]]` closure yields the `TaskManager` (`Nh`); `Nh.openTask({taskId})`
+  loads the task from the shared DB and `handleInputMessage(...)` sends into it.
+  The mechanism is viable — proceed with the full build.
+- **Spike B — UI automation: N/A / non-viable.** `powershell.exe` is unreachable
+  from the remote Linux extension host; not implemented (see Task 2).
+
 ## Out of scope
 
 - Claude (non-Bob) auto-respond — the send mechanism differs; this design is
