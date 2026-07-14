@@ -4,9 +4,14 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFile } from 'child_process';
 import { randomBytes } from 'crypto';
-import { SessionManager, ClaudeSession, MessageExchange, getActiveSessionIds } from './SessionManager';
+import { SessionManager, ClaudeSession, MessageExchange } from './SessionManager';
 import { readLiveWindows, writeWindowEntry, removeWindowEntry, discoverOwnIpcSocket, detectIdeCli, type WindowEntry } from './WindowRegistry';
 import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
+
+// Sessions view shows the N most recently updated sessions across all sources.
+// The remainder go to History (capped separately below).
+const SESSIONS_LIMIT = 20;
+const HISTORY_LIMIT = 50;
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -146,6 +151,19 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             });
             break;
           }
+          case 'uploadToReckon': {
+            const sessionId = message.sessionId as string | undefined;
+            if (!sessionId) { break; }
+            void this._uploadSessionToReckon(sessionId);
+            break;
+          }
+          case 'copyToClipboard': {
+            const text = message.text as string | undefined;
+            if (typeof text === 'string') {
+              void vscode.env.clipboard.writeText(text);
+            }
+            break;
+          }
         }
       })
     );
@@ -219,103 +237,21 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     return labels;
   }
 
+  private _sortedByRecency(): ClaudeSession[] {
+    return [...this._sessionManager.getSessions()]
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  }
+
   private async _pushSessions(): Promise<void> {
     if (!this._view) { return; }
-
-    const allSessions = this._sessionManager.getSessions();
-    const openLabels = this._openClaudeTabLabels();
-
-    // Try to match sessions to open Claude Code editor tabs.
-    const byTitle = new Map<string, ClaudeSession>();
-    for (const s of allSessions) {
-      const existing = byTitle.get(s.title);
-      if (!existing || s.updatedAt > existing.updatedAt) {
-        byTitle.set(s.title, s);
-      }
-    }
-    const tabMatchedSessions: ClaudeSession[] = [];
-    for (const label of openLabels) {
-      const session = byTitle.get(label);
-      if (session) { tabMatchedSessions.push(session); }
-    }
-
-    // Bob sessions: status='running' (DB running→active) means actively executing;
-    // status='idle' (DB active→idle) means completed. Apply the same recency filter
-    // as Claude — always show non-idle, show idle only within a 2-hour window.
-    // Bob has no open-tab signal and no PID file, so we always use the time window.
-    const TWO_HOURS = 2 * 60 * 60 * 1000;
-    const now = Date.now();
-    const bobActive = allSessions.filter(s =>
-      s.source === 'bob' && (
-        s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
-      )
-    );
-    const claudeSessions = allSessions.filter(s => s.source !== 'bob');
-
-    let claudeActive: ClaudeSession[];
-    if (tabMatchedSessions.length > 0) {
-      // Tab API produced real matches — show only Claude sessions with open tabs.
-      claudeActive = tabMatchedSessions.filter(s => s.source !== 'bob');
-    } else {
-      // Tab API unavailable — use ~/.claude/sessions/ PID liveness instead.
-      // Each file maps a PID (with kernel start-time verification) to a
-      // sessionId, so we know exactly which sessions have a running process.
-      const activeIds = await getActiveSessionIds();
-      if (activeIds.size > 0) {
-        claudeActive = claudeSessions.filter(s => activeIds.has(s.sessionId));
-      } else {
-        // No session files readable — last-resort 2-hour time window.
-        claudeActive = claudeSessions.filter(s =>
-          s.status !== 'idle' || (now - s.updatedAt.getTime()) < TWO_HOURS
-        );
-      }
-    }
-    const sessions = [...claudeActive, ...bobActive];
-
-    sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    const sessions = this._sortedByRecency().slice(0, SESSIONS_LIMIT);
     void this._view.webview.postMessage({ type: 'updateSessions', sessions });
   }
 
   private async _pushHistory(): Promise<void> {
     if (!this._view) { return; }
-    const openLabels = this._openClaudeTabLabels();
-    const allSessions = this._sessionManager.getSessions();
-
-    // Mirror the same tab-matched-or-fallback logic used in _pushSessions.
-    const byTitle = new Map<string, ClaudeSession>();
-    for (const s of allSessions) {
-      if (!byTitle.has(s.title)) { byTitle.set(s.title, s); }
-    }
-    const tabMatched = new Set<string>();
-    for (const label of openLabels) {
-      if (byTitle.has(label)) { tabMatched.add(label); }
-    }
-
-    const TWO_HOURS_HIST = 2 * 60 * 60 * 1000;
-    const nowHist = Date.now();
-    let history: ClaudeSession[];
-    if (tabMatched.size > 0) {
-      // Bob sessions are never tab-matched; show idle Bob sessions as history.
-      history = allSessions.filter(s =>
-        s.source === 'bob'
-          ? s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
-          : !tabMatched.has(s.title)
-      );
-    } else {
-      const activeIds = await getActiveSessionIds();
-      if (activeIds.size > 0) {
-        history = allSessions.filter(s =>
-          s.source === 'bob'
-            ? s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
-            : !activeIds.has(s.sessionId)
-        );
-      } else {
-        history = allSessions.filter(s =>
-          s.status === 'idle' && (nowHist - s.updatedAt.getTime()) >= TWO_HOURS_HIST
-        );
-      }
-    }
-    void this._view.webview.postMessage({ type: 'updateHistory', sessions: history.slice(0, 50) });
+    const sessions = this._sortedByRecency().slice(SESSIONS_LIMIT, SESSIONS_LIMIT + HISTORY_LIMIT);
+    void this._view.webview.postMessage({ type: 'updateHistory', sessions });
   }
 
   // Close the Claude Code editor tab whose label matches the session's title.
@@ -404,6 +340,66 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     } catch {
       return 'foreign-failed';
     }
+  }
+
+  private async _uploadSessionToReckon(sessionId: string): Promise<void> {
+    const config = vscode.workspace.getConfiguration('reckon');
+    const scriptPath: string = config.get('uploadScriptPath') ?? '';
+    if (!scriptPath || !fs.existsSync(scriptPath)) {
+      // Script not configured or not found — fail silently.
+      console.log('[reckon] upload_session.py not found (reckon.uploadScriptPath:', scriptPath || '(unset)', ')');
+      return;
+    }
+
+    const exported = await this._sessionManager.exportSessionAsJson(sessionId);
+    if (!exported) {
+      void vscode.window.showErrorMessage('reckon: could not resolve session file.');
+      return;
+    }
+
+    const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
+    const source = session?.source ?? 'other';
+    const slug = this._slugify(session?.title ?? sessionId);
+
+    void vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'reckon: uploading session…',
+        cancellable: false,
+      },
+      () =>
+        new Promise<void>(resolve => {
+          execFile(
+            'python3',
+            [scriptPath, exported.filePath, '--source', source, '--slug', slug],
+            { timeout: 60_000 },
+            (err, stdout, stderr) => {
+              exported.cleanup();
+              if (err) {
+                void vscode.window.showErrorMessage(
+                  `reckon: upload failed — ${(stderr || String(err)).trim()}`,
+                );
+              } else {
+                void vscode.window.showInformationMessage('reckon: session uploaded ✓');
+                if (stdout.trim()) {
+                  console.log('[reckon upload]', stdout.trim());
+                }
+              }
+              resolve();
+            },
+          );
+        }),
+    );
+  }
+
+  private _slugify(text: string): string {
+    return (
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 60) || 'session'
+    );
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
