@@ -45,12 +45,7 @@
       },
       {
         "command": "claudeSessionSwitcher.testBobSend",
-        "title": "Test Bob Send Hello World",
-        "category": "Claude Session Switcher"
-      },
-      {
-        "command": "claudeSessionSwitcher.spikeInspectorSend",
-        "title": "SPIKE Inspector Send",
+        "title": "Test Bob Send (to existing session)",
         "category": "Claude Session Switcher"
       }
     ],
