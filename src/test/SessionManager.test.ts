@@ -794,3 +794,90 @@ describe('SessionManager.exportSessionAsJson (Codex)', () => {
   });
 });
 
+// ── SessionManager._scanChatSessions ─────────────────────────────────────────
+type PrivateManagerChat = {
+  _scanChatSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
+  _vscodeUserDir: string;
+};
+
+describe('SessionManager._scanChatSessions', () => {
+  let tmpDir: string;
+  let vscodeUserDir: string;
+  let wsHash: string;
+  let chatDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-scan-'));
+    vscodeUserDir = path.join(tmpDir, 'User');
+    wsHash = 'abc123';
+    chatDir = path.join(vscodeUserDir, 'workspaceStorage', wsHash, 'chatSessions');
+    await fs.promises.mkdir(chatDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(path.dirname(chatDir), 'workspace.json'),
+      JSON.stringify({ folder: 'file:///home/u/my-proj' }),
+    );
+    sm = new SessionManager(makeContext());
+    (sm as unknown as PrivateManagerChat)._vscodeUserDir = vscodeUserDir;
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts title from requests[0].message.text and folder from workspace.json', async () => {
+    const chatFile = path.join(chatDir, 'sess-1.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: {
+        sessionId: 'sess-1',
+        creationDate: '2026-07-13T10:00:00Z',
+        requests: [{ message: { text: 'How do I compile this project?' } }],
+      },
+    }) + '\n');
+
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      sessionId: 'sess-1',
+      title: 'How do I compile this project?',
+      projectPath: '/home/u/my-proj',
+      projectName: 'my-proj',
+      source: 'chat',
+      status: 'idle',
+    });
+  });
+
+  it("falls back to 'Chat in <basename>' when requests is empty", async () => {
+    const chatFile = path.join(chatDir, 'sess-2.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: { sessionId: 'sess-2', requests: [] },
+    }) + '\n');
+
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('Chat in my-proj');
+  });
+
+  it("uses '(no workspace)' when workspace.json is missing", async () => {
+    await fs.promises.rm(path.join(path.dirname(chatDir), 'workspace.json'));
+    const chatFile = path.join(chatDir, 'sess-3.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: { sessionId: 'sess-3', requests: [{ message: { text: 'hi' } }] },
+    }) + '\n');
+
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+    expect(results[0].projectName).toBe('(no workspace)');
+    expect(results[0].projectPath).toBe('');
+  });
+
+  it('returns [] when workspaceStorage does not exist', async () => {
+    await fs.promises.rm(vscodeUserDir, { recursive: true, force: true });
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+    expect(results).toEqual([]);
+  });
+});
+

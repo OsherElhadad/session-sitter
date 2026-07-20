@@ -111,6 +111,7 @@ export class SessionManager implements vscode.Disposable {
   private readonly _bobDbPath: string;
   private readonly _codexSessionsDir: string;
   private readonly _codexIndexPath: string;
+  private readonly _vscodeUserDir: string;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly _pollTimer: ReturnType<typeof setInterval>;
 
@@ -119,6 +120,8 @@ export class SessionManager implements vscode.Disposable {
     this._bobDbPath = path.join(os.homedir(), '.bob', 'db', 'bob.db');
     this._codexSessionsDir = path.join(os.homedir(), '.codex', 'sessions');
     this._codexIndexPath = path.join(os.homedir(), '.codex', 'session_index.jsonl');
+    // macOS-only for now (matches Bob path assumption); Linux/Windows deferred.
+    this._vscodeUserDir = path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User');
 
     // Initial scan
     void this._scanSessions().then(sessions => {
@@ -167,6 +170,17 @@ export class SessionManager implements vscode.Disposable {
     codexWatcher.onDidCreate(refresh);
     codexWatcher.onDidChange(refresh);
     context.subscriptions.push({ dispose: () => codexWatcher.dispose() });
+
+    // Watch chatSessions/*.jsonl across all workspaces. Shared debounced `refresh`.
+    const chatPattern = new vscode.RelativePattern(
+      vscode.Uri.file(this._vscodeUserDir),
+      'workspaceStorage/*/chatSessions/*.jsonl',
+    );
+    const chatWatcher = vscode.workspace.createFileSystemWatcher(chatPattern);
+    chatWatcher.onDidCreate(refresh);
+    chatWatcher.onDidChange(refresh);
+    chatWatcher.onDidDelete(refresh);
+    context.subscriptions.push({ dispose: () => chatWatcher.dispose() });
 
     // Polling fallback: re-scan every 5 s so status indicators and new sessions
     // stay current even when the FileSystemWatcher is silent (common in WSL2).
@@ -378,7 +392,8 @@ conn.close()
     const claudeSessions = await this._scanClaudeSessions();
     const bobSessions = await this._scanBobSessions();
     const codexSessions = await this._scanCodexSessions();
-    const merged = [...claudeSessions, ...bobSessions, ...codexSessions];
+    const chatSessions = await this._scanChatSessions();
+    const merged = [...claudeSessions, ...bobSessions, ...codexSessions, ...chatSessions];
     merged.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     return merged;
   }
@@ -598,6 +613,83 @@ conn.close()
       }
     } catch { /* file may not exist */ }
     return map;
+  }
+
+  // Scan VS Code Chat sessions across all workspaces. Each workspaceStorage/<hash>
+  // may contain a chatSessions/*.jsonl plus a workspace.json that names the folder.
+  private async _scanChatSessions(): Promise<ClaudeSession[]> {
+    const wsRoot = path.join(this._vscodeUserDir, 'workspaceStorage');
+    let workspaceHashes: string[];
+    try {
+      const entries = await fs.promises.readdir(wsRoot, { withFileTypes: true });
+      workspaceHashes = entries.filter(e => e.isDirectory()).map(e => e.name);
+    } catch { return []; }
+
+    const sessions: ClaudeSession[] = [];
+    for (const hash of workspaceHashes) {
+      const chatDir = path.join(wsRoot, hash, 'chatSessions');
+      let chatFiles: string[];
+      try {
+        const entries = await fs.promises.readdir(chatDir, { withFileTypes: true });
+        chatFiles = entries.filter(e => e.isFile() && e.name.endsWith('.jsonl')).map(e => path.join(chatDir, e.name));
+      } catch { continue; }
+
+      // Resolve workspace folder path once per hash.
+      let projectPath = '';
+      let projectName = '(no workspace)';
+      try {
+        const wsMeta = await fs.promises.readFile(path.join(wsRoot, hash, 'workspace.json'), 'utf8');
+        const parsed = JSON.parse(wsMeta) as { folder?: string };
+        if (parsed.folder?.startsWith('file://')) {
+          projectPath = decodeURIComponent(parsed.folder.slice('file://'.length));
+          projectName = path.basename(projectPath) || '(no workspace)';
+        }
+      } catch { /* keep fallback */ }
+
+      for (const filePath of chatFiles) {
+        try {
+          const fd = await fs.promises.open(filePath, 'r');
+          let firstLine = '';
+          try {
+            const buf = Buffer.alloc(65536);
+            const { bytesRead } = await fd.read(buf, 0, 65536, 0);
+            const chunk = buf.subarray(0, bytesRead).toString('utf8');
+            const nl = chunk.indexOf('\n');
+            firstLine = nl >= 0 ? chunk.slice(0, nl) : chunk;
+          } finally {
+            await fd.close();
+          }
+          if (!firstLine.trim()) { continue; }
+
+          const rec = JSON.parse(firstLine) as {
+            kind?: number;
+            v?: { sessionId?: string; requests?: Array<{ message?: { text?: string } }> };
+          };
+          if (rec.kind !== 0) { continue; }
+          const sessionId = rec.v?.sessionId;
+          if (!sessionId) { continue; }
+
+          const firstText = rec.v?.requests?.[0]?.message?.text?.trim();
+          const title = (firstText && firstText.length > 0
+            ? firstText
+            : `Chat in ${projectName}`).slice(0, 60);
+
+          const stat = await fs.promises.stat(filePath);
+          this._sessionFilePaths.set(sessionId, filePath);
+          this._sessionSources.set(sessionId, 'chat');
+          sessions.push({
+            sessionId,
+            projectPath,
+            projectName,
+            title,
+            updatedAt: stat.mtime,
+            status: 'idle',
+            source: 'chat',
+          });
+        } catch { /* skip malformed chat file */ }
+      }
+    }
+    return sessions;
   }
 
   private async _findCodexRollouts(root: string): Promise<string[]> {
