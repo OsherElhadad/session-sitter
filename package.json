@@ -52,6 +52,11 @@
         "category": "Claude Session Switcher"
       },
       {
+        "command": "claudeSessionSwitcher.testBobSend",
+        "title": "Test Bob Send (to existing session)",
+        "category": "Claude Session Switcher"
+      },
+      {
         "command": "claudeSessionSwitcher.uploadToReckon",
         "title": "Upload Session to reckon",
         "category": "Claude Session Switcher"
@@ -60,6 +65,31 @@
     "configuration": {
       "title": "Claude Session Switcher",
       "properties": {
+        "claudeSessionSwitcher.autoRespond": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Auto-reply rules for Bob sessions. On each scan, if the latest assistant message of a Bob session matches `matchPattern` (a JavaScript regular expression), `response` is sent into that same session automatically.",
+          "items": {
+            "type": "object",
+            "required": ["matchPattern", "response"],
+            "properties": {
+              "matchPattern": {
+                "type": "string",
+                "description": "JavaScript regex tested against the latest assistant message."
+              },
+              "response": {
+                "type": "string",
+                "description": "Text sent into the session on a match."
+              },
+              "source": {
+                "type": "string",
+                "enum": ["bob"],
+                "default": "bob",
+                "description": "Which IDE the rule applies to (Bob only)."
+              }
+            }
+          }
+        },
         "reckon.uploadScriptPath": {
           "type": "string",
           "default": "",
