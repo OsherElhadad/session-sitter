@@ -759,3 +759,38 @@ describe('SessionManager.getRecentExchanges (Codex)', () => {
   });
 });
 
+// ── SessionManager.exportSessionAsJson (Codex) ───────────────────────────────
+describe('SessionManager.exportSessionAsJson (Codex)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-export-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns the raw .jsonl path with a no-op cleanup for Codex sessions', async () => {
+    const rollout = path.join(tmpDir, 'rollout.jsonl');
+    await fs.promises.writeFile(rollout, '{"type":"session_meta","payload":{"id":"cx-e","cwd":"/x"}}\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cx-e', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'codex',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-e', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-e', 'codex');
+
+    const out = await sm.exportSessionAsJson('cx-e');
+    expect(out).not.toBeNull();
+    expect(out!.filePath).toBe(rollout);
+    // cleanup must be safe to invoke and NOT delete the source file.
+    out!.cleanup();
+    await expect(fs.promises.access(rollout)).resolves.toBeUndefined();
+  });
+});
+

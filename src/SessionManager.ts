@@ -191,7 +191,7 @@ export class SessionManager implements vscode.Disposable {
     const session = this._sessions.find(s => s.sessionId === sessionId);
     if (!session) { return null; }
 
-    if (session.source === 'claude') {
+    if (session.source === 'claude' || session.source === 'codex') {
       const filePath = this._sessionFilePaths.get(sessionId);
       if (!filePath) { return null; }
       return { filePath, cleanup: () => { /* nothing to clean up */ } };
