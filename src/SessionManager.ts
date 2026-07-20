@@ -17,7 +17,7 @@ export interface ClaudeSession {
   title: string;        // AI-generated title if available, otherwise first user message (≤60 chars)
   updatedAt: Date;      // file mtime (last write time)
   status: 'idle' | 'waiting' | 'active'; // idle=done, waiting=user sent/no reply yet, active=tools running
-  source: 'claude' | 'bob'; // which AI IDE this session belongs to
+  source: 'claude' | 'bob' | 'codex' | 'chat'; // which AI IDE this session belongs to
 }
 
 interface ContentBlock {
@@ -105,7 +105,7 @@ export class SessionManager implements vscode.Disposable {
 
   private _sessions: ClaudeSession[] = [];
   private _sessionFilePaths = new Map<string, string>();
-  private _sessionSources = new Map<string, 'claude' | 'bob'>();
+  private _sessionSources = new Map<string, 'claude' | 'bob' | 'codex' | 'chat'>();
   private readonly _watcher: vscode.FileSystemWatcher;
   private readonly _projectsDir: string;
   private readonly _bobDbPath: string;
