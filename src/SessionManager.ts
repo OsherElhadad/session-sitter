@@ -109,12 +109,16 @@ export class SessionManager implements vscode.Disposable {
   private readonly _watcher: vscode.FileSystemWatcher;
   private readonly _projectsDir: string;
   private readonly _bobDbPath: string;
+  private readonly _codexSessionsDir: string;
+  private readonly _codexIndexPath: string;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly _pollTimer: ReturnType<typeof setInterval>;
 
   constructor(context: vscode.ExtensionContext) {
     this._projectsDir = path.join(os.homedir(), '.claude', 'projects');
     this._bobDbPath = path.join(os.homedir(), '.bob', 'db', 'bob.db');
+    this._codexSessionsDir = path.join(os.homedir(), '.codex', 'sessions');
+    this._codexIndexPath = path.join(os.homedir(), '.codex', 'session_index.jsonl');
 
     // Initial scan
     void this._scanSessions().then(sessions => {
@@ -154,6 +158,15 @@ export class SessionManager implements vscode.Disposable {
     bobWatcher.onDidCreate(refresh);
     bobWatcher.onDidChange(refresh);
     context.subscriptions.push({ dispose: () => bobWatcher.dispose() });
+
+    // Watch ~/.codex/session_index.jsonl for changes (Codex CLI updates it on every session write).
+    const codexIndexDir = path.dirname(this._codexIndexPath);
+    const codexIndexName = path.basename(this._codexIndexPath);
+    const codexPattern = new vscode.RelativePattern(vscode.Uri.file(codexIndexDir), codexIndexName);
+    const codexWatcher = vscode.workspace.createFileSystemWatcher(codexPattern);
+    codexWatcher.onDidCreate(refresh);
+    codexWatcher.onDidChange(refresh);
+    context.subscriptions.push({ dispose: () => codexWatcher.dispose() });
 
     // Polling fallback: re-scan every 5 s so status indicators and new sessions
     // stay current even when the FileSystemWatcher is silent (common in WSL2).
@@ -360,7 +373,8 @@ conn.close()
     // the map writes in _scanBobSessions.
     const claudeSessions = await this._scanClaudeSessions();
     const bobSessions = await this._scanBobSessions();
-    const merged = [...claudeSessions, ...bobSessions];
+    const codexSessions = await this._scanCodexSessions();
+    const merged = [...claudeSessions, ...bobSessions, ...codexSessions];
     merged.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     return merged;
   }
@@ -453,6 +467,109 @@ conn.close()
       } catch { /* skip malformed row */ }
     }
     return sessions;
+  }
+
+  // Codex CLI stores rollouts at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl,
+  // with an index at ~/.codex/session_index.jsonl mapping id -> {thread_name, updated_at}.
+  private async _scanCodexSessions(): Promise<ClaudeSession[]> {
+    const index = await this._readCodexIndex();
+
+    let rolloutFiles: string[];
+    try {
+      rolloutFiles = await this._findCodexRollouts(this._codexSessionsDir);
+    } catch {
+      return [];
+    }
+
+    const sessions: ClaudeSession[] = [];
+    for (const filePath of rolloutFiles) {
+      try {
+        // Read line 0 (session_meta) only.
+        const fd = await fs.promises.open(filePath, 'r');
+        let firstLine = '';
+        try {
+          const buf = Buffer.alloc(4096);
+          const { bytesRead } = await fd.read(buf, 0, 4096, 0);
+          const chunk = buf.subarray(0, bytesRead).toString('utf8');
+          const nl = chunk.indexOf('\n');
+          firstLine = nl >= 0 ? chunk.slice(0, nl) : chunk;
+        } finally {
+          await fd.close();
+        }
+        if (!firstLine.trim()) { continue; }
+
+        const record = JSON.parse(firstLine) as {
+          type?: string;
+          payload?: { id?: string; cwd?: string };
+        };
+        if (record.type !== 'session_meta') { continue; }
+
+        const sessionId = record.payload?.id;
+        const cwd = record.payload?.cwd ?? '';
+        if (!sessionId) { continue; }
+
+        const idx = index.get(sessionId);
+        const stat = await fs.promises.stat(filePath);
+        const updatedAt = idx?.updatedAt ?? stat.mtime;
+        const title = (idx?.threadName ?? (cwd ? path.basename(cwd) : '')).slice(0, 60);
+        if (!title) { continue; }
+
+        this._sessionFilePaths.set(sessionId, filePath);
+        this._sessionSources.set(sessionId, 'codex');
+        sessions.push({
+          sessionId,
+          projectPath: cwd,
+          projectName: cwd ? path.basename(cwd) : '',
+          title,
+          updatedAt,
+          status: 'idle',
+          source: 'codex',
+        });
+      } catch { /* skip malformed rollout */ }
+    }
+    return sessions;
+  }
+
+  private async _readCodexIndex(): Promise<Map<string, { threadName: string; updatedAt: Date }>> {
+    const map = new Map<string, { threadName: string; updatedAt: Date }>();
+    try {
+      const raw = await fs.promises.readFile(this._codexIndexPath, 'utf8');
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) { continue; }
+        try {
+          const rec = JSON.parse(trimmed) as { id?: string; thread_name?: string; updated_at?: string };
+          if (rec.id && rec.thread_name && rec.updated_at) {
+            map.set(rec.id, { threadName: rec.thread_name, updatedAt: new Date(rec.updated_at) });
+          }
+        } catch { /* skip malformed line */ }
+      }
+    } catch { /* file may not exist */ }
+    return map;
+  }
+
+  private async _findCodexRollouts(root: string): Promise<string[]> {
+    const results: string[] = [];
+    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    const walk = async (dir: string): Promise<void> => {
+      let entries: import('fs').Dirent[];
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      } catch { return; }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(full);
+        } else if (entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
+          try {
+            const st = await fs.promises.stat(full);
+            if (st.mtime.getTime() >= ninetyDaysAgo) { results.push(full); }
+          } catch { /* skip */ }
+        }
+      }
+    };
+    await walk(root);
+    return results;
   }
 
   private async _findJsonlFiles(dir: string): Promise<string[]> {

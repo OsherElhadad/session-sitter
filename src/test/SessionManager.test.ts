@@ -637,3 +637,88 @@ describe('SessionManager._scanSessions merges Claude and Bob sessions', () => {
   });
 });
 
+// ── SessionManager._scanCodexSessions ────────────────────────────────────────
+type PrivateManagerCodex = {
+  _scanCodexSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
+  _codexSessionsDir: string;
+  _codexIndexPath: string;
+};
+
+describe('SessionManager._scanCodexSessions', () => {
+  let tmpDir: string;
+  let codexSessionsDir: string;
+  let codexIndexPath: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-scan-'));
+    codexSessionsDir = path.join(tmpDir, '.codex', 'sessions');
+    codexIndexPath = path.join(tmpDir, '.codex', 'session_index.jsonl');
+    await fs.promises.mkdir(path.join(codexSessionsDir, '2026', '07', '13'), { recursive: true });
+    sm = new SessionManager(makeContext());
+    // Override the paths post-construction, same pattern as PrivateManagerBob tests.
+    (sm as unknown as PrivateManagerCodex)._codexSessionsDir = codexSessionsDir;
+    (sm as unknown as PrivateManagerCodex)._codexIndexPath = codexIndexPath;
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts sessions using session_index.jsonl for title + updated_at', async () => {
+    const rollout = path.join(codexSessionsDir, '2026', '07', '13', 'rollout-2026-07-13T10-00-00-abc.jsonl');
+    await fs.promises.writeFile(
+      rollout,
+      JSON.stringify({
+        timestamp: '2026-07-13T10:00:00Z',
+        type: 'session_meta',
+        payload: { id: 'codex-1', cwd: '/home/u/proj' },
+      }) + '\n',
+    );
+    await fs.promises.writeFile(
+      codexIndexPath,
+      JSON.stringify({ id: 'codex-1', thread_name: 'Fix the parser', updated_at: '2026-07-13T10:05:00Z' }) + '\n',
+    );
+
+    const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      sessionId: 'codex-1',
+      title: 'Fix the parser',
+      projectPath: '/home/u/proj',
+      projectName: 'proj',
+      source: 'codex',
+      status: 'idle',
+    });
+    expect(results[0].updatedAt.toISOString()).toBe('2026-07-13T10:05:00.000Z');
+  });
+
+  it('falls back to file mtime and cwd basename when index has no entry', async () => {
+    const rollout = path.join(codexSessionsDir, '2026', '07', '13', 'rollout-2026-07-13T10-00-00-def.jsonl');
+    await fs.promises.writeFile(
+      rollout,
+      JSON.stringify({
+        timestamp: '2026-07-13T10:00:00Z',
+        type: 'session_meta',
+        payload: { id: 'codex-2', cwd: '/home/u/other-proj' },
+      }) + '\n',
+    );
+    // No session_index.jsonl written.
+
+    const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
+
+    expect(results).toHaveLength(1);
+    expect(results[0].sessionId).toBe('codex-2');
+    expect(results[0].title).toBe('other-proj');
+    expect(results[0].projectName).toBe('other-proj');
+    expect(results[0].source).toBe('codex');
+  });
+
+  it('returns [] when the sessions directory does not exist', async () => {
+    await fs.promises.rm(path.join(tmpDir, '.codex'), { recursive: true, force: true });
+    const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
+    expect(results).toEqual([]);
+  });
+});
+
