@@ -229,6 +229,13 @@
       textEl.appendChild(sourceBadge);
     }
 
+    if (session.source === 'codex') {
+      const sourceBadge = document.createElement('span');
+      sourceBadge.className = 'tab-badge tab-badge--codex';
+      sourceBadge.textContent = 'Codex';
+      textEl.appendChild(sourceBadge);
+    }
+
     if (session.projectName) {
       const badgeEl = document.createElement('span');
       badgeEl.className = 'tab-badge';
@@ -300,6 +307,13 @@
       const sourceBadge = document.createElement('span');
       sourceBadge.className = 'tab-badge tab-badge--bob';
       sourceBadge.textContent = 'Bob';
+      textEl.appendChild(sourceBadge);
+    }
+
+    if (session.source === 'codex') {
+      const sourceBadge = document.createElement('span');
+      sourceBadge.className = 'tab-badge tab-badge--codex';
+      sourceBadge.textContent = 'Codex';
       textEl.appendChild(sourceBadge);
     }
 
@@ -400,7 +414,10 @@
         if (anchorEl) {
           const previewSession = sessions.find(function (s) { return s.sessionId === message.sessionId; })
             || historySessions.find(function (s) { return s.sessionId === message.sessionId; });
-          const assistantName = previewSession && previewSession.source === 'bob' ? 'Bob' : 'Claude';
+          const assistantName =
+            previewSession && previewSession.source === 'bob' ? 'Bob' :
+            previewSession && previewSession.source === 'codex' ? 'Codex' :
+            'Claude';
           showPreview(message.projectPath || '', message.exchanges || [], anchorEl, assistantName);
         }
         break;
