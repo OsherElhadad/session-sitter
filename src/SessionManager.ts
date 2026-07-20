@@ -247,6 +247,10 @@ export class SessionManager implements vscode.Disposable {
       return this._getCodexRecentExchanges(filePath);
     }
 
+    if (this._sessionSources.get(sessionId) === 'chat') {
+      return this._getChatRecentExchanges(filePath);
+    }
+
 
     let stat: { size: number };
     try {
@@ -613,6 +617,60 @@ conn.close()
       }
     } catch { /* file may not exist */ }
     return map;
+  }
+
+  // Read the snapshot line of a VS Code Chat .jsonl and reconstruct the last
+  // <= 3 request/response pairs as MessageExchanges (user text + concatenated
+  // string `value` fields of the response array).
+  private async _getChatRecentExchanges(filePath: string): Promise<MessageExchange[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const firstNl = raw.indexOf('\n');
+    const firstLine = firstNl >= 0 ? raw.slice(0, firstNl) : raw;
+    if (!firstLine.trim()) { return []; }
+
+    let snapshot: {
+      v?: { requests?: Array<{
+        message?: { text?: string };
+        response?: Array<{ kind?: string; value?: unknown }>;
+        timestamp?: number;
+      }> };
+    };
+    try {
+      snapshot = JSON.parse(firstLine);
+    } catch { return []; }
+
+    const requests = snapshot.v?.requests ?? [];
+    const collected: MessageExchange[] = [];
+
+    // Take up to the last 3 requests → up to 6 exchanges.
+    const startIdx = Math.max(0, requests.length - 3);
+    for (let i = startIdx; i < requests.length; i++) {
+      const r = requests[i];
+      const iso = typeof r.timestamp === 'number' ? new Date(r.timestamp).toISOString() : undefined;
+
+      const userText = r.message?.text?.trim();
+      if (userText) {
+        const cap = 150;
+        const truncated = userText.length > cap ? userText.slice(0, cap) + '…' : userText;
+        collected.push({ role: 'user', text: truncated, timestamp: iso });
+      }
+
+      const responseText = (r.response ?? [])
+        .filter(el => typeof el.value === 'string')
+        .map(el => el.value as string)
+        .join('')
+        .trim();
+      if (responseText) {
+        const cap = 250;
+        const truncated = responseText.length > cap ? responseText.slice(0, cap) + '…' : responseText;
+        collected.push({ role: 'assistant', text: truncated, timestamp: iso });
+      }
+    }
+    return collected;
   }
 
   // Scan VS Code Chat sessions across all workspaces. Each workspaceStorage/<hash>

@@ -886,3 +886,47 @@ describe('SessionManager._scanChatSessions', () => {
   });
 });
 
+// ── SessionManager.getRecentExchanges (Chat) ─────────────────────────────────
+describe('SessionManager.getRecentExchanges (Chat)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-preview-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts user text and concatenated assistant response.value from requests[]', async () => {
+    const chatFile = path.join(tmpDir, 'chat.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: {
+        sessionId: 'ch-1',
+        requests: [{
+          message: { text: 'Explain flexbox' },
+          response: [
+            { kind: 'mcpServersStarting' },
+            { value: 'Flexbox is ' },
+            { value: 'a layout system.' },
+          ],
+          timestamp: 1721005200000,
+        }],
+      },
+    }) + '\n');
+
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ch-1', chatFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ch-1', 'chat');
+
+    const ex = await sm.getRecentExchanges('ch-1');
+    expect(ex.map(e => ({ role: e.role, text: e.text }))).toEqual([
+      { role: 'user', text: 'Explain flexbox' },
+      { role: 'assistant', text: 'Flexbox is a layout system.' },
+    ]);
+  });
+});
+
