@@ -722,3 +722,40 @@ describe('SessionManager._scanCodexSessions', () => {
   });
 });
 
+// ── SessionManager.getRecentExchanges (Codex) ────────────────────────────────
+describe('SessionManager.getRecentExchanges (Codex)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-preview-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts user/assistant text from response_item records', async () => {
+    const rollout = path.join(tmpDir, 'rollout-x.jsonl');
+    const lines = [
+      { timestamp: '2026-07-13T10:00:00Z', type: 'session_meta', payload: { id: 'cx-1', cwd: '/x' } },
+      { timestamp: '2026-07-13T10:00:01Z', type: 'response_item',
+        payload: { role: 'user', content: [{ type: 'input_text', text: 'Hello Codex' }] } },
+      { timestamp: '2026-07-13T10:00:02Z', type: 'response_item',
+        payload: { role: 'assistant', content: [{ type: 'output_text', text: 'Hi there' }] } },
+    ];
+    await fs.promises.writeFile(rollout, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    // Seed the session maps directly (mirrors seedBobSession in the Bob preview tests).
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-1', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-1', 'codex');
+
+    const ex = await sm.getRecentExchanges('cx-1');
+    expect(ex).toHaveLength(2);
+    expect(ex[0]).toMatchObject({ role: 'user', text: 'Hello Codex' });
+    expect(ex[1]).toMatchObject({ role: 'assistant', text: 'Hi there' });
+  });
+});
+

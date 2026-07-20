@@ -229,6 +229,10 @@ export class SessionManager implements vscode.Disposable {
       return this._getBobRecentExchanges(filePath);
     }
 
+    if (this._sessionSources.get(sessionId) === 'codex') {
+      return this._getCodexRecentExchanges(filePath);
+    }
+
 
     let stat: { size: number };
     try {
@@ -528,6 +532,54 @@ conn.close()
       } catch { /* skip malformed rollout */ }
     }
     return sessions;
+  }
+
+  // Read the tail of a Codex rollout .jsonl and return the last <= 6 role-bearing
+  // response_item records as MessageExchanges (user or assistant text only).
+  private async _getCodexRecentExchanges(filePath: string): Promise<MessageExchange[]> {
+    let stat: { size: number };
+    try {
+      stat = await fs.promises.stat(filePath);
+    } catch { return []; }
+
+    const TAIL = 32768;
+    const offset = Math.max(0, stat.size - TAIL);
+    const size = stat.size - offset;
+    const buf = Buffer.alloc(size);
+
+    const fh = await fs.promises.open(filePath, 'r');
+    try {
+      const { bytesRead } = await fh.read(buf, 0, size, offset);
+      const chunk = buf.subarray(0, bytesRead).toString('utf8');
+      const lines = chunk.split('\n');
+      const collected: MessageExchange[] = [];
+
+      for (let i = lines.length - 1; i >= 0 && collected.length < 6; i--) {
+        const trimmed = lines[i].trim();
+        if (!trimmed) { continue; }
+        try {
+          const rec = JSON.parse(trimmed) as {
+            timestamp?: string;
+            type?: string;
+            payload?: { role?: string; content?: Array<{ type?: string; text?: string }> };
+          };
+          if (rec.type !== 'response_item') { continue; }
+          const role = rec.payload?.role;
+          if (role !== 'user' && role !== 'assistant') { continue; }
+          const first = (rec.payload?.content ?? []).find(
+            b => typeof b.text === 'string' && b.text.trim().length > 0,
+          );
+          const text = first?.text?.trim();
+          if (!text) { continue; }
+          const cap = role === 'user' ? 150 : 250;
+          const truncated = text.length > cap ? text.slice(0, cap) + '…' : text;
+          collected.push({ role, text: truncated, timestamp: rec.timestamp });
+        } catch { /* skip malformed line */ }
+      }
+      return collected.reverse();
+    } finally {
+      await fh.close();
+    }
   }
 
   private async _readCodexIndex(): Promise<Map<string, { threadName: string; updatedAt: Date }>> {
