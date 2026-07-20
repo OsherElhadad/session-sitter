@@ -607,6 +607,11 @@ describe('SessionManager._scanSessions merges Claude and Bob sessions', () => {
     sm = new SessionManager(makeContext());
     (sm as unknown as PrivateManagerBob)._projectsDir = path.join(tmpDir, 'claude-projects');
     (sm as unknown as PrivateManagerBob)._bobDbPath = dbPath;
+    // Point Codex + Chat at nonexistent paths so this merge test only observes
+    // Claude and Bob sources, regardless of what exists on the host machine.
+    (sm as unknown as PrivateManagerCodex)._codexSessionsDir = path.join(tmpDir, 'no-codex');
+    (sm as unknown as PrivateManagerCodex)._codexIndexPath = path.join(tmpDir, 'no-codex-index');
+    (sm as unknown as PrivateManagerChat)._vscodeUserDir = path.join(tmpDir, 'no-vscode');
     await fs.promises.mkdir(path.join(tmpDir, 'claude-projects'), { recursive: true });
   });
 
