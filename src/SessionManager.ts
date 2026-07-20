@@ -211,6 +211,30 @@ export class SessionManager implements vscode.Disposable {
       return { filePath, cleanup: () => { /* nothing to clean up */ } };
     }
 
+    if (session.source === 'chat') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const exchanges = await this._getChatRecentExchanges(filePath);
+      const envelope = {
+        session_id: sessionId,
+        harness: 'chat',
+        username: os.userInfo().username,
+        created_at: session.updatedAt.toISOString(),
+        title: session.title,
+        messages: exchanges.map(e => ({
+          role: e.role,
+          content: e.text,
+          timestamp: e.timestamp ?? new Date().toISOString(),
+        })),
+      };
+      const tmpFile = path.join(os.tmpdir(), `chat-session-${sessionId}.chat.json`);
+      await fs.promises.writeFile(tmpFile, JSON.stringify(envelope, null, 2), 'utf8');
+      return {
+        filePath: tmpFile,
+        cleanup: () => { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } },
+      };
+    }
+
     // Bob session — build a minimal .bob.json envelope from DB data.
     const exchanges = await this._getBobRecentExchanges(sessionId);
     const envelope = {

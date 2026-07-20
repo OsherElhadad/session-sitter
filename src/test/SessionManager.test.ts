@@ -930,3 +930,54 @@ describe('SessionManager.getRecentExchanges (Chat)', () => {
   });
 });
 
+// ── SessionManager.exportSessionAsJson (Chat) ────────────────────────────────
+describe('SessionManager.exportSessionAsJson (Chat)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-export-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('produces a .chat.json envelope with expected keys and cleans up', async () => {
+    const chatFile = path.join(tmpDir, 'chat.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: {
+        sessionId: 'ce-1',
+        requests: [{ message: { text: 'hi' }, response: [{ value: 'hello' }] }],
+      },
+    }) + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'ce-1', projectPath: '/x', projectName: 'x',
+      title: 'hi', updatedAt: new Date('2026-07-13T10:00:00Z'), status: 'idle', source: 'chat',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ce-1', chatFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ce-1', 'chat');
+
+    const out = await sm.exportSessionAsJson('ce-1');
+    expect(out).not.toBeNull();
+    expect(out!.filePath).toMatch(/\.chat\.json$/);
+    const written = JSON.parse(await fs.promises.readFile(out!.filePath, 'utf8'));
+    expect(written).toMatchObject({
+      session_id: 'ce-1',
+      harness: 'chat',
+      title: 'hi',
+    });
+    expect(written.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'hi' }),
+      expect.objectContaining({ role: 'assistant', content: 'hello' }),
+    ]);
+    // Cleanup removes the temp file.
+    out!.cleanup();
+    await expect(fs.promises.access(out!.filePath)).rejects.toThrow();
+  });
+});
+
