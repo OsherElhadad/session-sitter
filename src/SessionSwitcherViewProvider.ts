@@ -131,6 +131,8 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
               void vscode.commands.executeCommand('bobChatView.focus');
             } else if (histSession?.source === 'codex') {
               void vscode.commands.executeCommand('workbench.view.extension.openai-chatgpt');
+            } else if (histSession?.source === 'chat') {
+              void vscode.commands.executeCommand('workbench.action.chat.open');
             } else {
               void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
             }
@@ -212,6 +214,11 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
     if (session.source === 'codex') {
       void vscode.commands.executeCommand('workbench.view.extension.openai-chatgpt');
+      return;
+    }
+
+    if (session.source === 'chat') {
+      void vscode.commands.executeCommand('workbench.action.chat.open');
       return;
     }
 
