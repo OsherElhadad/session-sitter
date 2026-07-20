@@ -2,7 +2,7 @@
   "name": "claude-session-switcher",
   "displayName": "Claude Session Switcher",
   "description": "Tabbed session switcher for Claude Code in the Secondary Sidebar",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "publisher": "eranra",
   "repository": {
     "type": "git",
