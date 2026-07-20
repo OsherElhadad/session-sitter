@@ -616,7 +616,10 @@ describe('SessionManager._scanSessions merges Claude and Bob sessions', () => {
   });
 
   afterEach(async () => {
-    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    // retries + retryDelay guard against a race with the SessionManager's
+    // constructor-initiated background scans (Bob subprocess may leave
+    // sqlite journal files, Codex/Chat scans may still be walking).
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('returns both claude and bob sessions sorted by updatedAt descending', async () => {
