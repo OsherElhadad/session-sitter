@@ -1197,3 +1197,53 @@ describe('SessionManager.exportFullTranscript (Claude)', () => {
   });
 });
 
+// ── SessionManager.exportFullTranscript (Bob) ────────────────────────────────
+describe('SessionManager.exportFullTranscript (Bob)', () => {
+  let tmpDir: string;
+  let dbPath: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bob-full-'));
+    dbPath = path.join(tmpDir, 'bob.db');
+    createBobDb(dbPath);
+    sm = new SessionManager(makeContext());
+    (sm as unknown as PrivateManagerBob)._bobDbPath = dbPath;
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('extracts every message for a task in chronological order (not tail-sliced)', async () => {
+    const id = 'bob-full-1';
+    // Seven messages — well past the 6-cap of the preview extractor.
+    for (let i = 1; i <= 7; i++) {
+      insertBobMessage(dbPath, {
+        id: `m${i}`, taskId: id,
+        role: i % 2 === 1 ? 'user' : 'assistant',
+        content: `Msg ${i}`,
+        ts: 1_000 * i,
+      });
+    }
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: id, projectPath: '/proj', projectName: 'proj',
+      title: 'Bob conversation', updatedAt: new Date(7_000), status: 'idle', source: 'bob',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set(id, id);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set(id, 'bob');
+
+    const md = await sm.exportFullTranscript(id);
+    expect(md).not.toBeNull();
+    expect(md).toContain('# Bob conversation');
+    // Every message must appear — not truncated to the last 6.
+    for (let i = 1; i <= 7; i++) {
+      expect(md).toContain(`Msg ${i}`);
+    }
+    // Chronological: Msg 1 appears before Msg 7 in the markdown.
+    expect(md!.indexOf('Msg 1')).toBeLessThan(md!.indexOf('Msg 7'));
+  });
+});
+

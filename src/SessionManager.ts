@@ -304,6 +304,15 @@ export class SessionManager implements vscode.Disposable {
       });
     }
 
+    if (session.source === 'bob') {
+      const turns = await this._getBobFullTranscript(sessionId);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Bob session',
+        source: 'Bob',
+        sessionId,
+      });
+    }
+
     return null;
   }
 
@@ -476,6 +485,68 @@ conn.close()
     }
 
     return collected.slice(-6);
+  }
+
+  // Return every message for a Bob task, chronologically. Uses the same
+  // messages(role, data, created_at) schema as _getBobRecentExchanges — the
+  // `data` column is a JSON blob containing {content}. Full history, no cap.
+  private async _getBobFullTranscript(taskId: string): Promise<TranscriptTurn[]> {
+    const script = `
+import sqlite3, json, sys
+conn = sqlite3.connect(sys.argv[1])
+cur = conn.cursor()
+cur.execute(
+    "SELECT role, data, created_at FROM messages WHERE task_id=? AND role IN ('user','assistant') ORDER BY created_at",
+    (sys.argv[2],)
+)
+rows = [{'role': r[0], 'data': r[1], 'ts': r[2]} for r in cur.fetchall()]
+print(json.dumps(rows))
+conn.close()
+`;
+    let rows: Array<{ role: string; data: string; ts: number }>;
+    try {
+      const out = await _execPython3(['-c', script, this._bobDbPath, taskId]);
+      rows = JSON.parse(out) as typeof rows;
+    } catch {
+      return [];
+    }
+
+    const turns: TranscriptTurn[] = [];
+    let pending: TranscriptTurn | null = null;
+
+    for (const row of rows) {
+      let text: string | null = null;
+      try {
+        const d = JSON.parse(row.data) as { content?: unknown };
+        const content = d.content;
+        if (typeof content === 'string' && content.trim()) {
+          text = content.trim();
+        } else if (Array.isArray(content)) {
+          const parts: string[] = [];
+          for (const block of content) {
+            const b = block as { type?: string; text?: string };
+            if (b.type === 'text' && b.text?.trim()) { parts.push(b.text.trim()); }
+          }
+          if (parts.length > 0) { text = parts.join('\n\n'); }
+        }
+      } catch { /* skip malformed row */ }
+
+      if (!text) { continue; }
+      const ts = typeof row.ts === 'number' ? new Date(row.ts) : undefined;
+
+      if (row.role === 'user') {
+        if (pending) { turns.push(pending); }
+        pending = { userText: text, timestamp: ts };
+      } else if (row.role === 'assistant') {
+        if (!pending) { pending = { timestamp: ts }; }
+        pending.assistantText = pending.assistantText
+          ? `${pending.assistantText}\n\n${text}`
+          : text;
+        if (!pending.timestamp) { pending.timestamp = ts; }
+      }
+    }
+    if (pending) { turns.push(pending); }
+    return turns;
   }
 
   // Run a full scan and fire onDidChangeSessions only when something changed.
