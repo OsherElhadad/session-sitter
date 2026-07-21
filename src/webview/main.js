@@ -290,6 +290,29 @@
 
   // ── Tab builder ───────────────────────────────────────────────────────────
 
+  // Uniform metadata rows shared by buildTab and buildHistoryItem — appends
+  // the source badge (Claude/Bob/Codex/Chat) and the workspace pill (or
+  // "(no workspace)" fallback) as separate children so `.tab-text` (flex
+  // column) stacks them on their own lines.
+  function appendSessionMetaRows(textEl, session) {
+    const SOURCE_LABELS = { claude: 'Claude', bob: 'Bob', codex: 'Codex', chat: 'Chat' };
+    const label = SOURCE_LABELS[session.source];
+    if (label) {
+      const sourceBadge = document.createElement('span');
+      sourceBadge.className = 'tab-badge tab-badge--' + session.source;
+      sourceBadge.textContent = label;
+      textEl.appendChild(sourceBadge);
+    }
+
+    const workspaceBadge = document.createElement('span');
+    workspaceBadge.className = 'tab-badge tab-badge--workspace';
+    workspaceBadge.textContent = session.projectName || '(no workspace)';
+    if (!session.projectName) {
+      workspaceBadge.classList.add('tab-badge--empty');
+    }
+    textEl.appendChild(workspaceBadge);
+  }
+
   /**
    * @param {object} session
    * @returns {HTMLElement}
@@ -316,33 +339,7 @@
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
 
-    if (session.source === 'bob') {
-      const sourceBadge = document.createElement('span');
-      sourceBadge.className = 'tab-badge tab-badge--bob';
-      sourceBadge.textContent = 'Bob';
-      textEl.appendChild(sourceBadge);
-    }
-
-    if (session.source === 'codex') {
-      const sourceBadge = document.createElement('span');
-      sourceBadge.className = 'tab-badge tab-badge--codex';
-      sourceBadge.textContent = 'Codex';
-      textEl.appendChild(sourceBadge);
-    }
-
-    if (session.source === 'chat') {
-      const sourceBadge = document.createElement('span');
-      sourceBadge.className = 'tab-badge tab-badge--chat';
-      sourceBadge.textContent = 'Chat';
-      textEl.appendChild(sourceBadge);
-    }
-
-    if (session.projectName) {
-      const badgeEl = document.createElement('span');
-      badgeEl.className = 'tab-badge';
-      badgeEl.textContent = session.projectName;
-      textEl.appendChild(badgeEl);
-    }
+    appendSessionMetaRows(textEl, session);
 
     const timeEl = document.createElement('span');
     timeEl.className = 'tab-time';
@@ -404,33 +401,7 @@
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
 
-    if (session.source === 'bob') {
-      const sourceBadge = document.createElement('span');
-      sourceBadge.className = 'tab-badge tab-badge--bob';
-      sourceBadge.textContent = 'Bob';
-      textEl.appendChild(sourceBadge);
-    }
-
-    if (session.source === 'codex') {
-      const sourceBadge = document.createElement('span');
-      sourceBadge.className = 'tab-badge tab-badge--codex';
-      sourceBadge.textContent = 'Codex';
-      textEl.appendChild(sourceBadge);
-    }
-
-    if (session.source === 'chat') {
-      const sourceBadge = document.createElement('span');
-      sourceBadge.className = 'tab-badge tab-badge--chat';
-      sourceBadge.textContent = 'Chat';
-      textEl.appendChild(sourceBadge);
-    }
-
-    if (session.projectName) {
-      const badgeEl = document.createElement('span');
-      badgeEl.className = 'tab-badge';
-      badgeEl.textContent = session.projectName;
-      textEl.appendChild(badgeEl);
-    }
+    appendSessionMetaRows(textEl, session);
 
     const timeEl = document.createElement('span');
     timeEl.className = 'history-time';

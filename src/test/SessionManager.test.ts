@@ -723,6 +723,34 @@ describe('SessionManager._scanCodexSessions', () => {
     expect(results[0].source).toBe('codex');
   });
 
+  it('handles a rollout whose line-0 session_meta record is larger than 4 KB', async () => {
+    // Regression: real Codex CLI embeds base_instructions in session_meta,
+    // pushing line 0 well past 4 KB. A fixed-buffer read would truncate and
+    // JSON.parse would throw. This test locks in the progressive-read fix.
+    const rollout = path.join(codexSessionsDir, '2026', '07', '13', 'rollout-2026-07-13T10-00-00-big.jsonl');
+    const bigInstructions = 'A'.repeat(20_000); // 20 KB of padding inside payload
+    const line0 = JSON.stringify({
+      timestamp: '2026-07-13T10:00:00Z',
+      type: 'session_meta',
+      payload: { id: 'codex-big', cwd: '/home/u/big-proj', base_instructions: bigInstructions },
+    });
+    await fs.promises.writeFile(rollout, line0 + '\n{"type":"response_item","payload":{"role":"user"}}\n');
+    await fs.promises.writeFile(
+      codexIndexPath,
+      JSON.stringify({ id: 'codex-big', thread_name: 'Big instructions', updated_at: '2026-07-13T10:05:00Z' }) + '\n',
+    );
+
+    const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      sessionId: 'codex-big',
+      title: 'Big instructions',
+      projectPath: '/home/u/big-proj',
+      source: 'codex',
+    });
+  });
+
   it('returns [] when the sessions directory does not exist', async () => {
     await fs.promises.rm(path.join(tmpDir, '.codex'), { recursive: true, force: true });
     const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
