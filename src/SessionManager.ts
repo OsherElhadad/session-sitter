@@ -686,18 +686,9 @@ conn.close()
     const sessions: ClaudeSession[] = [];
     for (const filePath of rolloutFiles) {
       try {
-        // Read line 0 (session_meta) only.
-        const fd = await fs.promises.open(filePath, 'r');
-        let firstLine = '';
-        try {
-          const buf = Buffer.alloc(4096);
-          const { bytesRead } = await fd.read(buf, 0, 4096, 0);
-          const chunk = buf.subarray(0, bytesRead).toString('utf8');
-          const nl = chunk.indexOf('\n');
-          firstLine = nl >= 0 ? chunk.slice(0, nl) : chunk;
-        } finally {
-          await fd.close();
-        }
+        // Read line 0 (session_meta) only — Codex embeds long base_instructions
+        // fields so line 0 can be well over 4 KB; must read progressively.
+        const firstLine = await this._readFirstLine(filePath);
         if (!firstLine.trim()) { continue; }
 
         const record = JSON.parse(firstLine) as {
@@ -986,6 +977,36 @@ conn.close()
     return turns;
   }
 
+  // Read a file's first line by reading progressively until we hit a newline
+  // or the cap. Used by scanners whose line 0 has an unbounded upper size —
+  // Codex rollouts routinely exceed 4 KB (embedded base_instructions); VS Code
+  // Chat snapshot lines can grow with long conversations. Cap defaults to 1 MB
+  // to catch malformed files without OOM.
+  private async _readFirstLine(filePath: string, maxBytes = 1_048_576): Promise<string> {
+    const CHUNK = 8192;
+    const fd = await fs.promises.open(filePath, 'r');
+    try {
+      const chunks: string[] = [];
+      let offset = 0;
+      while (offset < maxBytes) {
+        const buf = Buffer.alloc(CHUNK);
+        const { bytesRead } = await fd.read(buf, 0, CHUNK, offset);
+        if (bytesRead === 0) { break; }
+        const chunk = buf.subarray(0, bytesRead).toString('utf8');
+        const nl = chunk.indexOf('\n');
+        if (nl >= 0) {
+          chunks.push(chunk.slice(0, nl));
+          return chunks.join('');
+        }
+        chunks.push(chunk);
+        offset += bytesRead;
+      }
+      return chunks.join('');
+    } finally {
+      await fd.close();
+    }
+  }
+
   private async _readCodexIndex(): Promise<Map<string, { threadName: string; updatedAt: Date }>> {
     const map = new Map<string, { threadName: string; updatedAt: Date }>();
     try {
@@ -1091,17 +1112,7 @@ conn.close()
 
       for (const filePath of chatFiles) {
         try {
-          const fd = await fs.promises.open(filePath, 'r');
-          let firstLine = '';
-          try {
-            const buf = Buffer.alloc(65536);
-            const { bytesRead } = await fd.read(buf, 0, 65536, 0);
-            const chunk = buf.subarray(0, bytesRead).toString('utf8');
-            const nl = chunk.indexOf('\n');
-            firstLine = nl >= 0 ? chunk.slice(0, nl) : chunk;
-          } finally {
-            await fd.close();
-          }
+          const firstLine = await this._readFirstLine(filePath);
           if (!firstLine.trim()) { continue; }
 
           const rec = JSON.parse(firstLine) as {
