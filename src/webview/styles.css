@@ -237,19 +237,31 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+.tab-badge--claude {
+  background: #cc785c;   /* Anthropic-inspired terracotta */
+  color: #fff;
+}
+
 .tab-badge--bob {
-  background: #1f70c1;
+  background: #1f70c1;   /* IBM Bob blue */
   color: #fff;
 }
 
 .tab-badge--codex {
-  background: #00a67d;
+  background: #00a67d;   /* OpenAI Codex green */
   color: #fff;
 }
 
 .tab-badge--chat {
-  background: #6b6b6b;
+  background: #8250df;   /* GitHub Copilot Chat violet */
   color: #fff;
+}
+
+/* Workspace pill on its own row — italic + slightly dimmed when the session
+   has no associated workspace, to distinguish it visually from a real folder. */
+.tab-badge--empty {
+  font-style: italic;
+  opacity: 0.6;
 }
 
 /* Inline relative time on the Sessions row (e.g. "5 minutes ago") */
