@@ -281,7 +281,18 @@ export class SessionManager implements vscode.Disposable {
   async exportFullTranscript(sessionId: string): Promise<string | null> {
     const session = this._sessions.find(s => s.sessionId === sessionId);
     if (!session) { return null; }
-    // Per-source branches land in Tasks 2–5.
+
+    if (session.source === 'codex') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const turns = await this._getCodexFullTranscript(filePath);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Codex session',
+        source: 'Codex',
+        sessionId,
+      });
+    }
+
     return null;
   }
 
@@ -674,6 +685,53 @@ conn.close()
     } finally {
       await fh.close();
     }
+  }
+
+  // Walk every line of a Codex rollout and pair user/assistant response_item
+  // records into TranscriptTurns. Different from _getCodexRecentExchanges
+  // which tail-slices; this returns the full history.
+  private async _getCodexFullTranscript(filePath: string): Promise<TranscriptTurn[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const turns: TranscriptTurn[] = [];
+    let pending: TranscriptTurn | null = null;
+
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) { continue; }
+      try {
+        const rec = JSON.parse(trimmed) as {
+          timestamp?: string;
+          type?: string;
+          payload?: { role?: string; content?: Array<{ type?: string; text?: string }> };
+        };
+        if (rec.type !== 'response_item') { continue; }
+        const role = rec.payload?.role;
+        if (role !== 'user' && role !== 'assistant') { continue; }
+        const text = (rec.payload?.content ?? [])
+          .filter(b => typeof b.text === 'string' && b.text.trim().length > 0)
+          .map(b => b.text!.trim())
+          .join('\n')
+          .trim();
+        if (!text) { continue; }
+        const ts = rec.timestamp ? new Date(rec.timestamp) : undefined;
+        if (role === 'user') {
+          if (pending) { turns.push(pending); }
+          pending = { userText: text, timestamp: ts };
+        } else {
+          if (!pending) { pending = { timestamp: ts }; }
+          pending.assistantText = pending.assistantText
+            ? `${pending.assistantText}\n\n${text}`
+            : text;
+          if (!pending.timestamp) { pending.timestamp = ts; }
+        }
+      } catch { /* skip malformed line */ }
+    }
+    if (pending) { turns.push(pending); }
+    return turns;
   }
 
   private async _readCodexIndex(): Promise<Map<string, { threadName: string; updatedAt: Date }>> {

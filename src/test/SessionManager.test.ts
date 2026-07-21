@@ -1050,3 +1050,74 @@ describe('SessionManager.exportFullTranscript', () => {
   });
 });
 
+// ── SessionManager.exportFullTranscript (Codex) ──────────────────────────────
+describe('SessionManager.exportFullTranscript (Codex)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-full-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('extracts all user/assistant response_items and drops function_call + session_meta', async () => {
+    const rollout = path.join(tmpDir, 'rollout.jsonl');
+    const lines = [
+      { timestamp: '2026-07-20T10:00:00Z', type: 'session_meta', payload: { id: 'cx-full', cwd: '/x' } },
+      { timestamp: '2026-07-20T10:00:01Z', type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: 'First question' }] } },
+      { timestamp: '2026-07-20T10:00:02Z', type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: 'First answer' }] } },
+      { timestamp: '2026-07-20T10:00:03Z', type: 'function_call', payload: { name: 'read_file', arguments: '{"p":"x"}' } },
+      { timestamp: '2026-07-20T10:00:04Z', type: 'function_call_output', payload: { output: 'file contents' } },
+      { timestamp: '2026-07-20T10:00:05Z', type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: 'Second question' }] } },
+      { timestamp: '2026-07-20T10:00:06Z', type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: 'Second answer' }] } },
+    ];
+    await fs.promises.writeFile(rollout, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cx-full', projectPath: '/x', projectName: 'x',
+      title: 'Codex conversation', updatedAt: new Date('2026-07-20T10:00:06Z'), status: 'idle', source: 'codex',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-full', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-full', 'codex');
+
+    const md = await sm.exportFullTranscript('cx-full');
+    expect(md).not.toBeNull();
+    expect(md).toContain('# Codex conversation');
+    expect(md).toContain('*Copied from Codex · session `cx-full` · 2 turns.*');
+    expect(md).toContain('First question');
+    expect(md).toContain('First answer');
+    expect(md).toContain('Second question');
+    expect(md).toContain('Second answer');
+    expect(md).not.toContain('read_file');
+    expect(md).not.toContain('file contents');
+  });
+
+  it('drops response_item records with non-text roles or empty content', async () => {
+    const rollout = path.join(tmpDir, 'rollout2.jsonl');
+    await fs.promises.writeFile(rollout, [
+      { type: 'session_meta', payload: { id: 'cx-2', cwd: '/x' } },
+      { type: 'response_item', payload: { role: 'system', content: [{ type: 'input_text', text: 'system prompt' }] } },
+      { type: 'response_item', payload: { role: 'user', content: [] } },
+      { type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: 'orphan reply' }] } },
+    ].map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cx-2', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'codex',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-2', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-2', 'codex');
+
+    const md = await sm.exportFullTranscript('cx-2');
+    expect(md).not.toBeNull();
+    expect(md).not.toContain('system prompt');
+    expect(md).toContain('orphan reply');
+  });
+});
+
