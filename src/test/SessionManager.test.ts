@@ -607,11 +607,19 @@ describe('SessionManager._scanSessions merges Claude and Bob sessions', () => {
     sm = new SessionManager(makeContext());
     (sm as unknown as PrivateManagerBob)._projectsDir = path.join(tmpDir, 'claude-projects');
     (sm as unknown as PrivateManagerBob)._bobDbPath = dbPath;
+    // Point Codex + Chat at nonexistent paths so this merge test only observes
+    // Claude and Bob sources, regardless of what exists on the host machine.
+    (sm as unknown as PrivateManagerCodex)._codexSessionsDir = path.join(tmpDir, 'no-codex');
+    (sm as unknown as PrivateManagerCodex)._codexIndexPath = path.join(tmpDir, 'no-codex-index');
+    (sm as unknown as PrivateManagerChat)._vscodeUserDir = path.join(tmpDir, 'no-vscode');
     await fs.promises.mkdir(path.join(tmpDir, 'claude-projects'), { recursive: true });
   });
 
   afterEach(async () => {
-    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    // retries + retryDelay guard against a race with the SessionManager's
+    // constructor-initiated background scans (Bob subprocess may leave
+    // sqlite journal files, Codex/Chat scans may still be walking).
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('returns both claude and bob sessions sorted by updatedAt descending', async () => {
@@ -634,6 +642,345 @@ describe('SessionManager._scanSessions merges Claude and Bob sessions', () => {
     expect(sessions[1].source).toBe('bob');
     expect(sessions[0].title).toBe('Claude task');
     expect(sessions[1].title).toBe('Bob task');
+  });
+});
+
+// ── SessionManager._scanCodexSessions ────────────────────────────────────────
+type PrivateManagerCodex = {
+  _scanCodexSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
+  _codexSessionsDir: string;
+  _codexIndexPath: string;
+};
+
+describe('SessionManager._scanCodexSessions', () => {
+  let tmpDir: string;
+  let codexSessionsDir: string;
+  let codexIndexPath: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-scan-'));
+    codexSessionsDir = path.join(tmpDir, '.codex', 'sessions');
+    codexIndexPath = path.join(tmpDir, '.codex', 'session_index.jsonl');
+    await fs.promises.mkdir(path.join(codexSessionsDir, '2026', '07', '13'), { recursive: true });
+    sm = new SessionManager(makeContext());
+    // Override the paths post-construction, same pattern as PrivateManagerBob tests.
+    (sm as unknown as PrivateManagerCodex)._codexSessionsDir = codexSessionsDir;
+    (sm as unknown as PrivateManagerCodex)._codexIndexPath = codexIndexPath;
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts sessions using session_index.jsonl for title + updated_at', async () => {
+    const rollout = path.join(codexSessionsDir, '2026', '07', '13', 'rollout-2026-07-13T10-00-00-abc.jsonl');
+    await fs.promises.writeFile(
+      rollout,
+      JSON.stringify({
+        timestamp: '2026-07-13T10:00:00Z',
+        type: 'session_meta',
+        payload: { id: 'codex-1', cwd: '/home/u/proj' },
+      }) + '\n',
+    );
+    await fs.promises.writeFile(
+      codexIndexPath,
+      JSON.stringify({ id: 'codex-1', thread_name: 'Fix the parser', updated_at: '2026-07-13T10:05:00Z' }) + '\n',
+    );
+
+    const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      sessionId: 'codex-1',
+      title: 'Fix the parser',
+      projectPath: '/home/u/proj',
+      projectName: 'proj',
+      source: 'codex',
+      status: 'idle',
+    });
+    expect(results[0].updatedAt.toISOString()).toBe('2026-07-13T10:05:00.000Z');
+  });
+
+  it('falls back to file mtime and cwd basename when index has no entry', async () => {
+    const rollout = path.join(codexSessionsDir, '2026', '07', '13', 'rollout-2026-07-13T10-00-00-def.jsonl');
+    await fs.promises.writeFile(
+      rollout,
+      JSON.stringify({
+        timestamp: '2026-07-13T10:00:00Z',
+        type: 'session_meta',
+        payload: { id: 'codex-2', cwd: '/home/u/other-proj' },
+      }) + '\n',
+    );
+    // No session_index.jsonl written.
+
+    const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
+
+    expect(results).toHaveLength(1);
+    expect(results[0].sessionId).toBe('codex-2');
+    expect(results[0].title).toBe('other-proj');
+    expect(results[0].projectName).toBe('other-proj');
+    expect(results[0].source).toBe('codex');
+  });
+
+  it('returns [] when the sessions directory does not exist', async () => {
+    await fs.promises.rm(path.join(tmpDir, '.codex'), { recursive: true, force: true });
+    const results = await (sm as unknown as PrivateManagerCodex)._scanCodexSessions();
+    expect(results).toEqual([]);
+  });
+});
+
+// ── SessionManager.getRecentExchanges (Codex) ────────────────────────────────
+describe('SessionManager.getRecentExchanges (Codex)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-preview-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts user/assistant text from response_item records', async () => {
+    const rollout = path.join(tmpDir, 'rollout-x.jsonl');
+    const lines = [
+      { timestamp: '2026-07-13T10:00:00Z', type: 'session_meta', payload: { id: 'cx-1', cwd: '/x' } },
+      { timestamp: '2026-07-13T10:00:01Z', type: 'response_item',
+        payload: { role: 'user', content: [{ type: 'input_text', text: 'Hello Codex' }] } },
+      { timestamp: '2026-07-13T10:00:02Z', type: 'response_item',
+        payload: { role: 'assistant', content: [{ type: 'output_text', text: 'Hi there' }] } },
+    ];
+    await fs.promises.writeFile(rollout, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    // Seed the session maps directly (mirrors seedBobSession in the Bob preview tests).
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-1', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-1', 'codex');
+
+    const ex = await sm.getRecentExchanges('cx-1');
+    expect(ex).toHaveLength(2);
+    expect(ex[0]).toMatchObject({ role: 'user', text: 'Hello Codex' });
+    expect(ex[1]).toMatchObject({ role: 'assistant', text: 'Hi there' });
+  });
+});
+
+// ── SessionManager.exportSessionAsJson (Codex) ───────────────────────────────
+describe('SessionManager.exportSessionAsJson (Codex)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-export-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns the raw .jsonl path with a no-op cleanup for Codex sessions', async () => {
+    const rollout = path.join(tmpDir, 'rollout.jsonl');
+    await fs.promises.writeFile(rollout, '{"type":"session_meta","payload":{"id":"cx-e","cwd":"/x"}}\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cx-e', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'codex',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-e', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-e', 'codex');
+
+    const out = await sm.exportSessionAsJson('cx-e');
+    expect(out).not.toBeNull();
+    expect(out!.filePath).toBe(rollout);
+    // cleanup must be safe to invoke and NOT delete the source file.
+    out!.cleanup();
+    await expect(fs.promises.access(rollout)).resolves.toBeUndefined();
+  });
+});
+
+// ── SessionManager._scanChatSessions ─────────────────────────────────────────
+type PrivateManagerChat = {
+  _scanChatSessions(): Promise<import('../SessionManager').ClaudeSession[]>;
+  _vscodeUserDir: string;
+};
+
+describe('SessionManager._scanChatSessions', () => {
+  let tmpDir: string;
+  let vscodeUserDir: string;
+  let wsHash: string;
+  let chatDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-scan-'));
+    vscodeUserDir = path.join(tmpDir, 'User');
+    wsHash = 'abc123';
+    chatDir = path.join(vscodeUserDir, 'workspaceStorage', wsHash, 'chatSessions');
+    await fs.promises.mkdir(chatDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(path.dirname(chatDir), 'workspace.json'),
+      JSON.stringify({ folder: 'file:///home/u/my-proj' }),
+    );
+    sm = new SessionManager(makeContext());
+    (sm as unknown as PrivateManagerChat)._vscodeUserDir = vscodeUserDir;
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts title from requests[0].message.text and folder from workspace.json', async () => {
+    const chatFile = path.join(chatDir, 'sess-1.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: {
+        sessionId: 'sess-1',
+        creationDate: '2026-07-13T10:00:00Z',
+        requests: [{ message: { text: 'How do I compile this project?' } }],
+      },
+    }) + '\n');
+
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      sessionId: 'sess-1',
+      title: 'How do I compile this project?',
+      projectPath: '/home/u/my-proj',
+      projectName: 'my-proj',
+      source: 'chat',
+      status: 'idle',
+    });
+  });
+
+  it("falls back to 'Chat in <basename>' when requests is empty", async () => {
+    const chatFile = path.join(chatDir, 'sess-2.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: { sessionId: 'sess-2', requests: [] },
+    }) + '\n');
+
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('Chat in my-proj');
+  });
+
+  it("uses '(no workspace)' when workspace.json is missing", async () => {
+    await fs.promises.rm(path.join(path.dirname(chatDir), 'workspace.json'));
+    const chatFile = path.join(chatDir, 'sess-3.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: { sessionId: 'sess-3', requests: [{ message: { text: 'hi' } }] },
+    }) + '\n');
+
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+    expect(results[0].projectName).toBe('(no workspace)');
+    expect(results[0].projectPath).toBe('');
+  });
+
+  it('returns [] when workspaceStorage does not exist', async () => {
+    await fs.promises.rm(vscodeUserDir, { recursive: true, force: true });
+    const results = await (sm as unknown as PrivateManagerChat)._scanChatSessions();
+    expect(results).toEqual([]);
+  });
+});
+
+// ── SessionManager.getRecentExchanges (Chat) ─────────────────────────────────
+describe('SessionManager.getRecentExchanges (Chat)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-preview-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('extracts user text and concatenated assistant response.value from requests[]', async () => {
+    const chatFile = path.join(tmpDir, 'chat.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: {
+        sessionId: 'ch-1',
+        requests: [{
+          message: { text: 'Explain flexbox' },
+          response: [
+            { kind: 'mcpServersStarting' },
+            { value: 'Flexbox is ' },
+            { value: 'a layout system.' },
+          ],
+          timestamp: 1721005200000,
+        }],
+      },
+    }) + '\n');
+
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ch-1', chatFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ch-1', 'chat');
+
+    const ex = await sm.getRecentExchanges('ch-1');
+    expect(ex.map(e => ({ role: e.role, text: e.text }))).toEqual([
+      { role: 'user', text: 'Explain flexbox' },
+      { role: 'assistant', text: 'Flexbox is a layout system.' },
+    ]);
+  });
+});
+
+// ── SessionManager.exportSessionAsJson (Chat) ────────────────────────────────
+describe('SessionManager.exportSessionAsJson (Chat)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-export-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('produces a .chat.json envelope with expected keys and cleans up', async () => {
+    const chatFile = path.join(tmpDir, 'chat.jsonl');
+    await fs.promises.writeFile(chatFile, JSON.stringify({
+      kind: 0,
+      v: {
+        sessionId: 'ce-1',
+        requests: [{ message: { text: 'hi' }, response: [{ value: 'hello' }] }],
+      },
+    }) + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'ce-1', projectPath: '/x', projectName: 'x',
+      title: 'hi', updatedAt: new Date('2026-07-13T10:00:00Z'), status: 'idle', source: 'chat',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ce-1', chatFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ce-1', 'chat');
+
+    const out = await sm.exportSessionAsJson('ce-1');
+    expect(out).not.toBeNull();
+    expect(out!.filePath).toMatch(/\.chat\.json$/);
+    const written = JSON.parse(await fs.promises.readFile(out!.filePath, 'utf8'));
+    expect(written).toMatchObject({
+      session_id: 'ce-1',
+      harness: 'chat',
+      title: 'hi',
+    });
+    expect(written.messages).toEqual([
+      expect.objectContaining({ role: 'user', content: 'hi' }),
+      expect.objectContaining({ role: 'assistant', content: 'hello' }),
+    ]);
+    // Cleanup removes the temp file.
+    out!.cleanup();
+    await expect(fs.promises.access(out!.filePath)).rejects.toThrow();
   });
 });
 

@@ -17,7 +17,7 @@ export interface ClaudeSession {
   title: string;        // AI-generated title if available, otherwise first user message (≤60 chars)
   updatedAt: Date;      // file mtime (last write time)
   status: 'idle' | 'waiting' | 'active'; // idle=done, waiting=user sent/no reply yet, active=tools running
-  source: 'claude' | 'bob'; // which AI IDE this session belongs to
+  source: 'claude' | 'bob' | 'codex' | 'chat'; // which AI IDE this session belongs to
 }
 
 interface ContentBlock {
@@ -105,16 +105,23 @@ export class SessionManager implements vscode.Disposable {
 
   private _sessions: ClaudeSession[] = [];
   private _sessionFilePaths = new Map<string, string>();
-  private _sessionSources = new Map<string, 'claude' | 'bob'>();
+  private _sessionSources = new Map<string, 'claude' | 'bob' | 'codex' | 'chat'>();
   private readonly _watcher: vscode.FileSystemWatcher;
   private readonly _projectsDir: string;
   private readonly _bobDbPath: string;
+  private readonly _codexSessionsDir: string;
+  private readonly _codexIndexPath: string;
+  private readonly _vscodeUserDir: string;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly _pollTimer: ReturnType<typeof setInterval>;
 
   constructor(context: vscode.ExtensionContext) {
     this._projectsDir = path.join(os.homedir(), '.claude', 'projects');
     this._bobDbPath = path.join(os.homedir(), '.bob', 'db', 'bob.db');
+    this._codexSessionsDir = path.join(os.homedir(), '.codex', 'sessions');
+    this._codexIndexPath = path.join(os.homedir(), '.codex', 'session_index.jsonl');
+    // macOS-only for now (matches Bob path assumption); Linux/Windows deferred.
+    this._vscodeUserDir = path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User');
 
     // Initial scan
     void this._scanSessions().then(sessions => {
@@ -155,6 +162,26 @@ export class SessionManager implements vscode.Disposable {
     bobWatcher.onDidChange(refresh);
     context.subscriptions.push({ dispose: () => bobWatcher.dispose() });
 
+    // Watch ~/.codex/session_index.jsonl for changes (Codex CLI updates it on every session write).
+    const codexIndexDir = path.dirname(this._codexIndexPath);
+    const codexIndexName = path.basename(this._codexIndexPath);
+    const codexPattern = new vscode.RelativePattern(vscode.Uri.file(codexIndexDir), codexIndexName);
+    const codexWatcher = vscode.workspace.createFileSystemWatcher(codexPattern);
+    codexWatcher.onDidCreate(refresh);
+    codexWatcher.onDidChange(refresh);
+    context.subscriptions.push({ dispose: () => codexWatcher.dispose() });
+
+    // Watch chatSessions/*.jsonl across all workspaces. Shared debounced `refresh`.
+    const chatPattern = new vscode.RelativePattern(
+      vscode.Uri.file(this._vscodeUserDir),
+      'workspaceStorage/*/chatSessions/*.jsonl',
+    );
+    const chatWatcher = vscode.workspace.createFileSystemWatcher(chatPattern);
+    chatWatcher.onDidCreate(refresh);
+    chatWatcher.onDidChange(refresh);
+    chatWatcher.onDidDelete(refresh);
+    context.subscriptions.push({ dispose: () => chatWatcher.dispose() });
+
     // Polling fallback: re-scan every 5 s so status indicators and new sessions
     // stay current even when the FileSystemWatcher is silent (common in WSL2).
     this._pollTimer = setInterval(() => { void this._runScan(); }, 5_000);
@@ -178,10 +205,34 @@ export class SessionManager implements vscode.Disposable {
     const session = this._sessions.find(s => s.sessionId === sessionId);
     if (!session) { return null; }
 
-    if (session.source === 'claude') {
+    if (session.source === 'claude' || session.source === 'codex') {
       const filePath = this._sessionFilePaths.get(sessionId);
       if (!filePath) { return null; }
       return { filePath, cleanup: () => { /* nothing to clean up */ } };
+    }
+
+    if (session.source === 'chat') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const exchanges = await this._getChatRecentExchanges(filePath);
+      const envelope = {
+        session_id: sessionId,
+        harness: 'chat',
+        username: os.userInfo().username,
+        created_at: session.updatedAt.toISOString(),
+        title: session.title,
+        messages: exchanges.map(e => ({
+          role: e.role,
+          content: e.text,
+          timestamp: e.timestamp ?? new Date().toISOString(),
+        })),
+      };
+      const tmpFile = path.join(os.tmpdir(), `chat-session-${sessionId}.chat.json`);
+      await fs.promises.writeFile(tmpFile, JSON.stringify(envelope, null, 2), 'utf8');
+      return {
+        filePath: tmpFile,
+        cleanup: () => { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } },
+      };
     }
 
     // Bob session — build a minimal .bob.json envelope from DB data.
@@ -214,6 +265,14 @@ export class SessionManager implements vscode.Disposable {
 
     if (this._sessionSources.get(sessionId) === 'bob') {
       return this._getBobRecentExchanges(filePath);
+    }
+
+    if (this._sessionSources.get(sessionId) === 'codex') {
+      return this._getCodexRecentExchanges(filePath);
+    }
+
+    if (this._sessionSources.get(sessionId) === 'chat') {
+      return this._getChatRecentExchanges(filePath);
     }
 
 
@@ -360,7 +419,9 @@ conn.close()
     // the map writes in _scanBobSessions.
     const claudeSessions = await this._scanClaudeSessions();
     const bobSessions = await this._scanBobSessions();
-    const merged = [...claudeSessions, ...bobSessions];
+    const codexSessions = await this._scanCodexSessions();
+    const chatSessions = await this._scanChatSessions();
+    const merged = [...claudeSessions, ...bobSessions, ...codexSessions, ...chatSessions];
     merged.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     return merged;
   }
@@ -453,6 +514,288 @@ conn.close()
       } catch { /* skip malformed row */ }
     }
     return sessions;
+  }
+
+  // Codex CLI stores rollouts at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl,
+  // with an index at ~/.codex/session_index.jsonl mapping id -> {thread_name, updated_at}.
+  private async _scanCodexSessions(): Promise<ClaudeSession[]> {
+    const index = await this._readCodexIndex();
+
+    let rolloutFiles: string[];
+    try {
+      rolloutFiles = await this._findCodexRollouts(this._codexSessionsDir);
+    } catch {
+      return [];
+    }
+
+    const sessions: ClaudeSession[] = [];
+    for (const filePath of rolloutFiles) {
+      try {
+        // Read line 0 (session_meta) only.
+        const fd = await fs.promises.open(filePath, 'r');
+        let firstLine = '';
+        try {
+          const buf = Buffer.alloc(4096);
+          const { bytesRead } = await fd.read(buf, 0, 4096, 0);
+          const chunk = buf.subarray(0, bytesRead).toString('utf8');
+          const nl = chunk.indexOf('\n');
+          firstLine = nl >= 0 ? chunk.slice(0, nl) : chunk;
+        } finally {
+          await fd.close();
+        }
+        if (!firstLine.trim()) { continue; }
+
+        const record = JSON.parse(firstLine) as {
+          type?: string;
+          payload?: { id?: string; cwd?: string };
+        };
+        if (record.type !== 'session_meta') { continue; }
+
+        const sessionId = record.payload?.id;
+        const cwd = record.payload?.cwd ?? '';
+        if (!sessionId) { continue; }
+
+        const idx = index.get(sessionId);
+        const stat = await fs.promises.stat(filePath);
+        const updatedAt = idx?.updatedAt ?? stat.mtime;
+        const title = (idx?.threadName ?? (cwd ? path.basename(cwd) : '')).slice(0, 60);
+        if (!title) { continue; }
+
+        this._sessionFilePaths.set(sessionId, filePath);
+        this._sessionSources.set(sessionId, 'codex');
+        sessions.push({
+          sessionId,
+          projectPath: cwd,
+          projectName: cwd ? path.basename(cwd) : '',
+          title,
+          updatedAt,
+          status: 'idle',
+          source: 'codex',
+        });
+      } catch { /* skip malformed rollout */ }
+    }
+    return sessions;
+  }
+
+  // Read the tail of a Codex rollout .jsonl and return the last <= 6 role-bearing
+  // response_item records as MessageExchanges (user or assistant text only).
+  private async _getCodexRecentExchanges(filePath: string): Promise<MessageExchange[]> {
+    let stat: { size: number };
+    try {
+      stat = await fs.promises.stat(filePath);
+    } catch { return []; }
+
+    const TAIL = 32768;
+    const offset = Math.max(0, stat.size - TAIL);
+    const size = stat.size - offset;
+    const buf = Buffer.alloc(size);
+
+    const fh = await fs.promises.open(filePath, 'r');
+    try {
+      const { bytesRead } = await fh.read(buf, 0, size, offset);
+      const chunk = buf.subarray(0, bytesRead).toString('utf8');
+      const lines = chunk.split('\n');
+      const collected: MessageExchange[] = [];
+
+      for (let i = lines.length - 1; i >= 0 && collected.length < 6; i--) {
+        const trimmed = lines[i].trim();
+        if (!trimmed) { continue; }
+        try {
+          const rec = JSON.parse(trimmed) as {
+            timestamp?: string;
+            type?: string;
+            payload?: { role?: string; content?: Array<{ type?: string; text?: string }> };
+          };
+          if (rec.type !== 'response_item') { continue; }
+          const role = rec.payload?.role;
+          if (role !== 'user' && role !== 'assistant') { continue; }
+          const first = (rec.payload?.content ?? []).find(
+            b => typeof b.text === 'string' && b.text.trim().length > 0,
+          );
+          const text = first?.text?.trim();
+          if (!text) { continue; }
+          const cap = role === 'user' ? 150 : 250;
+          const truncated = text.length > cap ? text.slice(0, cap) + '…' : text;
+          collected.push({ role, text: truncated, timestamp: rec.timestamp });
+        } catch { /* skip malformed line */ }
+      }
+      return collected.reverse();
+    } finally {
+      await fh.close();
+    }
+  }
+
+  private async _readCodexIndex(): Promise<Map<string, { threadName: string; updatedAt: Date }>> {
+    const map = new Map<string, { threadName: string; updatedAt: Date }>();
+    try {
+      const raw = await fs.promises.readFile(this._codexIndexPath, 'utf8');
+      for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) { continue; }
+        try {
+          const rec = JSON.parse(trimmed) as { id?: string; thread_name?: string; updated_at?: string };
+          if (rec.id && rec.thread_name && rec.updated_at) {
+            map.set(rec.id, { threadName: rec.thread_name, updatedAt: new Date(rec.updated_at) });
+          }
+        } catch { /* skip malformed line */ }
+      }
+    } catch { /* file may not exist */ }
+    return map;
+  }
+
+  // Read the snapshot line of a VS Code Chat .jsonl and reconstruct the last
+  // <= 3 request/response pairs as MessageExchanges (user text + concatenated
+  // string `value` fields of the response array).
+  private async _getChatRecentExchanges(filePath: string): Promise<MessageExchange[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const firstNl = raw.indexOf('\n');
+    const firstLine = firstNl >= 0 ? raw.slice(0, firstNl) : raw;
+    if (!firstLine.trim()) { return []; }
+
+    let snapshot: {
+      v?: { requests?: Array<{
+        message?: { text?: string };
+        response?: Array<{ kind?: string; value?: unknown }>;
+        timestamp?: number;
+      }> };
+    };
+    try {
+      snapshot = JSON.parse(firstLine);
+    } catch { return []; }
+
+    const requests = snapshot.v?.requests ?? [];
+    const collected: MessageExchange[] = [];
+
+    // Take up to the last 3 requests → up to 6 exchanges.
+    const startIdx = Math.max(0, requests.length - 3);
+    for (let i = startIdx; i < requests.length; i++) {
+      const r = requests[i];
+      const iso = typeof r.timestamp === 'number' ? new Date(r.timestamp).toISOString() : undefined;
+
+      const userText = r.message?.text?.trim();
+      if (userText) {
+        const cap = 150;
+        const truncated = userText.length > cap ? userText.slice(0, cap) + '…' : userText;
+        collected.push({ role: 'user', text: truncated, timestamp: iso });
+      }
+
+      const responseText = (r.response ?? [])
+        .filter(el => typeof el.value === 'string')
+        .map(el => el.value as string)
+        .join('')
+        .trim();
+      if (responseText) {
+        const cap = 250;
+        const truncated = responseText.length > cap ? responseText.slice(0, cap) + '…' : responseText;
+        collected.push({ role: 'assistant', text: truncated, timestamp: iso });
+      }
+    }
+    return collected;
+  }
+
+  // Scan VS Code Chat sessions across all workspaces. Each workspaceStorage/<hash>
+  // may contain a chatSessions/*.jsonl plus a workspace.json that names the folder.
+  private async _scanChatSessions(): Promise<ClaudeSession[]> {
+    const wsRoot = path.join(this._vscodeUserDir, 'workspaceStorage');
+    let workspaceHashes: string[];
+    try {
+      const entries = await fs.promises.readdir(wsRoot, { withFileTypes: true });
+      workspaceHashes = entries.filter(e => e.isDirectory()).map(e => e.name);
+    } catch { return []; }
+
+    const sessions: ClaudeSession[] = [];
+    for (const hash of workspaceHashes) {
+      const chatDir = path.join(wsRoot, hash, 'chatSessions');
+      let chatFiles: string[];
+      try {
+        const entries = await fs.promises.readdir(chatDir, { withFileTypes: true });
+        chatFiles = entries.filter(e => e.isFile() && e.name.endsWith('.jsonl')).map(e => path.join(chatDir, e.name));
+      } catch { continue; }
+
+      // Resolve workspace folder path once per hash.
+      let projectPath = '';
+      let projectName = '(no workspace)';
+      try {
+        const wsMeta = await fs.promises.readFile(path.join(wsRoot, hash, 'workspace.json'), 'utf8');
+        const parsed = JSON.parse(wsMeta) as { folder?: string };
+        if (parsed.folder?.startsWith('file://')) {
+          projectPath = decodeURIComponent(parsed.folder.slice('file://'.length));
+          projectName = path.basename(projectPath) || '(no workspace)';
+        }
+      } catch { /* keep fallback */ }
+
+      for (const filePath of chatFiles) {
+        try {
+          const fd = await fs.promises.open(filePath, 'r');
+          let firstLine = '';
+          try {
+            const buf = Buffer.alloc(65536);
+            const { bytesRead } = await fd.read(buf, 0, 65536, 0);
+            const chunk = buf.subarray(0, bytesRead).toString('utf8');
+            const nl = chunk.indexOf('\n');
+            firstLine = nl >= 0 ? chunk.slice(0, nl) : chunk;
+          } finally {
+            await fd.close();
+          }
+          if (!firstLine.trim()) { continue; }
+
+          const rec = JSON.parse(firstLine) as {
+            kind?: number;
+            v?: { sessionId?: string; requests?: Array<{ message?: { text?: string } }> };
+          };
+          if (rec.kind !== 0) { continue; }
+          const sessionId = rec.v?.sessionId;
+          if (!sessionId) { continue; }
+
+          const firstText = rec.v?.requests?.[0]?.message?.text?.trim();
+          const title = (firstText && firstText.length > 0
+            ? firstText
+            : `Chat in ${projectName}`).slice(0, 60);
+
+          const stat = await fs.promises.stat(filePath);
+          this._sessionFilePaths.set(sessionId, filePath);
+          this._sessionSources.set(sessionId, 'chat');
+          sessions.push({
+            sessionId,
+            projectPath,
+            projectName,
+            title,
+            updatedAt: stat.mtime,
+            status: 'idle',
+            source: 'chat',
+          });
+        } catch { /* skip malformed chat file */ }
+      }
+    }
+    return sessions;
+  }
+
+  private async _findCodexRollouts(root: string): Promise<string[]> {
+    const results: string[] = [];
+    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    const walk = async (dir: string): Promise<void> => {
+      let entries: import('fs').Dirent[];
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      } catch { return; }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(full);
+        } else if (entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) {
+          try {
+            const st = await fs.promises.stat(full);
+            if (st.mtime.getTime() >= ninetyDaysAgo) { results.push(full); }
+          } catch { /* skip */ }
+        }
+      }
+    };
+    await walk(root);
+    return results;
   }
 
   private async _findJsonlFiles(dir: string): Promise<string[]> {

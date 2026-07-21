@@ -242,6 +242,16 @@ button:focus-visible {
   color: #fff;
 }
 
+.tab-badge--codex {
+  background: #00a67d;
+  color: #fff;
+}
+
+.tab-badge--chat {
+  background: #6b6b6b;
+  color: #fff;
+}
+
 /* Inline relative time on the Sessions row (e.g. "5 minutes ago") */
 .tab-time {
   display: block;
