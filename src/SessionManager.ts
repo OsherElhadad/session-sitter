@@ -293,6 +293,17 @@ export class SessionManager implements vscode.Disposable {
       });
     }
 
+    if (session.source === 'claude') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const turns = await this._getClaudeFullTranscript(filePath);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Claude session',
+        source: 'Claude',
+        sessionId,
+      });
+    }
+
     return null;
   }
 
@@ -719,6 +730,59 @@ conn.close()
         if (!text) { continue; }
         const ts = rec.timestamp ? new Date(rec.timestamp) : undefined;
         if (role === 'user') {
+          if (pending) { turns.push(pending); }
+          pending = { userText: text, timestamp: ts };
+        } else {
+          if (!pending) { pending = { timestamp: ts }; }
+          pending.assistantText = pending.assistantText
+            ? `${pending.assistantText}\n\n${text}`
+            : text;
+          if (!pending.timestamp) { pending.timestamp = ts; }
+        }
+      } catch { /* skip malformed line */ }
+    }
+    if (pending) { turns.push(pending); }
+    return turns;
+  }
+
+  // Walk every event in a Claude Code .jsonl and pair user/assistant events
+  // into TranscriptTurns. Drops tool_use / tool_result / thinking parts.
+  private async _getClaudeFullTranscript(filePath: string): Promise<TranscriptTurn[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const turns: TranscriptTurn[] = [];
+    let pending: TranscriptTurn | null = null;
+
+    const extractText = (content: unknown): string => {
+      if (typeof content === 'string') { return content.trim(); }
+      if (!Array.isArray(content)) { return ''; }
+      const parts = content
+        .filter((p): p is { type: string; text?: string } =>
+          typeof p === 'object' && p !== null && (p as { type?: unknown }).type === 'text',
+        )
+        .map(p => (typeof p.text === 'string' ? p.text : ''))
+        .filter(t => t.trim().length > 0)
+        .map(t => t.trim());
+      return parts.join('\n\n');
+    };
+
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) { continue; }
+      try {
+        const rec = JSON.parse(trimmed) as {
+          type?: string;
+          timestamp?: string;
+          message?: { role?: string; content?: unknown };
+        };
+        if (rec.type !== 'user' && rec.type !== 'assistant') { continue; }
+        const text = extractText(rec.message?.content);
+        if (!text) { continue; }
+        const ts = rec.timestamp ? new Date(rec.timestamp) : undefined;
+        if (rec.type === 'user') {
           if (pending) { turns.push(pending); }
           pending = { userText: text, timestamp: ts };
         } else {

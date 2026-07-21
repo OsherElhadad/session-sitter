@@ -1121,3 +1121,79 @@ describe('SessionManager.exportFullTranscript (Codex)', () => {
   });
 });
 
+// ── SessionManager.exportFullTranscript (Claude) ─────────────────────────────
+describe('SessionManager.exportFullTranscript (Claude)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'claude-full-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('extracts user + assistant text; drops tool_use, tool_result, thinking', async () => {
+    const sessionFile = path.join(tmpDir, 'session.jsonl');
+    const events = [
+      { type: 'user', timestamp: '2026-07-20T10:00:00Z', message: { role: 'user', content: 'First user message' } },
+      { type: 'assistant', timestamp: '2026-07-20T10:00:01Z', message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'Let me think' },
+        { type: 'text', text: 'First assistant reply' },
+        { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/x' } },
+      ]}},
+      { type: 'user', timestamp: '2026-07-20T10:00:02Z', message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: 'file contents' },
+      ]}},
+      { type: 'assistant', timestamp: '2026-07-20T10:00:03Z', message: { role: 'assistant', content: [
+        { type: 'text', text: 'Second assistant reply' },
+      ]}},
+      { type: 'summary', summary: 'Session summary' },
+    ];
+    await fs.promises.writeFile(sessionFile, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cl-full', projectPath: '/x', projectName: 'x',
+      title: 'A Claude chat', updatedAt: new Date('2026-07-20T10:00:03Z'), status: 'idle', source: 'claude',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cl-full', sessionFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cl-full', 'claude');
+
+    const md = await sm.exportFullTranscript('cl-full');
+    expect(md).not.toBeNull();
+    expect(md).toContain('# A Claude chat');
+    expect(md).toContain('First user message');
+    expect(md).toContain('First assistant reply');
+    expect(md).toContain('Second assistant reply');
+    expect(md).not.toContain('Let me think');
+    expect(md).not.toContain('file contents');
+    expect(md).not.toContain('Session summary');
+  });
+
+  it('handles string-form user content and array-form user content identically', async () => {
+    const sessionFile = path.join(tmpDir, 'session2.jsonl');
+    const events = [
+      { type: 'user', message: { role: 'user', content: 'plain string form' } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'array form' }] } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ack' }] } },
+    ];
+    await fs.promises.writeFile(sessionFile, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cl-2', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'claude',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cl-2', sessionFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cl-2', 'claude');
+
+    const md = await sm.exportFullTranscript('cl-2');
+    expect(md).toContain('plain string form');
+    expect(md).toContain('array form');
+    expect(md).toContain('ack');
+  });
+});
+
