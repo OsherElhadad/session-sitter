@@ -10,6 +10,21 @@ export interface MessageExchange {
   timestamp?: string;
 }
 
+// Structured turn for full-transcript export. All fields optional so partial
+// turns (e.g. a user message without a completed assistant response yet) are
+// representable.
+interface TranscriptTurn {
+  userText?: string;
+  assistantText?: string;
+  timestamp?: Date;
+}
+
+interface TranscriptMeta {
+  title: string;
+  source: 'Claude' | 'Bob' | 'Codex' | 'Chat';
+  sessionId: string;
+}
+
 export interface ClaudeSession {
   sessionId: string;    // UUID from filename (e.g. "d61ee3f8-38ea-4316-8b4e-c90a8dd2e45e")
   projectName: string;  // last path segment of cwd (e.g. "my-project")
@@ -256,6 +271,42 @@ export class SessionManager implements vscode.Disposable {
       filePath: tmpFile,
       cleanup: () => { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } },
     };
+  }
+
+  /**
+   * Return the full transcript of a session as handoff-clean markdown, or
+   * null if the session cannot be found. Dispatches by _sessionSources.
+   * User + assistant prose only — tool_use / tool_result / scaffolding stripped.
+   */
+  async exportFullTranscript(sessionId: string): Promise<string | null> {
+    const session = this._sessions.find(s => s.sessionId === sessionId);
+    if (!session) { return null; }
+    // Per-source branches land in Tasks 2–5.
+    return null;
+  }
+
+  private _renderTranscriptAsMarkdown(turns: TranscriptTurn[], meta: TranscriptMeta): string {
+    const header = [
+      `# ${meta.title}`,
+      '',
+      `*Copied from ${meta.source} · session \`${meta.sessionId}\` · ${turns.length} turn${turns.length === 1 ? '' : 's'}.*`,
+      '',
+      '---',
+      '',
+    ];
+    const body: string[] = [];
+    turns.forEach((turn, i) => {
+      const when = turn.timestamp ? turn.timestamp.toISOString().replace('T', ' ').slice(0, 19) : '(no timestamp)';
+      body.push(`## Turn ${i + 1}  ·  ${when}`, '');
+      if (turn.userText) {
+        body.push('**User:**', '', turn.userText, '');
+      }
+      if (turn.assistantText) {
+        body.push(`**Assistant (${meta.source}):**`, '', turn.assistantText, '');
+      }
+      body.push('---', '');
+    });
+    return header.concat(body).join('\n');
   }
 
 

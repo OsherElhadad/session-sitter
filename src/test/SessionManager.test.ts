@@ -984,3 +984,69 @@ describe('SessionManager.exportSessionAsJson (Chat)', () => {
   });
 });
 
+// ── SessionManager._renderTranscriptAsMarkdown ───────────────────────────────
+type PrivateManagerRenderer = {
+  _renderTranscriptAsMarkdown(
+    turns: Array<{ userText?: string; assistantText?: string; timestamp?: Date }>,
+    meta: { title: string; source: 'Claude' | 'Bob' | 'Codex' | 'Chat'; sessionId: string },
+  ): string;
+};
+
+describe('SessionManager._renderTranscriptAsMarkdown', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(makeContext());
+  });
+
+  it('renders a two-turn transcript with header, turn sections, and separators', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [
+        { userText: 'Hello', assistantText: 'Hi there', timestamp: new Date('2026-07-20T10:00:00Z') },
+        { userText: 'How are you?', assistantText: 'Good.', timestamp: new Date('2026-07-20T10:01:00Z') },
+      ],
+      { title: 'A conversation', source: 'Claude', sessionId: 'sess-abc' },
+    );
+    expect(md).toContain('# A conversation');
+    expect(md).toContain('*Copied from Claude · session `sess-abc` · 2 turns.*');
+    expect(md).toContain('## Turn 1  ·  2026-07-20 10:00:00');
+    expect(md).toContain('**User:**\n\nHello');
+    expect(md).toContain('**Assistant (Claude):**\n\nHi there');
+    expect(md).toContain('## Turn 2  ·  2026-07-20 10:01:00');
+  });
+
+  it('omits the User/Assistant block for turns with no text on that side', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [{ userText: 'Half-turn', timestamp: new Date('2026-07-20T10:00:00Z') }],
+      { title: 't', source: 'Chat', sessionId: 's' },
+    );
+    expect(md).toContain('**User:**\n\nHalf-turn');
+    expect(md).not.toContain('**Assistant');
+  });
+
+  it('handles empty turns with an empty transcript body', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [],
+      { title: 'empty', source: 'Bob', sessionId: 's' },
+    );
+    expect(md).toContain('· 0 turns.*');
+    expect(md).not.toContain('## Turn 1');
+  });
+
+  it('uses "(no timestamp)" when timestamp is absent', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [{ userText: 'u', assistantText: 'a' }],
+      { title: 't', source: 'Codex', sessionId: 's' },
+    );
+    expect(md).toContain('## Turn 1  ·  (no timestamp)');
+  });
+});
+
+describe('SessionManager.exportFullTranscript', () => {
+  it('returns null for a session that is not in _sessions', async () => {
+    const sm = new SessionManager(makeContext());
+    const result = await sm.exportFullTranscript('nonexistent');
+    expect(result).toBeNull();
+  });
+});
+
