@@ -168,6 +168,59 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             }
             break;
           }
+          case 'copyTranscriptToEditor': {
+            const sid = message.sessionId as string | undefined;
+            if (!sid) { break; }
+            void (async () => {
+              const md = await this._sessionManager.exportFullTranscript(sid);
+              if (md === null) {
+                void vscode.window.showWarningMessage(`Session ${sid} no longer exists.`);
+                return;
+              }
+              const doc = await vscode.workspace.openTextDocument({ language: 'markdown', content: md });
+              await vscode.window.showTextDocument(doc);
+            })();
+            break;
+          }
+          case 'copyTranscriptToClipboard': {
+            const sid = message.sessionId as string | undefined;
+            if (!sid) { break; }
+            void (async () => {
+              const md = await this._sessionManager.exportFullTranscript(sid);
+              if (md === null) {
+                void vscode.window.showWarningMessage(`Session ${sid} no longer exists.`);
+                return;
+              }
+              await vscode.env.clipboard.writeText(md);
+              const bytes = Buffer.byteLength(md, 'utf8');
+              vscode.window.setStatusBarMessage(
+                `Transcript copied — ${(bytes / 1024).toFixed(1)} KB`,
+                4000,
+              );
+            })();
+            break;
+          }
+          case 'copyTranscriptToFile': {
+            const sid = message.sessionId as string | undefined;
+            if (!sid) { break; }
+            void (async () => {
+              const md = await this._sessionManager.exportFullTranscript(sid);
+              if (md === null) {
+                void vscode.window.showWarningMessage(`Session ${sid} no longer exists.`);
+                return;
+              }
+              const tmpPath = path.join(os.tmpdir(), `transcript-${sid}.md`);
+              await fs.promises.writeFile(tmpPath, md, 'utf8');
+              const pick = await vscode.window.showInformationMessage(
+                `Transcript saved: ${tmpPath}`,
+                'Reveal in Finder',
+              );
+              if (pick === 'Reveal in Finder') {
+                void vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(tmpPath));
+              }
+            })();
+            break;
+          }
         }
       })
     );
