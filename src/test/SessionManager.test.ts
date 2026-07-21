@@ -1247,3 +1247,63 @@ describe('SessionManager.exportFullTranscript (Bob)', () => {
   });
 });
 
+// ── SessionManager.exportFullTranscript (Chat) ───────────────────────────────
+describe('SessionManager.exportFullTranscript (Chat)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-full-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('replays deltas, unwraps <userRequest>, concatenates response values', async () => {
+    const chatFile = path.join(tmpDir, 'chat.jsonl');
+    const wrapped = '<context>\nSystem stuff\n</context>\n<userRequest>\nActual user prose\n</userRequest>';
+    const lines = [
+      // Snapshot with empty requests
+      { kind: 0, v: { sessionId: 'ch-full', customTitle: 'A Chat conversation', requests: [] } },
+      // Push one request onto requests[]
+      { kind: 2, k: ['requests'], v: [{ requestId: 'r1', timestamp: 1_753_000_000_000, response: [] }] },
+      // Fill in response array via kind:1 update
+      { kind: 1, k: ['requests', 0, 'response'], v: [{ value: 'Hello ' }, { value: 'from Copilot.' }] },
+      // Fill in the rendered user message
+      { kind: 1, k: ['requests', 0, 'result'], v: { metadata: { renderedUserMessage: [{ type: 1, text: wrapped }] } } },
+    ];
+    await fs.promises.writeFile(chatFile, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'ch-full', projectPath: '/x', projectName: 'x',
+      title: 'A Chat conversation', updatedAt: new Date(1_753_000_000_000), status: 'idle', source: 'chat',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ch-full', chatFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ch-full', 'chat');
+
+    const md = await sm.exportFullTranscript('ch-full');
+    expect(md).not.toBeNull();
+    expect(md).toContain('# A Chat conversation');
+    expect(md).toContain('Actual user prose');
+    expect(md).not.toContain('<context>');
+    expect(md).not.toContain('System stuff');
+    expect(md).toContain('Hello from Copilot.');
+  });
+
+  it('returns a zero-turn transcript when the file cannot be read', async () => {
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'ch-missing', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'chat',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ch-missing', '/nonexistent/foo.jsonl');
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ch-missing', 'chat');
+    const md = await sm.exportFullTranscript('ch-missing');
+    expect(md).not.toBeNull();
+    expect(md).toContain('· 0 turns.*');
+  });
+});
+

@@ -313,6 +313,17 @@ export class SessionManager implements vscode.Disposable {
       });
     }
 
+    if (session.source === 'chat') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const turns = await this._getChatFullTranscript(filePath);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Chat session',
+        source: 'Chat',
+        sessionId,
+      });
+    }
+
     return null;
   }
 
@@ -866,6 +877,112 @@ conn.close()
       } catch { /* skip malformed line */ }
     }
     if (pending) { turns.push(pending); }
+    return turns;
+  }
+
+  // Reconstruct the `v` state of a VS Code Chat session by replaying its
+  // snapshot (kind:0) + deltas (kind:1 assign, kind:2 array push).
+  private _replayChatDeltas(lines: string[]): {
+    requests?: Array<{
+      timestamp?: number;
+      message?: { text?: string };
+      response?: Array<{ value?: unknown }>;
+      result?: { metadata?: { renderedUserMessage?: Array<{ type?: number; text?: string }> } };
+    }>;
+  } {
+    const applyDelta = (
+      state: Record<string, unknown> | unknown[],
+      keyPath: Array<string | number>,
+      value: unknown,
+      isPush: boolean,
+    ): void => {
+      if (!keyPath.length) { return; }
+      let parent: Record<string, unknown> | unknown[] = state;
+      for (let i = 0; i < keyPath.length - 1; i++) {
+        const k = keyPath[i];
+        if (Array.isArray(parent) && typeof k === 'number') {
+          while (parent.length <= k) { parent.push({}); }
+          parent = parent[k] as Record<string, unknown> | unknown[];
+        } else if (!Array.isArray(parent) && typeof k === 'string') {
+          if (!(k in parent)) {
+            parent[k] = typeof keyPath[i + 1] === 'number' ? [] : {};
+          }
+          parent = parent[k] as Record<string, unknown> | unknown[];
+        }
+      }
+      const last = keyPath[keyPath.length - 1];
+      if (isPush) {
+        let arr: unknown;
+        if (Array.isArray(parent) && typeof last === 'number') {
+          arr = parent[last];
+        } else if (!Array.isArray(parent) && typeof last === 'string') {
+          if (!(last in parent)) { parent[last] = []; }
+          arr = parent[last];
+        }
+        if (Array.isArray(arr) && Array.isArray(value)) { arr.push(...value); }
+        else if (Array.isArray(arr)) { arr.push(value); }
+      } else if (Array.isArray(parent) && typeof last === 'number') {
+        while (parent.length <= last) { parent.push(undefined); }
+        parent[last] = value;
+      } else if (!Array.isArray(parent) && typeof last === 'string') {
+        parent[last] = value;
+      }
+    };
+
+    let state: Record<string, unknown> | null = null;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) { continue; }
+      try {
+        const rec = JSON.parse(trimmed) as { kind?: number; k?: Array<string | number>; v?: unknown };
+        if (rec.kind === 0) {
+          state = (rec.v as Record<string, unknown>) ?? {};
+        } else if (state && (rec.kind === 1 || rec.kind === 2)) {
+          applyDelta(state, rec.k ?? [], rec.v, rec.kind === 2);
+        }
+      } catch { /* skip malformed */ }
+    }
+    return (state ?? {}) as ReturnType<typeof this._replayChatDeltas>;
+  }
+
+  private async _getChatFullTranscript(filePath: string): Promise<TranscriptTurn[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const state = this._replayChatDeltas(raw.split('\n'));
+    const requests = state.requests ?? [];
+
+    const USER_REQUEST_RE = /<userRequest>\s*([\s\S]*?)\s*<\/userRequest>/;
+
+    const turns: TranscriptTurn[] = [];
+    for (const req of requests) {
+      if (!req) { continue; }
+      const rendered = req.result?.metadata?.renderedUserMessage ?? [];
+      const combined = rendered
+        .filter(p => p && p.type === 1 && typeof p.text === 'string')
+        .map(p => p.text!)
+        .join('\n');
+      const unwrapMatch = combined.match(USER_REQUEST_RE);
+      const userText = (unwrapMatch ? unwrapMatch[1] : (req.message?.text ?? combined)).trim();
+
+      const assistantText = (req.response ?? [])
+        .filter(el => el && typeof el.value === 'string')
+        .map(el => el.value as string)
+        .join('')
+        .trim();
+
+      const timestamp = typeof req.timestamp === 'number' ? new Date(req.timestamp) : undefined;
+
+      if (userText || assistantText) {
+        turns.push({
+          userText: userText || undefined,
+          assistantText: assistantText || undefined,
+          timestamp,
+        });
+      }
+    }
     return turns;
   }
 
