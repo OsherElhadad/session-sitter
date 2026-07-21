@@ -984,3 +984,326 @@ describe('SessionManager.exportSessionAsJson (Chat)', () => {
   });
 });
 
+// ── SessionManager._renderTranscriptAsMarkdown ───────────────────────────────
+type PrivateManagerRenderer = {
+  _renderTranscriptAsMarkdown(
+    turns: Array<{ userText?: string; assistantText?: string; timestamp?: Date }>,
+    meta: { title: string; source: 'Claude' | 'Bob' | 'Codex' | 'Chat'; sessionId: string },
+  ): string;
+};
+
+describe('SessionManager._renderTranscriptAsMarkdown', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    sm = new SessionManager(makeContext());
+  });
+
+  it('renders a two-turn transcript with header, turn sections, and separators', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [
+        { userText: 'Hello', assistantText: 'Hi there', timestamp: new Date('2026-07-20T10:00:00Z') },
+        { userText: 'How are you?', assistantText: 'Good.', timestamp: new Date('2026-07-20T10:01:00Z') },
+      ],
+      { title: 'A conversation', source: 'Claude', sessionId: 'sess-abc' },
+    );
+    expect(md).toContain('# A conversation');
+    expect(md).toContain('*Copied from Claude · session `sess-abc` · 2 turns.*');
+    expect(md).toContain('## Turn 1  ·  2026-07-20 10:00:00');
+    expect(md).toContain('**User:**\n\nHello');
+    expect(md).toContain('**Assistant (Claude):**\n\nHi there');
+    expect(md).toContain('## Turn 2  ·  2026-07-20 10:01:00');
+  });
+
+  it('omits the User/Assistant block for turns with no text on that side', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [{ userText: 'Half-turn', timestamp: new Date('2026-07-20T10:00:00Z') }],
+      { title: 't', source: 'Chat', sessionId: 's' },
+    );
+    expect(md).toContain('**User:**\n\nHalf-turn');
+    expect(md).not.toContain('**Assistant');
+  });
+
+  it('handles empty turns with an empty transcript body', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [],
+      { title: 'empty', source: 'Bob', sessionId: 's' },
+    );
+    expect(md).toContain('· 0 turns.*');
+    expect(md).not.toContain('## Turn 1');
+  });
+
+  it('uses "(no timestamp)" when timestamp is absent', () => {
+    const md = (sm as unknown as PrivateManagerRenderer)._renderTranscriptAsMarkdown(
+      [{ userText: 'u', assistantText: 'a' }],
+      { title: 't', source: 'Codex', sessionId: 's' },
+    );
+    expect(md).toContain('## Turn 1  ·  (no timestamp)');
+  });
+});
+
+describe('SessionManager.exportFullTranscript', () => {
+  it('returns null for a session that is not in _sessions', async () => {
+    const sm = new SessionManager(makeContext());
+    const result = await sm.exportFullTranscript('nonexistent');
+    expect(result).toBeNull();
+  });
+});
+
+// ── SessionManager.exportFullTranscript (Codex) ──────────────────────────────
+describe('SessionManager.exportFullTranscript (Codex)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'codex-full-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('extracts all user/assistant response_items and drops function_call + session_meta', async () => {
+    const rollout = path.join(tmpDir, 'rollout.jsonl');
+    const lines = [
+      { timestamp: '2026-07-20T10:00:00Z', type: 'session_meta', payload: { id: 'cx-full', cwd: '/x' } },
+      { timestamp: '2026-07-20T10:00:01Z', type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: 'First question' }] } },
+      { timestamp: '2026-07-20T10:00:02Z', type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: 'First answer' }] } },
+      { timestamp: '2026-07-20T10:00:03Z', type: 'function_call', payload: { name: 'read_file', arguments: '{"p":"x"}' } },
+      { timestamp: '2026-07-20T10:00:04Z', type: 'function_call_output', payload: { output: 'file contents' } },
+      { timestamp: '2026-07-20T10:00:05Z', type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: 'Second question' }] } },
+      { timestamp: '2026-07-20T10:00:06Z', type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: 'Second answer' }] } },
+    ];
+    await fs.promises.writeFile(rollout, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cx-full', projectPath: '/x', projectName: 'x',
+      title: 'Codex conversation', updatedAt: new Date('2026-07-20T10:00:06Z'), status: 'idle', source: 'codex',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-full', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-full', 'codex');
+
+    const md = await sm.exportFullTranscript('cx-full');
+    expect(md).not.toBeNull();
+    expect(md).toContain('# Codex conversation');
+    expect(md).toContain('*Copied from Codex · session `cx-full` · 2 turns.*');
+    expect(md).toContain('First question');
+    expect(md).toContain('First answer');
+    expect(md).toContain('Second question');
+    expect(md).toContain('Second answer');
+    expect(md).not.toContain('read_file');
+    expect(md).not.toContain('file contents');
+  });
+
+  it('drops response_item records with non-text roles or empty content', async () => {
+    const rollout = path.join(tmpDir, 'rollout2.jsonl');
+    await fs.promises.writeFile(rollout, [
+      { type: 'session_meta', payload: { id: 'cx-2', cwd: '/x' } },
+      { type: 'response_item', payload: { role: 'system', content: [{ type: 'input_text', text: 'system prompt' }] } },
+      { type: 'response_item', payload: { role: 'user', content: [] } },
+      { type: 'response_item', payload: { role: 'assistant', content: [{ type: 'output_text', text: 'orphan reply' }] } },
+    ].map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cx-2', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'codex',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cx-2', rollout);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cx-2', 'codex');
+
+    const md = await sm.exportFullTranscript('cx-2');
+    expect(md).not.toBeNull();
+    expect(md).not.toContain('system prompt');
+    expect(md).toContain('orphan reply');
+  });
+});
+
+// ── SessionManager.exportFullTranscript (Claude) ─────────────────────────────
+describe('SessionManager.exportFullTranscript (Claude)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'claude-full-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('extracts user + assistant text; drops tool_use, tool_result, thinking', async () => {
+    const sessionFile = path.join(tmpDir, 'session.jsonl');
+    const events = [
+      { type: 'user', timestamp: '2026-07-20T10:00:00Z', message: { role: 'user', content: 'First user message' } },
+      { type: 'assistant', timestamp: '2026-07-20T10:00:01Z', message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'Let me think' },
+        { type: 'text', text: 'First assistant reply' },
+        { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/x' } },
+      ]}},
+      { type: 'user', timestamp: '2026-07-20T10:00:02Z', message: { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 't1', content: 'file contents' },
+      ]}},
+      { type: 'assistant', timestamp: '2026-07-20T10:00:03Z', message: { role: 'assistant', content: [
+        { type: 'text', text: 'Second assistant reply' },
+      ]}},
+      { type: 'summary', summary: 'Session summary' },
+    ];
+    await fs.promises.writeFile(sessionFile, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cl-full', projectPath: '/x', projectName: 'x',
+      title: 'A Claude chat', updatedAt: new Date('2026-07-20T10:00:03Z'), status: 'idle', source: 'claude',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cl-full', sessionFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cl-full', 'claude');
+
+    const md = await sm.exportFullTranscript('cl-full');
+    expect(md).not.toBeNull();
+    expect(md).toContain('# A Claude chat');
+    expect(md).toContain('First user message');
+    expect(md).toContain('First assistant reply');
+    expect(md).toContain('Second assistant reply');
+    expect(md).not.toContain('Let me think');
+    expect(md).not.toContain('file contents');
+    expect(md).not.toContain('Session summary');
+  });
+
+  it('handles string-form user content and array-form user content identically', async () => {
+    const sessionFile = path.join(tmpDir, 'session2.jsonl');
+    const events = [
+      { type: 'user', message: { role: 'user', content: 'plain string form' } },
+      { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'array form' }] } },
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'ack' }] } },
+    ];
+    await fs.promises.writeFile(sessionFile, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'cl-2', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'claude',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('cl-2', sessionFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('cl-2', 'claude');
+
+    const md = await sm.exportFullTranscript('cl-2');
+    expect(md).toContain('plain string form');
+    expect(md).toContain('array form');
+    expect(md).toContain('ack');
+  });
+});
+
+// ── SessionManager.exportFullTranscript (Bob) ────────────────────────────────
+describe('SessionManager.exportFullTranscript (Bob)', () => {
+  let tmpDir: string;
+  let dbPath: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'bob-full-'));
+    dbPath = path.join(tmpDir, 'bob.db');
+    createBobDb(dbPath);
+    sm = new SessionManager(makeContext());
+    (sm as unknown as PrivateManagerBob)._bobDbPath = dbPath;
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('extracts every message for a task in chronological order (not tail-sliced)', async () => {
+    const id = 'bob-full-1';
+    // Seven messages — well past the 6-cap of the preview extractor.
+    for (let i = 1; i <= 7; i++) {
+      insertBobMessage(dbPath, {
+        id: `m${i}`, taskId: id,
+        role: i % 2 === 1 ? 'user' : 'assistant',
+        content: `Msg ${i}`,
+        ts: 1_000 * i,
+      });
+    }
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: id, projectPath: '/proj', projectName: 'proj',
+      title: 'Bob conversation', updatedAt: new Date(7_000), status: 'idle', source: 'bob',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set(id, id);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set(id, 'bob');
+
+    const md = await sm.exportFullTranscript(id);
+    expect(md).not.toBeNull();
+    expect(md).toContain('# Bob conversation');
+    // Every message must appear — not truncated to the last 6.
+    for (let i = 1; i <= 7; i++) {
+      expect(md).toContain(`Msg ${i}`);
+    }
+    // Chronological: Msg 1 appears before Msg 7 in the markdown.
+    expect(md!.indexOf('Msg 1')).toBeLessThan(md!.indexOf('Msg 7'));
+  });
+});
+
+// ── SessionManager.exportFullTranscript (Chat) ───────────────────────────────
+describe('SessionManager.exportFullTranscript (Chat)', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'chat-full-'));
+    sm = new SessionManager(makeContext());
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  it('replays deltas, unwraps <userRequest>, concatenates response values', async () => {
+    const chatFile = path.join(tmpDir, 'chat.jsonl');
+    const wrapped = '<context>\nSystem stuff\n</context>\n<userRequest>\nActual user prose\n</userRequest>';
+    const lines = [
+      // Snapshot with empty requests
+      { kind: 0, v: { sessionId: 'ch-full', customTitle: 'A Chat conversation', requests: [] } },
+      // Push one request onto requests[]
+      { kind: 2, k: ['requests'], v: [{ requestId: 'r1', timestamp: 1_753_000_000_000, response: [] }] },
+      // Fill in response array via kind:1 update
+      { kind: 1, k: ['requests', 0, 'response'], v: [{ value: 'Hello ' }, { value: 'from Copilot.' }] },
+      // Fill in the rendered user message
+      { kind: 1, k: ['requests', 0, 'result'], v: { metadata: { renderedUserMessage: [{ type: 1, text: wrapped }] } } },
+    ];
+    await fs.promises.writeFile(chatFile, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
+
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'ch-full', projectPath: '/x', projectName: 'x',
+      title: 'A Chat conversation', updatedAt: new Date(1_753_000_000_000), status: 'idle', source: 'chat',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ch-full', chatFile);
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ch-full', 'chat');
+
+    const md = await sm.exportFullTranscript('ch-full');
+    expect(md).not.toBeNull();
+    expect(md).toContain('# A Chat conversation');
+    expect(md).toContain('Actual user prose');
+    expect(md).not.toContain('<context>');
+    expect(md).not.toContain('System stuff');
+    expect(md).toContain('Hello from Copilot.');
+  });
+
+  it('returns a zero-turn transcript when the file cannot be read', async () => {
+    (sm as unknown as { _sessions: import('../SessionManager').ClaudeSession[] })._sessions = [{
+      sessionId: 'ch-missing', projectPath: '/x', projectName: 'x',
+      title: 't', updatedAt: new Date(), status: 'idle', source: 'chat',
+    }];
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })._sessionFilePaths.set('ch-missing', '/nonexistent/foo.jsonl');
+    (sm as unknown as { _sessionSources: Map<string, 'claude' | 'bob' | 'codex' | 'chat'> })
+      ._sessionSources.set('ch-missing', 'chat');
+    const md = await sm.exportFullTranscript('ch-missing');
+    expect(md).not.toBeNull();
+    expect(md).toContain('· 0 turns.*');
+  });
+});
+

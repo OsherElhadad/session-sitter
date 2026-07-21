@@ -6,10 +6,24 @@ import * as path from 'path';
 // ── VS Code stub ──────────────────────────────────────────────────────────────
 // vi.mock factories are hoisted before variable declarations, so mock fns must
 // be created with vi.hoisted() to be accessible inside the factory.
-const { mockExecuteCommand, mockShowWarningMessage, mockGetConfiguration } = vi.hoisted(() => ({
+const {
+  mockExecuteCommand,
+  mockShowWarningMessage,
+  mockGetConfiguration,
+  mockOpenTextDocument,
+  mockShowTextDocument,
+  mockSetStatusBarMessage,
+  mockShowInformationMessage,
+  mockClipboardWriteText,
+} = vi.hoisted(() => ({
   mockExecuteCommand: vi.fn(),
   mockShowWarningMessage: vi.fn(),
   mockGetConfiguration: vi.fn((): { get: (key?: string) => string | undefined } => ({ get: () => 'panel' })),
+  mockOpenTextDocument: vi.fn().mockResolvedValue({ uri: 'doc://untitled' }),
+  mockShowTextDocument: vi.fn().mockResolvedValue(undefined),
+  mockSetStatusBarMessage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+  mockShowInformationMessage: vi.fn().mockResolvedValue(undefined),
+  mockClipboardWriteText: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('vscode', () => {
@@ -30,13 +44,20 @@ vi.mock('vscode', () => {
       createFileSystemWatcher: vi.fn(() => new FileSystemWatcher()),
       getConfiguration: mockGetConfiguration,
       workspaceFolders: [],
+      openTextDocument: mockOpenTextDocument,
     },
     window: {
       tabGroups: { all: [], onDidChangeTabs: vi.fn(() => ({ dispose: vi.fn() })) },
       showWarningMessage: mockShowWarningMessage,
       onDidChangeWindowState: vi.fn(() => ({ dispose: vi.fn() })),
+      showTextDocument: mockShowTextDocument,
+      setStatusBarMessage: mockSetStatusBarMessage,
+      showInformationMessage: mockShowInformationMessage,
     },
-    env: { appName: 'IBM Bob' },
+    env: {
+      appName: 'IBM Bob',
+      clipboard: { writeText: mockClipboardWriteText },
+    },
     commands: { executeCommand: mockExecuteCommand },
     Uri: {
       file: (p: string) => ({ fsPath: p, toString: () => p }),
@@ -93,11 +114,15 @@ function setOpenClaudeTabs(labels: string[]): void {
   }];
 }
 
-function makeProvider(sessions: import('../SessionManager').ClaudeSession[] = []) {
+function makeProvider(
+  sessions: import('../SessionManager').ClaudeSession[] = [],
+  extra: Partial<Record<string, unknown>> = {},
+) {
   const mockManager = {
     getSessions: vi.fn().mockReturnValue(sessions),
     onDidChangeSessions: vi.fn().mockReturnValue({ dispose: vi.fn() }),
     dispose: vi.fn(),
+    ...extra,
   } as unknown as SessionManager;
   return new SessionSwitcherViewProvider(
     { fsPath: '/fake' } as unknown as import('vscode').Uri,
@@ -556,6 +581,93 @@ describe('Sessions view: top-N-by-recency slice', () => {
     expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(
       ['claude-fresh', 'bob-running'],
     );
+  });
+});
+
+// ── Tests: copy transcript handlers ──────────────────────────────────────────
+describe('webview message: copy transcript handlers', () => {
+  beforeEach(() => {
+    mockOpenTextDocument.mockClear();
+    mockShowTextDocument.mockClear();
+    mockClipboardWriteText.mockClear();
+    mockSetStatusBarMessage.mockClear();
+    mockShowInformationMessage.mockClear();
+    mockShowWarningMessage.mockClear();
+    mockExecuteCommand.mockClear();
+  });
+
+  function resolveWebview(provider: SessionSwitcherViewProvider) {
+    const webview = {
+      options: {},
+      html: '',
+      onDidReceiveMessage: vi.fn(),
+      postMessage: vi.fn(),
+      asWebviewUri: (u: unknown) => u,
+      cspSource: 'vscode-webview:',
+    };
+    const webviewView = {
+      webview,
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+      visible: true,
+    };
+    provider.resolveWebviewView(
+      webviewView as unknown as import('vscode').WebviewView,
+      {} as import('vscode').WebviewViewResolveContext,
+      { isCancellationRequested: false, onCancellationRequested: vi.fn() } as unknown as import('vscode').CancellationToken,
+    );
+    return (webview.onDidReceiveMessage as ReturnType<typeof vi.fn>).mock.calls[0][0] as (msg: unknown) => Promise<void>;
+  }
+
+  it('copyTranscriptToEditor opens an untitled markdown document with the transcript', async () => {
+    const provider = makeProvider([], {
+      exportFullTranscript: vi.fn().mockResolvedValue('# transcript\n\nbody'),
+    });
+    const handler = resolveWebview(provider);
+    await handler({ type: 'copyTranscriptToEditor', sessionId: 'sess-1' });
+    await vi.waitFor(() => expect(mockShowTextDocument).toHaveBeenCalled(), { timeout: 2000 });
+    expect(mockOpenTextDocument).toHaveBeenCalledWith({ language: 'markdown', content: '# transcript\n\nbody' });
+  });
+
+  it('copyTranscriptToClipboard writes to env.clipboard and shows a status message', async () => {
+    const provider = makeProvider([], {
+      exportFullTranscript: vi.fn().mockResolvedValue('some transcript'),
+    });
+    const handler = resolveWebview(provider);
+    await handler({ type: 'copyTranscriptToClipboard', sessionId: 'sess-1' });
+    await vi.waitFor(() => expect(mockSetStatusBarMessage).toHaveBeenCalled(), { timeout: 2000 });
+    expect(mockClipboardWriteText).toHaveBeenCalledWith('some transcript');
+  });
+
+  it('copyTranscriptToFile writes to os.tmpdir() and offers Reveal in Finder', async () => {
+    const provider = makeProvider([], {
+      exportFullTranscript: vi.fn().mockResolvedValue('# on disk'),
+    });
+    const handler = resolveWebview(provider);
+    await handler({ type: 'copyTranscriptToFile', sessionId: 'sess-1' });
+
+    // Handler is fire-and-forget; poll until showInformationMessage lands
+    // (the IIFE has to `await exportFullTranscript` then `await fs.writeFile`).
+    await vi.waitFor(() => expect(mockShowInformationMessage).toHaveBeenCalled(), { timeout: 2000 });
+
+    const call = mockShowInformationMessage.mock.calls[0];
+    expect(call[0]).toMatch(/Transcript saved/);
+    expect(call).toContain('Reveal in Finder');
+
+    const tmpPath = (call[0] as string).match(/\/[^\s]+\.md/)?.[0];
+    expect(tmpPath).toBeTruthy();
+    const content = await fs.promises.readFile(tmpPath!, 'utf8');
+    expect(content).toBe('# on disk');
+    await fs.promises.unlink(tmpPath!);
+  });
+
+  it('shows a warning toast when exportFullTranscript returns null (session gone)', async () => {
+    const provider = makeProvider([], {
+      exportFullTranscript: vi.fn().mockResolvedValue(null),
+    });
+    const handler = resolveWebview(provider);
+    await handler({ type: 'copyTranscriptToEditor', sessionId: 'gone' });
+    await vi.waitFor(() => expect(mockShowWarningMessage).toHaveBeenCalled(), { timeout: 2000 });
+    expect(mockShowWarningMessage).toHaveBeenCalledWith(expect.stringContaining('no longer exists'));
   });
 });
 

@@ -10,6 +10,21 @@ export interface MessageExchange {
   timestamp?: string;
 }
 
+// Structured turn for full-transcript export. All fields optional so partial
+// turns (e.g. a user message without a completed assistant response yet) are
+// representable.
+interface TranscriptTurn {
+  userText?: string;
+  assistantText?: string;
+  timestamp?: Date;
+}
+
+interface TranscriptMeta {
+  title: string;
+  source: 'Claude' | 'Bob' | 'Codex' | 'Chat';
+  sessionId: string;
+}
+
 export interface ClaudeSession {
   sessionId: string;    // UUID from filename (e.g. "d61ee3f8-38ea-4316-8b4e-c90a8dd2e45e")
   projectName: string;  // last path segment of cwd (e.g. "my-project")
@@ -258,6 +273,84 @@ export class SessionManager implements vscode.Disposable {
     };
   }
 
+  /**
+   * Return the full transcript of a session as handoff-clean markdown, or
+   * null if the session cannot be found. Dispatches by _sessionSources.
+   * User + assistant prose only — tool_use / tool_result / scaffolding stripped.
+   */
+  async exportFullTranscript(sessionId: string): Promise<string | null> {
+    const session = this._sessions.find(s => s.sessionId === sessionId);
+    if (!session) { return null; }
+
+    if (session.source === 'codex') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const turns = await this._getCodexFullTranscript(filePath);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Codex session',
+        source: 'Codex',
+        sessionId,
+      });
+    }
+
+    if (session.source === 'claude') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const turns = await this._getClaudeFullTranscript(filePath);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Claude session',
+        source: 'Claude',
+        sessionId,
+      });
+    }
+
+    if (session.source === 'bob') {
+      const turns = await this._getBobFullTranscript(sessionId);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Bob session',
+        source: 'Bob',
+        sessionId,
+      });
+    }
+
+    if (session.source === 'chat') {
+      const filePath = this._sessionFilePaths.get(sessionId);
+      if (!filePath) { return null; }
+      const turns = await this._getChatFullTranscript(filePath);
+      return this._renderTranscriptAsMarkdown(turns, {
+        title: session.title || 'Chat session',
+        source: 'Chat',
+        sessionId,
+      });
+    }
+
+    return null;
+  }
+
+  private _renderTranscriptAsMarkdown(turns: TranscriptTurn[], meta: TranscriptMeta): string {
+    const header = [
+      `# ${meta.title}`,
+      '',
+      `*Copied from ${meta.source} · session \`${meta.sessionId}\` · ${turns.length} turn${turns.length === 1 ? '' : 's'}.*`,
+      '',
+      '---',
+      '',
+    ];
+    const body: string[] = [];
+    turns.forEach((turn, i) => {
+      const when = turn.timestamp ? turn.timestamp.toISOString().replace('T', ' ').slice(0, 19) : '(no timestamp)';
+      body.push(`## Turn ${i + 1}  ·  ${when}`, '');
+      if (turn.userText) {
+        body.push('**User:**', '', turn.userText, '');
+      }
+      if (turn.assistantText) {
+        body.push(`**Assistant (${meta.source}):**`, '', turn.assistantText, '');
+      }
+      body.push('---', '');
+    });
+    return header.concat(body).join('\n');
+  }
+
 
   async getRecentExchanges(sessionId: string): Promise<MessageExchange[]> {
     const filePath = this._sessionFilePaths.get(sessionId);
@@ -403,6 +496,68 @@ conn.close()
     }
 
     return collected.slice(-6);
+  }
+
+  // Return every message for a Bob task, chronologically. Uses the same
+  // messages(role, data, created_at) schema as _getBobRecentExchanges — the
+  // `data` column is a JSON blob containing {content}. Full history, no cap.
+  private async _getBobFullTranscript(taskId: string): Promise<TranscriptTurn[]> {
+    const script = `
+import sqlite3, json, sys
+conn = sqlite3.connect(sys.argv[1])
+cur = conn.cursor()
+cur.execute(
+    "SELECT role, data, created_at FROM messages WHERE task_id=? AND role IN ('user','assistant') ORDER BY created_at",
+    (sys.argv[2],)
+)
+rows = [{'role': r[0], 'data': r[1], 'ts': r[2]} for r in cur.fetchall()]
+print(json.dumps(rows))
+conn.close()
+`;
+    let rows: Array<{ role: string; data: string; ts: number }>;
+    try {
+      const out = await _execPython3(['-c', script, this._bobDbPath, taskId]);
+      rows = JSON.parse(out) as typeof rows;
+    } catch {
+      return [];
+    }
+
+    const turns: TranscriptTurn[] = [];
+    let pending: TranscriptTurn | null = null;
+
+    for (const row of rows) {
+      let text: string | null = null;
+      try {
+        const d = JSON.parse(row.data) as { content?: unknown };
+        const content = d.content;
+        if (typeof content === 'string' && content.trim()) {
+          text = content.trim();
+        } else if (Array.isArray(content)) {
+          const parts: string[] = [];
+          for (const block of content) {
+            const b = block as { type?: string; text?: string };
+            if (b.type === 'text' && b.text?.trim()) { parts.push(b.text.trim()); }
+          }
+          if (parts.length > 0) { text = parts.join('\n\n'); }
+        }
+      } catch { /* skip malformed row */ }
+
+      if (!text) { continue; }
+      const ts = typeof row.ts === 'number' ? new Date(row.ts) : undefined;
+
+      if (row.role === 'user') {
+        if (pending) { turns.push(pending); }
+        pending = { userText: text, timestamp: ts };
+      } else if (row.role === 'assistant') {
+        if (!pending) { pending = { timestamp: ts }; }
+        pending.assistantText = pending.assistantText
+          ? `${pending.assistantText}\n\n${text}`
+          : text;
+        if (!pending.timestamp) { pending.timestamp = ts; }
+      }
+    }
+    if (pending) { turns.push(pending); }
+    return turns;
   }
 
   // Run a full scan and fire onDidChangeSessions only when something changed.
@@ -623,6 +778,212 @@ conn.close()
     } finally {
       await fh.close();
     }
+  }
+
+  // Walk every line of a Codex rollout and pair user/assistant response_item
+  // records into TranscriptTurns. Different from _getCodexRecentExchanges
+  // which tail-slices; this returns the full history.
+  private async _getCodexFullTranscript(filePath: string): Promise<TranscriptTurn[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const turns: TranscriptTurn[] = [];
+    let pending: TranscriptTurn | null = null;
+
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) { continue; }
+      try {
+        const rec = JSON.parse(trimmed) as {
+          timestamp?: string;
+          type?: string;
+          payload?: { role?: string; content?: Array<{ type?: string; text?: string }> };
+        };
+        if (rec.type !== 'response_item') { continue; }
+        const role = rec.payload?.role;
+        if (role !== 'user' && role !== 'assistant') { continue; }
+        const text = (rec.payload?.content ?? [])
+          .filter(b => typeof b.text === 'string' && b.text.trim().length > 0)
+          .map(b => b.text!.trim())
+          .join('\n')
+          .trim();
+        if (!text) { continue; }
+        const ts = rec.timestamp ? new Date(rec.timestamp) : undefined;
+        if (role === 'user') {
+          if (pending) { turns.push(pending); }
+          pending = { userText: text, timestamp: ts };
+        } else {
+          if (!pending) { pending = { timestamp: ts }; }
+          pending.assistantText = pending.assistantText
+            ? `${pending.assistantText}\n\n${text}`
+            : text;
+          if (!pending.timestamp) { pending.timestamp = ts; }
+        }
+      } catch { /* skip malformed line */ }
+    }
+    if (pending) { turns.push(pending); }
+    return turns;
+  }
+
+  // Walk every event in a Claude Code .jsonl and pair user/assistant events
+  // into TranscriptTurns. Drops tool_use / tool_result / thinking parts.
+  private async _getClaudeFullTranscript(filePath: string): Promise<TranscriptTurn[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const turns: TranscriptTurn[] = [];
+    let pending: TranscriptTurn | null = null;
+
+    const extractText = (content: unknown): string => {
+      if (typeof content === 'string') { return content.trim(); }
+      if (!Array.isArray(content)) { return ''; }
+      const parts = content
+        .filter((p): p is { type: string; text?: string } =>
+          typeof p === 'object' && p !== null && (p as { type?: unknown }).type === 'text',
+        )
+        .map(p => (typeof p.text === 'string' ? p.text : ''))
+        .filter(t => t.trim().length > 0)
+        .map(t => t.trim());
+      return parts.join('\n\n');
+    };
+
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed) { continue; }
+      try {
+        const rec = JSON.parse(trimmed) as {
+          type?: string;
+          timestamp?: string;
+          message?: { role?: string; content?: unknown };
+        };
+        if (rec.type !== 'user' && rec.type !== 'assistant') { continue; }
+        const text = extractText(rec.message?.content);
+        if (!text) { continue; }
+        const ts = rec.timestamp ? new Date(rec.timestamp) : undefined;
+        if (rec.type === 'user') {
+          if (pending) { turns.push(pending); }
+          pending = { userText: text, timestamp: ts };
+        } else {
+          if (!pending) { pending = { timestamp: ts }; }
+          pending.assistantText = pending.assistantText
+            ? `${pending.assistantText}\n\n${text}`
+            : text;
+          if (!pending.timestamp) { pending.timestamp = ts; }
+        }
+      } catch { /* skip malformed line */ }
+    }
+    if (pending) { turns.push(pending); }
+    return turns;
+  }
+
+  // Reconstruct the `v` state of a VS Code Chat session by replaying its
+  // snapshot (kind:0) + deltas (kind:1 assign, kind:2 array push).
+  private _replayChatDeltas(lines: string[]): {
+    requests?: Array<{
+      timestamp?: number;
+      message?: { text?: string };
+      response?: Array<{ value?: unknown }>;
+      result?: { metadata?: { renderedUserMessage?: Array<{ type?: number; text?: string }> } };
+    }>;
+  } {
+    const applyDelta = (
+      state: Record<string, unknown> | unknown[],
+      keyPath: Array<string | number>,
+      value: unknown,
+      isPush: boolean,
+    ): void => {
+      if (!keyPath.length) { return; }
+      let parent: Record<string, unknown> | unknown[] = state;
+      for (let i = 0; i < keyPath.length - 1; i++) {
+        const k = keyPath[i];
+        if (Array.isArray(parent) && typeof k === 'number') {
+          while (parent.length <= k) { parent.push({}); }
+          parent = parent[k] as Record<string, unknown> | unknown[];
+        } else if (!Array.isArray(parent) && typeof k === 'string') {
+          if (!(k in parent)) {
+            parent[k] = typeof keyPath[i + 1] === 'number' ? [] : {};
+          }
+          parent = parent[k] as Record<string, unknown> | unknown[];
+        }
+      }
+      const last = keyPath[keyPath.length - 1];
+      if (isPush) {
+        let arr: unknown;
+        if (Array.isArray(parent) && typeof last === 'number') {
+          arr = parent[last];
+        } else if (!Array.isArray(parent) && typeof last === 'string') {
+          if (!(last in parent)) { parent[last] = []; }
+          arr = parent[last];
+        }
+        if (Array.isArray(arr) && Array.isArray(value)) { arr.push(...value); }
+        else if (Array.isArray(arr)) { arr.push(value); }
+      } else if (Array.isArray(parent) && typeof last === 'number') {
+        while (parent.length <= last) { parent.push(undefined); }
+        parent[last] = value;
+      } else if (!Array.isArray(parent) && typeof last === 'string') {
+        parent[last] = value;
+      }
+    };
+
+    let state: Record<string, unknown> | null = null;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) { continue; }
+      try {
+        const rec = JSON.parse(trimmed) as { kind?: number; k?: Array<string | number>; v?: unknown };
+        if (rec.kind === 0) {
+          state = (rec.v as Record<string, unknown>) ?? {};
+        } else if (state && (rec.kind === 1 || rec.kind === 2)) {
+          applyDelta(state, rec.k ?? [], rec.v, rec.kind === 2);
+        }
+      } catch { /* skip malformed */ }
+    }
+    return (state ?? {}) as ReturnType<typeof this._replayChatDeltas>;
+  }
+
+  private async _getChatFullTranscript(filePath: string): Promise<TranscriptTurn[]> {
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(filePath, 'utf8');
+    } catch { return []; }
+
+    const state = this._replayChatDeltas(raw.split('\n'));
+    const requests = state.requests ?? [];
+
+    const USER_REQUEST_RE = /<userRequest>\s*([\s\S]*?)\s*<\/userRequest>/;
+
+    const turns: TranscriptTurn[] = [];
+    for (const req of requests) {
+      if (!req) { continue; }
+      const rendered = req.result?.metadata?.renderedUserMessage ?? [];
+      const combined = rendered
+        .filter(p => p && p.type === 1 && typeof p.text === 'string')
+        .map(p => p.text!)
+        .join('\n');
+      const unwrapMatch = combined.match(USER_REQUEST_RE);
+      const userText = (unwrapMatch ? unwrapMatch[1] : (req.message?.text ?? combined)).trim();
+
+      const assistantText = (req.response ?? [])
+        .filter(el => el && typeof el.value === 'string')
+        .map(el => el.value as string)
+        .join('')
+        .trim();
+
+      const timestamp = typeof req.timestamp === 'number' ? new Date(req.timestamp) : undefined;
+
+      if (userText || assistantText) {
+        turns.push({
+          userText: userText || undefined,
+          assistantText: assistantText || undefined,
+          timestamp,
+        });
+      }
+    }
+    return turns;
   }
 
   private async _readCodexIndex(): Promise<Map<string, { threadName: string; updatedAt: Date }>> {

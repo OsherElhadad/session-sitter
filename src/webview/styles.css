@@ -530,3 +530,25 @@ button:focus-visible {
   outline: none;
 }
 
+/* Submenu — visually identical to the base menu, positioned adjacent to a parent item. */
+.session-context-menu--sub {
+  position: fixed;
+  z-index: 1001;
+}
+
+/* Parent items reserve room on the right for a ▸ chevron. */
+.session-context-menu-item--parent {
+  padding-right: 22px;
+  position: relative;
+}
+
+.session-context-menu-item--parent::after {
+  content: '▸';
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  opacity: 0.6;
+}
+
