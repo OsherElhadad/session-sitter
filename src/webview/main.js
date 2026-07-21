@@ -130,9 +130,55 @@
 
   function closeContextMenu() {
     if (contextMenuEl) {
+      // Clean up any open submenus first.
+      document.querySelectorAll('.session-context-menu--sub').forEach(function (s) { s.remove(); });
       contextMenuEl.remove();
       contextMenuEl = null;
     }
+  }
+
+  /**
+   * Render a submenu adjacent to a parent menu-item button. Returns the
+   * submenu element (already inserted into the DOM).
+   * @param {HTMLElement} parentBtn
+   * @param {Array<{label: string, action: Function}>} items
+   */
+  function renderSubmenu(parentBtn, items) {
+    const sub = document.createElement('div');
+    sub.className = 'session-context-menu session-context-menu--sub';
+    sub.setAttribute('role', 'menu');
+
+    items.forEach(function (subItem) {
+      const btn = document.createElement('button');
+      btn.className = 'session-context-menu-item';
+      btn.setAttribute('role', 'menuitem');
+      btn.type = 'button';
+      btn.textContent = subItem.label;
+      btn.addEventListener('click', function () {
+        subItem.action();
+        closeContextMenu();
+      });
+      btn.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowLeft' || event.key === 'Escape') {
+          event.preventDefault();
+          sub.remove();
+          parentBtn.focus();
+        }
+      });
+      sub.appendChild(btn);
+    });
+
+    document.body.appendChild(sub);
+    const parentRect = parentBtn.getBoundingClientRect();
+    const subRect = sub.getBoundingClientRect();
+    let left = parentRect.right;
+    if (left + subRect.width > window.innerWidth - 4) {
+      left = Math.max(4, parentRect.left - subRect.width);
+    }
+    sub.style.left = left + 'px';
+    sub.style.top = Math.max(4, Math.min(parentRect.top, window.innerHeight - subRect.height - 4)) + 'px';
+
+    return sub;
   }
 
   /**
@@ -161,6 +207,17 @@
       { label: 'Copy session ID', action: function () {
           vscodeApi.postMessage({ type: 'copyToClipboard', text: session.sessionId });
       }},
+      { label: 'Copy transcript', submenu: [
+          { label: 'To editor', action: function () {
+              vscodeApi.postMessage({ type: 'copyTranscriptToEditor', sessionId: session.sessionId });
+          }},
+          { label: 'To clipboard', action: function () {
+              vscodeApi.postMessage({ type: 'copyTranscriptToClipboard', sessionId: session.sessionId });
+          }},
+          { label: 'To file', action: function () {
+              vscodeApi.postMessage({ type: 'copyTranscriptToFile', sessionId: session.sessionId });
+          }},
+      ]},
       { label: 'Upload to reckon', action: function () {
           vscodeApi.postMessage({ type: 'uploadToReckon', sessionId: session.sessionId });
       }},
@@ -172,10 +229,47 @@
       btn.setAttribute('role', 'menuitem');
       btn.type = 'button';
       btn.textContent = itemDef.label;
-      btn.addEventListener('click', function () {
-        itemDef.action();
-        closeContextMenu();
-      });
+      if (itemDef.submenu) {
+        btn.classList.add('session-context-menu-item--parent');
+        let subEl = null;
+        let openTimer = null;
+        let closeTimer = null;
+        const openSub = function () {
+          clearTimeout(closeTimer);
+          if (subEl) { return; }
+          subEl = renderSubmenu(btn, itemDef.submenu);
+        };
+        const closeSub = function () {
+          if (!subEl) { return; }
+          subEl.remove();
+          subEl = null;
+        };
+        btn.addEventListener('mouseenter', function () {
+          clearTimeout(closeTimer);
+          openTimer = setTimeout(openSub, 150);
+        });
+        btn.addEventListener('mouseleave', function (event) {
+          clearTimeout(openTimer);
+          // Give the pointer time to reach the submenu before we tear it down.
+          closeTimer = setTimeout(function () {
+            if (subEl && !subEl.contains(event.relatedTarget)) { closeSub(); }
+          }, 200);
+        });
+        btn.addEventListener('click', openSub);
+        btn.addEventListener('keydown', function (event) {
+          if (event.key === 'ArrowRight' || event.key === 'Enter') {
+            event.preventDefault();
+            openSub();
+            const first = subEl && subEl.querySelector('.session-context-menu-item');
+            if (first) { first.focus(); }
+          }
+        });
+      } else {
+        btn.addEventListener('click', function () {
+          itemDef.action();
+          closeContextMenu();
+        });
+      }
       menu.appendChild(btn);
     });
 
