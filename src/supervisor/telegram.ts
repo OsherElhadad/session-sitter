@@ -24,7 +24,7 @@ import {
   SUPERVISOR_LABEL,
 } from './messaging';
 import { SupervisionRecord, SupervisionState } from './models';
-import { Clock, fromIso, nowUtc, toIso } from './timeutil';
+import { Clock, minutesUntil, nowUtc, toIso } from './timeutil';
 
 export const LIGHT_ICON: Record<string, string> = {
   green: '🟢', yellow: '🟡', orange: '🟠', red: '🔴',
@@ -383,8 +383,7 @@ export class TelegramChannel implements MessagingChannel {
     const now = this.clock();
     for (const rec of pending) {
       if (!rec.notification_id || !rec.timeout_deadline) { continue; }
-      const minutesLeft = Math.max(
-        0, Math.floor((fromIso(rec.timeout_deadline).getTime() - now.getTime()) / 60_000));
+      const minutesLeft = minutesUntil(rec.timeout_deadline, now);
       const source = rec.original_orange_assessment ?? rec.assessment ?? {};
       const notification = String(source.human_notification ?? '');
       const [text, replyMarkup] = buildCard(rec, notification, {

@@ -4,7 +4,7 @@ import { queryBobDb } from './BobDatabase';
 import { PendingApproval } from './agents/BobApprover';
 
 // ── Full-transcript export contract ──────────────────────────────────────────
-// session-sitter is the single reader of Bob/Claude sessions. It exports the full
+// This extension is the single reader of Bob/Claude sessions. It exports the full
 // transcript (tool calls + the pending approval) to STATE_DIR/history/<id>.json, which
 // the Python supervisor consumes. Keep these field names (camelCase) in sync with
 // supervisor/reckon_supervisor/transcript.py.

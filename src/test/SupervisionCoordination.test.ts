@@ -74,7 +74,7 @@ describe('coexistence: auto-approve + supervision outbox share one BobSender', (
     const outbox = new SupervisorOutbox(outboxDir, sharedSender, () => { /* noop */ });
     writeDelivery(outboxDir, {
       deliveryId: 'd1', sessionId: 's', source: 'bob',
-      text: '[SessionSitter Supervisor] Hold — awaiting the human on the migration.', kind: 'orange_hold',
+      text: '[Session Supervisor] Hold — awaiting the human on the migration.', kind: 'orange_hold',
     });
 
     // Run concurrently, as the two independent 5s timers would.
@@ -84,7 +84,7 @@ describe('coexistence: auto-approve + supervision outbox share one BobSender', (
     expect(approver.calls).toEqual([{ requestId: 'r1', payload: { allowOnce: true } }]);
     // Supervision guidance injected via the SHARED sender — and nothing else on it.
     expect(sharedSender.sent).toEqual([
-      { taskId: 's', text: '[SessionSitter Supervisor] Hold — awaiting the human on the migration.' },
+      { taskId: 's', text: '[Session Supervisor] Hold — awaiting the human on the migration.' },
     ]);
   });
 
@@ -132,7 +132,7 @@ describe('coexistence: auto-approve + supervision outbox share one BobSender', (
     const outbox = new SupervisorOutbox(outboxDir, sharedSender, () => { /* noop */ }, approver);
     writeDelivery(outboxDir, {
       deliveryId: 'd-reject', sessionId: 's', source: 'bob',
-      text: '[SessionSitter Supervisor] BLOCKED (red): direct push to main',
+      text: '[Session Supervisor] BLOCKED (red): direct push to main',
       kind: 'reject_approval', requestId: 'req-1', channel: 'approval',
     });
     await outbox.poll();

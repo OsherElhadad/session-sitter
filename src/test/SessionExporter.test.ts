@@ -19,9 +19,9 @@ function taskRow(over: Partial<Record<string, string>> = {}) {
     id: 'legacy-bob-code-abc',
     title: 'Fix failing test',
     status: 'active',
-    env: JSON.stringify({ staticEnvInfo: { primaryWorkspace: '/home/boaz/skillberry' } }),
+    env: JSON.stringify({ staticEnvInfo: { primaryWorkspace: '/home/alice/demo-project' } }),
     approval_config: null,
-    project_id: 'file:/home/boaz/skillberry',
+    project_id: 'file:/home/alice/demo-project',
     ...over,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any;
@@ -52,7 +52,7 @@ describe('buildTranscript', () => {
     const t = buildTranscript(taskRow(), rows);
     expect(t.sessionId).toBe('legacy-bob-code-abc');
     expect(t.source).toBe('bob');
-    expect(t.projectName).toBe('skillberry');
+    expect(t.projectName).toBe('demo-project');
     expect(t.turns).toHaveLength(2);
     expect(t.turns[0].text).toBe('Fix the test');
     expect(t.turns[1].toolCalls?.[0].name).toBe('execute_command');
@@ -159,12 +159,12 @@ c.commit(); c.close()
 }
 
 function insertTask(dbPath: string, id: string): void {
-  const env = JSON.stringify({ staticEnvInfo: { primaryWorkspace: '/home/boaz/skillberry' } });
+  const env = JSON.stringify({ staticEnvInfo: { primaryWorkspace: '/home/alice/demo-project' } });
   execFileSync('python3', ['-c', `
 import sqlite3, json
 c = sqlite3.connect('${dbPath}')
 c.execute("INSERT INTO tasks (id, project_id, title, status, env, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
-  ('${id}', 'file:/home/boaz/skillberry', 'Fix test', 'active', ${JSON.stringify(env)}, 1, 2))
+  ('${id}', 'file:/home/alice/demo-project', 'Fix test', 'active', ${JSON.stringify(env)}, 1, 2))
 c.commit(); c.close()
 `]);
 }

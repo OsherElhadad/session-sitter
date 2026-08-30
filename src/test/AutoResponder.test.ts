@@ -61,8 +61,8 @@ describe('ruleAppliesToSession', () => {
     expect(ruleAppliesToSession({ matchPattern: 'x', response: 'y' }, '/home/me/proj')).toBe(true);
   });
   it('applies only when the regex matches the project path', () => {
-    const rule = { toolPattern: 'read_*', decision: 'approveOnce' as const, sessionPattern: 'reckon/session-sitter' };
-    expect(ruleAppliesToSession(rule, '/home/me/reckon/session-sitter')).toBe(true);
+    const rule = { toolPattern: 'read_*', decision: 'approveOnce' as const, sessionPattern: 'acme/web-app' };
+    expect(ruleAppliesToSession(rule, '/home/me/acme/web-app')).toBe(true);
     expect(ruleAppliesToSession(rule, '/home/me/other-project')).toBe(false);
   });
   it('does not apply a scoped rule when projectPath is unknown', () => {
@@ -319,7 +319,7 @@ describe('AutoResponder session-scoped rules', () => {
   }
 
   it('approval rule scoped by sessionPattern fires only on the matching project', async () => {
-    const rules: AutoRespondRule[] = [{ sessionPattern: 'reckon/session-sitter', toolPattern: 'glob', decision: 'approveOnce' }];
+    const rules: AutoRespondRule[] = [{ sessionPattern: 'acme/web-app', toolPattern: 'glob', decision: 'approveOnce' }];
 
     const noMatch = new FakeApprover();
     noMatch.pending = [pendingApproval('r1', 'glob')]; // taskId 's'
@@ -328,7 +328,7 @@ describe('AutoResponder session-scoped rules', () => {
 
     const match = new FakeApprover();
     match.pending = [pendingApproval('r1', 'glob')];
-    await new AutoResponder(managerWithSessions([bobSess('s', '/home/me/reckon/session-sitter')]), new FakeSender(), () => rules, () => {}, match).sweepApprovals();
+    await new AutoResponder(managerWithSessions([bobSess('s', '/home/me/acme/web-app')]), new FakeSender(), () => rules, () => {}, match).sweepApprovals();
     expect(match.calls.length).toBe(1);
   });
 

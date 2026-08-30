@@ -59,11 +59,11 @@ describe('SupervisorOutbox.poll', () => {
   afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 
   it('injects a delivery once and moves it to done/', async () => {
-    writeDelivery(outbox, { deliveryId: 'd1', sessionId: 's1', source: 'bob', text: '[SessionSitter Supervisor] hold', kind: 'orange_hold' });
+    writeDelivery(outbox, { deliveryId: 'd1', sessionId: 's1', source: 'bob', text: '[Session Supervisor] hold', kind: 'orange_hold' });
     const box = new SupervisorOutbox(outbox, sender);
     const n = await box.poll();
     expect(n).toBe(1);
-    expect(sender.sent).toEqual([{ taskId: 's1', text: '[SessionSitter Supervisor] hold' }]);
+    expect(sender.sent).toEqual([{ taskId: 's1', text: '[Session Supervisor] hold' }]);
     expect(fs.existsSync(path.join(outbox, 'd1.json'))).toBe(false);
     expect(fs.existsSync(path.join(outbox, 'done', 'd1.json'))).toBe(true);
   });
@@ -151,7 +151,7 @@ describe('SupervisorOutbox approval channel (requestId → emitter)', () => {
 
   it('routes a requestId delivery to approver.resolve(reject), not sender.send', async () => {
     writeDelivery(outbox, {
-      deliveryId: 'd1', sessionId: 's1', source: 'bob', text: '[SessionSitter Supervisor] BLOCKED (red)',
+      deliveryId: 'd1', sessionId: 's1', source: 'bob', text: '[Session Supervisor] BLOCKED (red)',
       kind: 'reject_approval', requestId: 'req-1', channel: 'approval',
     });
     const box = new SupervisorOutbox(outbox, sender, () => { /* noop */ }, approver);
@@ -164,7 +164,7 @@ describe('SupervisorOutbox approval channel (requestId → emitter)', () => {
 
   it('routes an approve_approval (decision=allow) delivery to approver.resolve(approveOnce)', async () => {
     writeDelivery(outbox, {
-      deliveryId: 'd1', sessionId: 's1', source: 'bob', text: '[SessionSitter Supervisor] Approved by user',
+      deliveryId: 'd1', sessionId: 's1', source: 'bob', text: '[Session Supervisor] Approved by user',
       kind: 'approve_approval', requestId: 'req-1', channel: 'approval', decision: 'allow',
     });
     const box = new SupervisorOutbox(outbox, sender, () => { /* noop */ }, approver);
