@@ -1,8 +1,8 @@
 {
   "name": "claude-session-switcher",
   "displayName": "Claude Session Switcher",
-  "description": "Tabbed session switcher for Claude Code in the Secondary Sidebar",
-  "version": "0.0.10",
+  "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
+  "version": "0.1.0",
   "publisher": "eranra",
   "repository": {
     "type": "git",
@@ -44,48 +44,136 @@
       {
         "command": "claudeSessionSwitcher.refresh",
         "title": "Refresh Sessions",
-        "category": "Claude Session Switcher"
+        "category": "AI Sessions"
       },
       {
         "command": "claudeSessionSwitcher.newSession",
         "title": "New Claude Session",
-        "category": "Claude Session Switcher"
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.uploadToReckon",
+        "title": "Upload Session to Corpus",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.exportSessionForSupervision",
+        "title": "Export Session for Supervision",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.superviseNow",
+        "title": "Supervise the Blocked Session Now",
+        "category": "AI Sessions"
       },
       {
         "command": "claudeSessionSwitcher.testBobSend",
         "title": "Test Bob Send (to existing session)",
-        "category": "Claude Session Switcher"
+        "category": "AI Sessions"
       },
       {
-        "command": "claudeSessionSwitcher.uploadToReckon",
-        "title": "Upload Session to reckon",
-        "category": "Claude Session Switcher"
+        "command": "claudeSessionSwitcher.testClaudeSend",
+        "title": "Test Claude Send (to existing session)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.testClaudeListApprovals",
+        "title": "Test Claude List Approvals (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.probeClaudeOpen",
+        "title": "Probe Claude Open Panels (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.probeClaudeInternals",
+        "title": "Probe Claude Internals — send + approval (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.probeBobQuestion",
+        "title": "Probe Bob Question — ask_followup_question (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.probeBobQuestionFull",
+        "title": "Probe Bob Question — full approval state (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.probeClaudeQuestion",
+        "title": "Probe Claude Question — AskUserQuestion (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.installClaudeQuestionHook",
+        "title": "Install Claude Question Hook (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.captureClaudeQuestion",
+        "title": "Capture Claude Question (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.installClaudeAnswerHook",
+        "title": "Install Claude Answer Hook (debug)",
+        "category": "AI Sessions"
+      },
+      {
+        "command": "claudeSessionSwitcher.captureClaudeAnswer",
+        "title": "Capture Claude Answer (debug)",
+        "category": "AI Sessions"
       }
     ],
     "configuration": {
-      "title": "Claude Session Switcher",
+      "title": "AI Sessions",
       "properties": {
         "claudeSessionSwitcher.autoRespond": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Auto-reply rules for Bob sessions. On each scan, if the latest assistant message of a Bob session matches `matchPattern` (a JavaScript regular expression), `response` is sent into that same session automatically.",
+          "markdownDescription": "Auto-respond rules for **Bob** and **Claude** sessions, evaluated in order (first match wins). Each rule is either a **text rule** `{ matchPattern, response }` (sends `response` when the latest assistant message matches the `matchPattern` regex) or an **approval rule** `{ toolPattern, decision }` (resolves a pending tool-approval prompt when `toolPattern` — a glob, `*` = any run of characters, `|` = alternatives — matches the tool name, optionally narrowed by an `argumentPattern` regex over the arguments JSON). Set `source` to `bob` (default) or `claude`. Add an optional `sessionPattern` (regex) to scope a rule to sessions whose project path matches.\n\nA pending prompt that no rule handles is left for you — or handed to the supervisor when `reckon.autoSupervise` is on. A user-facing question (`ask_followup_question` / `AskUserQuestion`) is never auto-approved.",
           "items": {
             "type": "object",
-            "required": ["matchPattern", "response"],
             "properties": {
+              "sessionPattern": {
+                "type": "string",
+                "description": "Optional: JavaScript regex matched against the session's project path. When set, the rule applies only to sessions whose project path matches; omit to apply to all sessions."
+              },
               "matchPattern": {
                 "type": "string",
-                "description": "JavaScript regex tested against the latest assistant message."
+                "description": "Text rule: JavaScript regex tested against the latest assistant message."
               },
               "response": {
                 "type": "string",
-                "description": "Text sent into the session on a match."
+                "description": "Text rule: text sent into the session on a match."
+              },
+              "toolPattern": {
+                "type": "string",
+                "description": "Approval rule: glob matched against the pending tool name ('*' = any run of characters, '|' separates alternatives)."
+              },
+              "argumentPattern": {
+                "type": "string",
+                "description": "Approval rule (optional): JavaScript regex matched against the pending tool arguments as JSON. Unanchored — matches anywhere in the JSON."
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "approveOnce",
+                  "approveForTask",
+                  "reject"
+                ],
+                "description": "Approval rule: how to resolve the prompt. approveForTask also suppresses future prompts for that permission group (and command, for execute_command)."
               },
               "source": {
                 "type": "string",
-                "enum": ["bob"],
+                "enum": [
+                  "bob",
+                  "claude"
+                ],
                 "default": "bob",
-                "description": "Which IDE the rule applies to (Bob only)."
+                "description": "Which IDE the rule applies to: 'bob' (default) or 'claude'."
               }
             }
           }
@@ -93,7 +181,60 @@
         "reckon.uploadScriptPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to `upload_session.py` in your local reckon repository clone.\n\nExample: `/Users/you/workarea/Python/recon/reckon/scripts/upload_session.py`"
+          "markdownDescription": "**Deprecated** — the uploader is built in and needs no script. Kept only so an existing setting still works: when `reckon.dataRepoPath` is empty, the corpus repo root is derived from this path. Set `reckon.dataRepoPath` instead.",
+          "deprecationMessage": "The uploader now runs in-process. Set reckon.dataRepoPath to your corpus repo root instead."
+        },
+        "claudeSessionSwitcher.probelessActiveWindowMinutes": {
+          "type": "number",
+          "default": 120,
+          "minimum": 0,
+          "markdownDescription": "How recently a **Codex** or **VS Code Chat** session must have been updated to count as active in the Sessions list. Those sources expose no live-process signal, so recency is the only available proxy; Claude and Bob sessions are judged by what their extension hosts actually report as open. Set to `0` to keep them in History always."
+        },
+        "reckon.supervisorStateDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to the supervision state directory. **Required to enable supervision.** Transcripts are exported to `<stateDir>/history/`, decisions are recorded in `<stateDir>/records/` (what the Supervision activity panel shows), and interventions queue in `<stateDir>/outbox/` until the agent confirms them.\n\nExample: `/home/you/.ai-sessions/state`"
+        },
+        "reckon.autoSupervise": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When on, every agent prompt that no auto-approve rule handles is handed to the supervisor: the transcript is exported, the action is classified into a traffic light, and the decision is applied back into the agent. Requires `reckon.supervisorStateDir`."
+        },
+        "reckon.supervisorRepoPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Workspace root the supervisor runs against — used to locate `.env` files and as the classifier's working directory. Derived from `reckon.supervisorStateDir` (its parent) when empty."
+        },
+        "reckon.dataRepoPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Absolute path to your corpus repository — the one containing `data/sessions/` (uploaded sessions) and `data/knowledge/` (the BDI tier files). Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source for supervision."
+        },
+        "reckon.knowledge.user": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Knowledge-routing `user` slug → `data/knowledge/users/<user>/bottom-line.md` (highest precedence tier)."
+        },
+        "reckon.knowledge.project": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Knowledge-routing `project` slug → `data/knowledge/projects/<project>/bottom-line.md`."
+        },
+        "reckon.knowledge.team": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Knowledge-routing `team` slug → `data/knowledge/teams/<team>/bottom-line.md` (broadest, lowest precedence tier)."
+        },
+        "reckon.knowledge.registryPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional path to a knowledge **registry** markdown file. When set, the `(user, project, team)` triple is validated against its tables and the documented fallbacks apply (a user on exactly one project may omit the project; an unknown slug is an error). When empty, the three slugs above are used as given. See `knowledge/REGISTRY.example.md`."
+        },
+        "reckon.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "markdownDescription": "**Deprecated and unused** — the supervisor is TypeScript and runs in-process. Reading IBM Bob's SQLite store still uses the `python3` on your PATH (see `docs/ARCHITECTURE.md`), but that path is not configurable through this setting.",
+          "deprecationMessage": "Unused: the supervisor no longer runs a Python interpreter."
         }
       }
     }
@@ -103,7 +244,11 @@
     "compile": "node scripts/gen-build-info.js && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check": "npm run compile && npm run lint && npm test",
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "supervise": "node out/supervisor/cli.js",
+    "corpus": "node out/corpus/cli.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

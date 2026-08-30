@@ -2,7 +2,32 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execFile } from 'child_process';
+import { queryBobDb } from './BobDatabase';
+import { FullTranscript, readBobTranscript } from './SessionExporter';
+
+/** Which session sources this extension knows about. */
+export type SessionSourceId = 'claude' | 'bob' | 'codex' | 'chat';
+
+/**
+ * Directory holding VS Code's per-user state (`workspaceStorage/` lives here), where
+ * VS Code Chat sessions are stored. Platform-specific; exported so it can be unit-tested
+ * without a real home directory.
+ *
+ * Was macOS-only. Linux matters in practice: the supervision runtime targets WSL, where
+ * `~/Library/…` does not exist and Chat sessions would silently never be found.
+ */
+export function vscodeUserDir(
+  homedir: string = os.homedir(),
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === 'darwin') {
+    return path.join(homedir, 'Library', 'Application Support', 'Code', 'User');
+  }
+  if (platform === 'win32') {
+    return path.join(process.env.APPDATA ?? path.join(homedir, 'AppData', 'Roaming'), 'Code', 'User');
+  }
+  return path.join(homedir, '.config', 'Code', 'User');
+}
 
 export interface MessageExchange {
   role: 'user' | 'assistant';
@@ -99,19 +124,28 @@ export async function getActiveSessionIds(): Promise<Set<string>> {
   return active;
 }
 
+// One row of Bob's `messages` table, as both Bob readers below consume it.
+interface BobMessageRow {
+  role: string;
+  data: string;
+  created_at: number;
+}
+
+// Bob's message rows for one task, oldest first. A constant — every value is bound as a
+// parameter (see BobDatabase.queryBobDb).
+const BOB_MESSAGES_SQL =
+  "SELECT role, data, created_at FROM messages WHERE task_id=? "
+  + "AND role IN ('user','assistant') ORDER BY created_at";
+
+// The most recent non-archived Bob tasks that have a first message.
+const BOB_TASKS_SQL =
+  'SELECT id, project_id, title, status, first_message, created_at, updated_at, env '
+  + 'FROM tasks WHERE time_archived IS NULL AND first_message IS NOT NULL '
+  + 'ORDER BY updated_at DESC LIMIT 100';
+
 // Fingerprint used to skip firing the event when nothing changed.
 function sessionsFingerprint(sessions: ClaudeSession[]): string {
   return sessions.map(s => `${s.sessionId}:${s.status}:${s.title}:${s.updatedAt.getTime()}`).join('|');
-}
-
-// Run python3 with the given args and return stdout. Rejects on non-zero exit.
-function _execPython3(args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile('python3', args, { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) { reject(new Error(stderr || String(err))); return; }
-      resolve(stdout);
-    });
-  });
 }
 
 export class SessionManager implements vscode.Disposable {
@@ -120,7 +154,7 @@ export class SessionManager implements vscode.Disposable {
 
   private _sessions: ClaudeSession[] = [];
   private _sessionFilePaths = new Map<string, string>();
-  private _sessionSources = new Map<string, 'claude' | 'bob' | 'codex' | 'chat'>();
+  private _sessionSources = new Map<string, SessionSourceId>();
   private readonly _watcher: vscode.FileSystemWatcher;
   private readonly _projectsDir: string;
   private readonly _bobDbPath: string;
@@ -135,8 +169,7 @@ export class SessionManager implements vscode.Disposable {
     this._bobDbPath = path.join(os.homedir(), '.bob', 'db', 'bob.db');
     this._codexSessionsDir = path.join(os.homedir(), '.codex', 'sessions');
     this._codexIndexPath = path.join(os.homedir(), '.codex', 'session_index.jsonl');
-    // macOS-only for now (matches Bob path assumption); Linux/Windows deferred.
-    this._vscodeUserDir = path.join(os.homedir(), 'Library', 'Application Support', 'Code', 'User');
+    this._vscodeUserDir = vscodeUserDir();
 
     // Initial scan
     void this._scanSessions().then(sessions => {
@@ -206,6 +239,31 @@ export class SessionManager implements vscode.Disposable {
 
   getSessions(): ClaudeSession[] {
     return [...this._sessions];
+  }
+
+  /** Path to Bob's SQLite DB (used by the supervision export bridge). */
+  getBobDbPath(): string {
+    return this._bobDbPath;
+  }
+
+  /** On-disk path for a session's source file (Claude/Codex/Chat JSONL; the id itself for
+   *  Bob). Used by the supervision export. Undefined if the session isn't known. */
+  getSessionFilePath(sessionId: string): string | undefined {
+    return this._sessionFilePaths.get(sessionId);
+  }
+
+  /**
+   * Full-fidelity transcript (tool calls + the pending approval) for the supervisor.
+   * This extension is the single reader of the agents' stores; the supervisor consumes this
+   * export contract rather than touching bob.db. Bob-only — Claude goes through
+   * `SessionExporter.exportClaude`, which reads the session's JSONL file directly.
+   */
+  async getFullTranscript(sessionId: string): Promise<FullTranscript> {
+    const source = this._sessionSources.get(sessionId);
+    if (source && source !== 'bob') {
+      throw new Error(`getFullTranscript: ${source} sessions are not supported (Bob only)`);
+    }
+    return readBobTranscript(this._bobDbPath, sessionId);
   }
 
   /**
@@ -453,22 +511,9 @@ export class SessionManager implements vscode.Disposable {
   }
 
   private async _getBobRecentExchanges(taskId: string): Promise<MessageExchange[]> {
-    const script = `
-import sqlite3, json, sys
-conn = sqlite3.connect(sys.argv[1])
-cur = conn.cursor()
-cur.execute(
-    "SELECT role, data, created_at FROM messages WHERE task_id=? AND role IN ('user','assistant') ORDER BY created_at",
-    (sys.argv[2],)
-)
-rows = [{'role': r[0], 'data': r[1], 'ts': r[2]} for r in cur.fetchall()]
-print(json.dumps(rows))
-conn.close()
-`;
-    let rows: Array<{ role: string; data: string; ts: number }>;
+    let rows: BobMessageRow[];
     try {
-      const out = await _execPython3(['-c', script, this._bobDbPath, taskId]);
-      rows = JSON.parse(out) as typeof rows;
+      rows = await queryBobDb<BobMessageRow>(this._bobDbPath, BOB_MESSAGES_SQL, [taskId]);
     } catch {
       return [];
     }
@@ -491,7 +536,7 @@ conn.close()
         const role = row.role === 'user' ? 'user' : 'assistant';
         const maxLen = role === 'user' ? 150 : 250;
         const truncated = text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
-        collected.push({ role, text: truncated, timestamp: new Date(row.ts).toISOString() });
+        collected.push({ role, text: truncated, timestamp: new Date(row.created_at).toISOString() });
       } catch { /* skip malformed */ }
     }
 
@@ -502,22 +547,9 @@ conn.close()
   // messages(role, data, created_at) schema as _getBobRecentExchanges — the
   // `data` column is a JSON blob containing {content}. Full history, no cap.
   private async _getBobFullTranscript(taskId: string): Promise<TranscriptTurn[]> {
-    const script = `
-import sqlite3, json, sys
-conn = sqlite3.connect(sys.argv[1])
-cur = conn.cursor()
-cur.execute(
-    "SELECT role, data, created_at FROM messages WHERE task_id=? AND role IN ('user','assistant') ORDER BY created_at",
-    (sys.argv[2],)
-)
-rows = [{'role': r[0], 'data': r[1], 'ts': r[2]} for r in cur.fetchall()]
-print(json.dumps(rows))
-conn.close()
-`;
-    let rows: Array<{ role: string; data: string; ts: number }>;
+    let rows: BobMessageRow[];
     try {
-      const out = await _execPython3(['-c', script, this._bobDbPath, taskId]);
-      rows = JSON.parse(out) as typeof rows;
+      rows = await queryBobDb<BobMessageRow>(this._bobDbPath, BOB_MESSAGES_SQL, [taskId]);
     } catch {
       return [];
     }
@@ -543,7 +575,7 @@ conn.close()
       } catch { /* skip malformed row */ }
 
       if (!text) { continue; }
-      const ts = typeof row.ts === 'number' ? new Date(row.ts) : undefined;
+      const ts = typeof row.created_at === 'number' ? new Date(row.created_at) : undefined;
 
       if (row.role === 'user') {
         if (pending) { turns.push(pending); }
@@ -570,21 +602,31 @@ conn.close()
   }
 
   private async _scanSessions(): Promise<ClaudeSession[]> {
-    // Run sequentially to avoid the clear() in _scanClaudeSessions racing with
-    // the map writes in _scanBobSessions.
-    const claudeSessions = await this._scanClaudeSessions();
-    const bobSessions = await this._scanBobSessions();
-    const codexSessions = await this._scanCodexSessions();
-    const chatSessions = await this._scanChatSessions();
+    // Build the id->path and id->source maps into LOCAL maps and swap them in atomically at
+    // the end, mirroring how `_sessions` is swapped. Clearing the live maps at the start of a
+    // scan and repopulating them asynchronously lets a concurrent reader (e.g. the 5 s
+    // supervision sweep calling `getSessionFilePath`) hit the emptied map mid-scan and see
+    // `undefined` — which made the Claude supervision export report "no target session" on
+    // every aligned tick. Never mutate the live maps in place.
+    const filePaths = new Map<string, string>();
+    const sources = new Map<string, SessionSourceId>();
+    const claudeSessions = await this._scanClaudeSessions(filePaths, sources);
+    const bobSessions = await this._scanBobSessions(filePaths, sources);
+    const codexSessions = await this._scanCodexSessions(filePaths, sources);
+    const chatSessions = await this._scanChatSessions(filePaths, sources);
     const merged = [...claudeSessions, ...bobSessions, ...codexSessions, ...chatSessions];
     merged.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    this._sessionFilePaths = filePaths;
+    this._sessionSources = sources;
     return merged;
   }
 
-  private async _scanClaudeSessions(): Promise<ClaudeSession[]> {
+  private async _scanClaudeSessions(
+    // Defaulted so each scanner is independently callable (unit tests drive them one at a
+    // time); `_scanSessions` always passes the maps it will swap in atomically.
+    filePaths: Map<string, string> = new Map(), sources: Map<string, SessionSourceId> = new Map(),
+  ): Promise<ClaudeSession[]> {
     const sessions: ClaudeSession[] = [];
-    this._sessionFilePaths.clear();
-    this._sessionSources.clear();
 
     const jsonlFiles = await this._findJsonlFiles(this._projectsDir);
     for (const filePath of jsonlFiles) {
@@ -592,6 +634,8 @@ conn.close()
         const session = await this._parseSessionFile(filePath);
         if (session !== null) {
           sessions.push(session);
+          filePaths.set(session.sessionId, filePath);
+          sources.set(session.sessionId, 'claude');
         }
       } catch {
         // Silently skip files that fail to parse
@@ -601,24 +645,12 @@ conn.close()
     return sessions;
   }
 
-  private async _scanBobSessions(): Promise<ClaudeSession[]> {
-    // Bob IDE stores sessions in a SQLite DB at ~/.bob/db/bob.db.
-    // We query it via python3 (always available) since there is no bundled
-    // Node SQLite driver in the extension.
-    const script = `
-import sqlite3, json, sys
-conn = sqlite3.connect(sys.argv[1])
-conn.row_factory = sqlite3.Row
-cur = conn.cursor()
-cur.execute(
-    "SELECT id, project_id, title, status, first_message, created_at, updated_at, env "
-    "FROM tasks WHERE time_archived IS NULL AND first_message IS NOT NULL "
-    "ORDER BY updated_at DESC LIMIT 100"
-)
-rows = [dict(r) for r in cur.fetchall()]
-print(json.dumps(rows))
-conn.close()
-`;
+  private async _scanBobSessions(
+    // Defaulted so each scanner is independently callable (unit tests drive them one at a
+    // time); `_scanSessions` always passes the maps it will swap in atomically.
+    filePaths: Map<string, string> = new Map(), sources: Map<string, SessionSourceId> = new Map(),
+  ): Promise<ClaudeSession[]> {
+    // Bob IDE stores its sessions in SQLite; `queryBobDb` is the single read-only shim.
     let rows: Array<{
       id: string;
       project_id: string;
@@ -630,8 +662,7 @@ conn.close()
       env: string;
     }>;
     try {
-      const out = await _execPython3(['-c', script, this._bobDbPath]);
-      rows = JSON.parse(out) as typeof rows;
+      rows = await queryBobDb(this._bobDbPath, BOB_TASKS_SQL);
     } catch {
       return []; // DB absent or python3 unavailable
     }
@@ -663,8 +694,8 @@ conn.close()
         // 'running' = actively processing, 'active' = completed task (idle)
         const status: ClaudeSession['status'] = row.status === 'running' ? 'active' : 'idle';
 
-        this._sessionFilePaths.set(sessionId, sessionId); // store id as key for lookup
-        this._sessionSources.set(sessionId, 'bob');
+        filePaths.set(sessionId, sessionId); // store id as key for lookup
+        sources.set(sessionId, 'bob');
         sessions.push({ sessionId, projectName, projectPath, title, updatedAt, status, source: 'bob' });
       } catch { /* skip malformed row */ }
     }
@@ -673,7 +704,11 @@ conn.close()
 
   // Codex CLI stores rollouts at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl,
   // with an index at ~/.codex/session_index.jsonl mapping id -> {thread_name, updated_at}.
-  private async _scanCodexSessions(): Promise<ClaudeSession[]> {
+  private async _scanCodexSessions(
+    // Defaulted so each scanner is independently callable (unit tests drive them one at a
+    // time); `_scanSessions` always passes the maps it will swap in atomically.
+    filePaths: Map<string, string> = new Map(), sources: Map<string, SessionSourceId> = new Map(),
+  ): Promise<ClaudeSession[]> {
     const index = await this._readCodexIndex();
 
     let rolloutFiles: string[];
@@ -707,8 +742,8 @@ conn.close()
         const title = (idx?.threadName ?? (cwd ? path.basename(cwd) : '')).slice(0, 60);
         if (!title) { continue; }
 
-        this._sessionFilePaths.set(sessionId, filePath);
-        this._sessionSources.set(sessionId, 'codex');
+        filePaths.set(sessionId, filePath);
+        sources.set(sessionId, 'codex');
         sessions.push({
           sessionId,
           projectPath: cwd,
@@ -1081,7 +1116,11 @@ conn.close()
 
   // Scan VS Code Chat sessions across all workspaces. Each workspaceStorage/<hash>
   // may contain a chatSessions/*.jsonl plus a workspace.json that names the folder.
-  private async _scanChatSessions(): Promise<ClaudeSession[]> {
+  private async _scanChatSessions(
+    // Defaulted so each scanner is independently callable (unit tests drive them one at a
+    // time); `_scanSessions` always passes the maps it will swap in atomically.
+    filePaths: Map<string, string> = new Map(), sources: Map<string, SessionSourceId> = new Map(),
+  ): Promise<ClaudeSession[]> {
     const wsRoot = path.join(this._vscodeUserDir, 'workspaceStorage');
     let workspaceHashes: string[];
     try {
@@ -1129,8 +1168,8 @@ conn.close()
             : `Chat in ${projectName}`).slice(0, 60);
 
           const stat = await fs.promises.stat(filePath);
-          this._sessionFilePaths.set(sessionId, filePath);
-          this._sessionSources.set(sessionId, 'chat');
+          filePaths.set(sessionId, filePath);
+          sources.set(sessionId, 'chat');
           sessions.push({
             sessionId,
             projectPath,
@@ -1277,7 +1316,8 @@ conn.close()
       const title = (aiTitle ?? firstUserText).slice(0, 60);
       const projectName = projectPath ? path.basename(projectPath) : '';
       const status = await this._readStatus(fh, stat.size, updatedAt);
-      this._sessionFilePaths.set(sessionId, filePath);
+      // The caller (_scanClaudeSessions) records the id->path/source mapping into the local
+      // maps it swaps in atomically; parsing must not mutate the live shared maps.
       return { sessionId, projectName, projectPath, title, updatedAt, status, source: 'claude' as const };
     } finally {
       await fh.close();

@@ -8,6 +8,14 @@
   box-sizing: border-box;
 }
 
+/* The webview toggles visibility with the `hidden` attribute (e.g. `panel.hidden = !open`).
+   Several of those elements also set an explicit `display` (flex/block), and an id selector
+   beats the UA stylesheet's `[hidden] { display: none }`, so the attribute would otherwise be
+   ignored and the panels could never collapse. Force `hidden` to win. */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -46,7 +54,7 @@ button:focus-visible {
   overflow: hidden;
 }
 
-/* Toolbar row: about button (left) + new-session button (right) */
+/* Toolbar row: hamburger menu (left) + new-session buttons (right) */
 #toolbar {
   flex-shrink: 0;
   display: flex;
@@ -57,7 +65,7 @@ button:focus-visible {
   background-color: var(--vscode-sideBarSectionHeader-background, transparent);
 }
 
-#about-btn {
+#menu-btn {
   flex-shrink: 0;
   width: 28px;
   display: flex;
@@ -69,7 +77,7 @@ button:focus-visible {
   transition: opacity 0.1s, background-color 0.1s;
 }
 
-#about-btn:hover {
+#menu-btn:hover {
   opacity: 1;
   background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
 }
@@ -564,3 +572,154 @@ button:focus-visible {
   opacity: 0.6;
 }
 
+/* ── Supervision Activity Toggle ─────────────────────────────────────────── */
+
+#activity-toggle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.6;
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-tab-border, #444));
+  background-color: var(--vscode-sideBarSectionHeader-background, transparent);
+  transition: opacity 0.1s, background-color 0.1s;
+  cursor: pointer;
+  gap: 6px;
+}
+
+#activity-toggle:hover {
+  opacity: 1;
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+/* ── Supervision Activity Feed ───────────────────────────────────────────── */
+
+#activity-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  max-height: 45vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.activity-item {
+  display: flex;
+  gap: 8px;
+  padding: 7px 12px;
+  border-top: 1px solid var(--vscode-list-inactiveFocusOutline, rgba(128, 128, 128, 0.12));
+  border-left: 3px solid transparent;
+  font-size: 12px;
+}
+
+.activity-item.activity-green  { border-left-color: #3fb950; }
+.activity-item.activity-yellow { border-left-color: #d29922; }
+.activity-item.activity-orange { border-left-color: #db6d28; }
+.activity-item.activity-red    { border-left-color: #f85149; }
+
+.activity-dot { flex-shrink: 0; line-height: 1.4; }
+
+.activity-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+
+.activity-summary { font-weight: 600; white-space: normal; word-break: break-word; }
+
+.activity-note {
+  opacity: 0.85;
+  white-space: normal;
+  word-break: break-word;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+
+.activity-meta { opacity: 0.6; font-size: 11px; white-space: normal; word-break: break-word; }
+
+.activity-state {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+/* ── Activity card internals ─────────────────────────────────────────────── */
+
+.activity-item { flex-direction: column; gap: 5px; }
+.activity-item.activity-awaiting { background-color: rgba(219, 109, 40, 0.08); }
+
+.activity-head { display: flex; align-items: center; gap: 6px; }
+.activity-light { font-weight: 700; letter-spacing: 0.05em; font-size: 11px; }
+.activity-item.activity-green  .activity-light { color: #3fb950; }
+.activity-item.activity-yellow .activity-light { color: #d29922; }
+.activity-item.activity-orange .activity-light { color: #db6d28; }
+.activity-item.activity-red    .activity-light { color: #f85149; }
+.activity-timeago { margin-left: auto; opacity: 0.55; font-size: 11px; }
+
+.activity-body { display: flex; flex-direction: column; gap: 3px; }
+.activity-summary { font-weight: 600; word-break: break-word; }
+.activity-line { word-break: break-word; opacity: 0.9; }
+.activity-line-label { opacity: 0.6; }
+.activity-you { color: var(--vscode-charts-blue, #4aa8ff); }
+
+.activity-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.activity-chip {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background-color: var(--vscode-badge-background, rgba(128,128,128,0.25));
+  color: var(--vscode-badge-foreground, inherit);
+}
+
+.activity-awaiting-badge {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #db6d28;
+}
+
+/* ── Failed supervision: collapsible, debuggable detail ──────────────────── */
+.activity-item.activity-failed { border-left-color: #f85149; }
+.activity-item.activity-failed .activity-light,
+.activity-item.activity-failed .activity-state { color: #f85149; }
+
+.activity-failure { margin-top: 3px; }
+.activity-fail-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--vscode-textLink-foreground, #4aa8ff);
+}
+.activity-fail-toggle:hover { text-decoration: underline; }
+.activity-fail-detail { margin-top: 4px; display: flex; flex-direction: column; gap: 6px; }
+.activity-error {
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 3px;
+  background-color: var(--vscode-textCodeBlock-background, rgba(248, 81, 73, 0.10));
+  border: 1px solid rgba(248, 81, 73, 0.35);
+}
+.activity-fail-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.activity-fail-btn {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 9px;
+  cursor: pointer;
+  border-radius: 3px;
+  border: 1px solid var(--vscode-button-border, rgba(128, 128, 128, 0.4));
+  background: var(--vscode-button-secondaryBackground, rgba(128, 128, 128, 0.2));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground));
+}
+.activity-fail-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.35));
+}

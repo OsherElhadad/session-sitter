@@ -16,7 +16,11 @@
 
   let historyOpen = false;
 
-  /** @type {string | null} — sessionId whose preview we've requested via "Show details" */
+  /** @type {Array<object>} — supervision activity feed (newest first) */
+  let activityItems = [];
+  let activityOpen = true;
+
+  /** @type {string | null} — sessionId whose preview we've requested (hover or "Show details") */
   let pendingPreviewSessionId = null;
 
   /** @type {HTMLElement | null} — row element to anchor the preview against when it arrives */
@@ -25,13 +29,17 @@
   /** @type {HTMLElement | null} — visible context menu element, or null */
   let contextMenuEl = null;
 
+  /** @type {ReturnType<typeof setTimeout> | null} — debounce timer for the hover preview */
+  let previewTimer = null;
+
   // ── DOM References ────────────────────────────────────────────────────────
 
   let tabStrip;
   let historyToggle;
   let historyPanel;
   let previewEl;
-  let aboutEl;
+  let activityToggle;
+  let activityPanel;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -124,6 +132,31 @@
     previewEl.innerHTML = '';
     pendingPreviewSessionId = null;
     pendingPreviewAnchor = null;
+  }
+
+  /**
+   * Request a preview after a short hover delay, anchored to the given row.
+   * The preview only renders if the cursor is still on the same row when the
+   * data arrives (see the 'sessionPreview' handler): a mouseleave clears the
+   * pending id, so a stale response is dropped instead of flashing on screen.
+   * @param {object} session
+   * @param {HTMLElement} anchorEl
+   */
+  function scheduleHoverPreview(session, anchorEl) {
+    // Don't compete with the context menu for screen space.
+    if (contextMenuEl) { return; }
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(function () {
+      pendingPreviewSessionId = session.sessionId;
+      pendingPreviewAnchor = anchorEl;
+      vscodeApi.postMessage({ type: 'getSessionPreview', sessionId: session.sessionId });
+    }, 250);
+  }
+
+  function cancelHoverPreview() {
+    clearTimeout(previewTimer);
+    previewTimer = null;
+    hidePreview();
   }
 
   // ── Context menu ──────────────────────────────────────────────────────────
@@ -378,6 +411,11 @@
       openContextMenu(event.clientX, event.clientY, session, tab);
     });
 
+    tab.addEventListener('mouseenter', function () {
+      scheduleHoverPreview(session, tab);
+    });
+    tab.addEventListener('mouseleave', cancelHoverPreview);
+
     return tab;
   }
 
@@ -426,6 +464,11 @@
       openContextMenu(event.clientX, event.clientY, session, item);
     });
 
+    item.addEventListener('mouseenter', function () {
+      scheduleHoverPreview(session, item);
+    });
+    item.addEventListener('mouseleave', cancelHoverPreview);
+
     return item;
   }
 
@@ -437,7 +480,7 @@
     if (sessions.length === 0) {
       const placeholder = document.createElement('span');
       placeholder.className = 'tab-placeholder';
-      placeholder.textContent = 'No sessions yet — click + to start one';
+      placeholder.textContent = 'No active sessions — click + to start one';
       tabStrip.appendChild(placeholder);
       return;
     }
@@ -455,6 +498,193 @@
       return;
     }
     historySessions.forEach(session => historyPanel.appendChild(buildHistoryItem(session)));
+  }
+
+  // ── Supervision activity feed ──────────────────────────────────────────────
+
+  const ACTIVITY_ICON = { green: '🟢', yellow: '🟡', orange: '🟠', red: '🔴' };
+
+  /** Friendly label for a lifecycle state. */
+  function activityStateLabel(item) {
+    switch (item.state) {
+      case 'green_completed':
+        return item.summary && item.summary.indexOf('asking') === 0 ? 'asked you' : 'auto-approved';
+      case 'yellow_delivered': return 'auto-corrected';
+      case 'orange_awaiting_user': return (item.awaitLight === 'red' ? 'BLOCK?' : 'decision needed') + ' — awaiting you';
+      case 'orange_resolved_by_user': return 'resolved by you';
+      case 'orange_transitioned_to_yellow': return 'denied → alternatives';
+      case 'red_blocked': return 'blocked';
+      case 'failed': return 'failed';
+      default: return item.state || '';
+    }
+  }
+
+  /** Small labeled line: "label value" with the label muted. */
+  function activityLine(cls, label, value) {
+    const el = document.createElement('div');
+    el.className = 'activity-line ' + cls;
+    const l = document.createElement('span');
+    l.className = 'activity-line-label';
+    l.textContent = label + ' ';
+    el.appendChild(l);
+    el.appendChild(document.createTextNode(value));
+    return el;
+  }
+
+  /**
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildActivityItem(item) {
+    const light = item.light || (item.awaitLight || '');
+    const awaiting = item.state === 'orange_awaiting_user';
+    const card = document.createElement('div');
+    card.className = 'activity-item activity-' + (light || 'none') + (awaiting ? ' activity-awaiting' : '');
+
+    // Header: icon + LIGHT + state badge
+    const head = document.createElement('div');
+    head.className = 'activity-head';
+    const dot = document.createElement('span');
+    dot.className = 'activity-dot';
+    dot.textContent = ACTIVITY_ICON[light] || '⚪';
+    head.appendChild(dot);
+    const lightLbl = document.createElement('span');
+    lightLbl.className = 'activity-light';
+    lightLbl.textContent = (light || 'info').toUpperCase();
+    head.appendChild(lightLbl);
+    const badge = document.createElement('span');
+    badge.className = 'activity-state';
+    badge.textContent = activityStateLabel(item);
+    head.appendChild(badge);
+    const time = document.createElement('span');
+    time.className = 'activity-timeago';
+    time.textContent = formatRelativeTime(item.at);
+    head.appendChild(time);
+    card.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'activity-body';
+
+    if (item.summary) {
+      const summary = document.createElement('div');
+      summary.className = 'activity-summary';
+      summary.textContent = item.summary;
+      body.appendChild(summary);
+    }
+    if (item.userIntent) { body.appendChild(activityLine('activity-req', '🧑', item.userIntent)); }
+    if (item.agentIntent) { body.appendChild(activityLine('activity-act', '🤖', item.agentIntent)); }
+    if (item.humanNotification) {
+      const note = document.createElement('div');
+      note.className = 'activity-note';
+      note.textContent = item.humanNotification;
+      body.appendChild(note);
+    }
+    if (Array.isArray(item.options) && item.options.length) {
+      const chips = document.createElement('div');
+      chips.className = 'activity-chips';
+      item.options.forEach(function (o) {
+        const chip = document.createElement('span');
+        chip.className = 'activity-chip';
+        chip.textContent = o;
+        chips.appendChild(chip);
+      });
+      body.appendChild(chips);
+    }
+    if (item.userResponse) {
+      body.appendChild(activityLine('activity-you', '💬 you:', item.userResponse));
+    }
+    if (awaiting) {
+      const wait = document.createElement('div');
+      wait.className = 'activity-awaiting-badge';
+      wait.textContent = '⏳ awaiting your decision on Telegram';
+      body.appendChild(wait);
+    }
+    if (item.state === 'failed') {
+      card.classList.add('activity-failed');
+      body.appendChild(buildFailureDetail(item));
+    }
+
+    card.appendChild(body);
+    return card;
+  }
+
+  /**
+   * Collapsible "why did this fail?" region for a failed supervision: the recorded error text
+   * plus actions to open the full record JSON or copy its path — so a failure is debuggable
+   * from the panel instead of a dead end.
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildFailureDetail(item) {
+    const wrap = document.createElement('div');
+    wrap.className = 'activity-failure';
+
+    const detail = document.createElement('div');
+    detail.className = 'activity-fail-detail';
+    detail.hidden = true;
+
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'activity-fail-toggle';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = '▶ Why it failed';
+    toggle.addEventListener('click', function () {
+      const open = detail.hidden;
+      detail.hidden = !open;
+      toggle.textContent = (open ? '▼' : '▶') + ' Why it failed';
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    wrap.appendChild(toggle);
+
+    const err = document.createElement('pre');
+    err.className = 'activity-error';
+    err.textContent = item.error || 'No error message was recorded for this failure.';
+    detail.appendChild(err);
+
+    const actions = document.createElement('div');
+    actions.className = 'activity-fail-actions';
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'activity-fail-btn';
+    openBtn.textContent = 'Open record';
+    openBtn.addEventListener('click', function () {
+      vscodeApi.postMessage({ type: 'openSupervisionRecord', requestId: item.requestId });
+    });
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'activity-fail-btn';
+    copyBtn.textContent = 'Copy path';
+    copyBtn.addEventListener('click', function () {
+      vscodeApi.postMessage({ type: 'copySupervisionRecordPath', requestId: item.requestId });
+    });
+    actions.appendChild(openBtn);
+    actions.appendChild(copyBtn);
+    detail.appendChild(actions);
+
+    wrap.appendChild(detail);
+    return wrap;
+  }
+
+  function renderActivity() {
+    if (!activityPanel) { return; }
+    activityPanel.innerHTML = '';
+    if (activityItems.length === 0) {
+      const empty = document.createElement('span');
+      empty.className = 'tab-placeholder';
+      empty.textContent = 'No supervision activity yet';
+      activityPanel.appendChild(empty);
+      return;
+    }
+    activityItems.forEach(function (item) { activityPanel.appendChild(buildActivityItem(item)); });
+  }
+
+  function setActivityOpen(open) {
+    activityOpen = open;
+    if (!activityToggle || !activityPanel) { return; }
+    activityToggle.textContent = open ? 'Supervision activity ▼' : 'Supervision activity ▶';
+    activityToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    activityPanel.hidden = !open;
+    if (open) { vscodeApi.postMessage({ type: 'loadActivity' }); }
   }
 
   function setHistoryOpen(open) {
@@ -485,6 +715,10 @@
         historySessions = Array.isArray(message.sessions) ? message.sessions : [];
         renderHistory();
         break;
+      case 'updateActivity':
+        activityItems = Array.isArray(message.items) ? message.items : [];
+        renderActivity();
+        break;
       case 'sessionPreview': {
         if (pendingPreviewSessionId !== message.sessionId) { break; }
         const anchorEl = pendingPreviewAnchor;
@@ -511,8 +745,9 @@
     tabStrip      = document.getElementById('tab-strip');
     historyToggle = document.getElementById('history-toggle');
     historyPanel  = document.getElementById('history-panel');
-    previewEl     = document.getElementById('session-preview');
-    aboutEl       = document.getElementById('about-box');
+    previewEl      = document.getElementById('session-preview');
+    activityToggle = document.getElementById('activity-toggle');
+    activityPanel  = document.getElementById('activity-panel');
 
     const newBtn = document.getElementById('new-session-btn');
     if (newBtn) {
@@ -528,23 +763,8 @@
       });
     }
 
-    const aboutBtn = document.getElementById('about-btn');
-    if (aboutBtn) {
-      aboutBtn.addEventListener('click', () => {
-        if (aboutEl) { aboutEl.hidden = !aboutEl.hidden; }
-      });
-    }
-
-    const aboutClose = document.getElementById('about-close');
-    if (aboutClose) {
-      aboutClose.addEventListener('click', () => {
-        if (aboutEl) { aboutEl.hidden = true; }
-      });
-    }
-
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
-        if (aboutEl && !aboutEl.hidden) { aboutEl.hidden = true; }
         if (contextMenuEl) { closeContextMenu(); }
         if (previewEl && !previewEl.hidden) { hidePreview(); }
       }
@@ -564,6 +784,20 @@
       historyToggle.addEventListener('click', () => {
         setHistoryOpen(!historyOpen);
       });
+    }
+
+    if (activityToggle) {
+      activityToggle.addEventListener('click', () => {
+        setActivityOpen(!activityOpen);
+      });
+    }
+    renderActivity();
+
+    // The hamburger menu (About + Settings…) lives in its own small module. It cannot call
+    // acquireVsCodeApi() itself — only one call per webview is allowed — so it is handed a
+    // postMessage function.
+    if (window.SessionSwitcherMenu) {
+      window.SessionSwitcherMenu.init({ postMessage: (msg) => vscodeApi.postMessage(msg) });
     }
 
     renderTabs();
