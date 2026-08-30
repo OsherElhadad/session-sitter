@@ -47,7 +47,7 @@ describe('timeutil', () => {
     expect(fromIso('2026-07-14T12:00:00+02:00').toISOString()).toBe('2026-07-14T10:00:00.000Z');
   });
 
-  it('rejects an unparseable timestamp instead of silently using epoch 0', () => {
+  it('rejects an unparsable timestamp instead of silently using epoch 0', () => {
     expect(() => fromIso('not a date')).toThrow(RangeError);
   });
 

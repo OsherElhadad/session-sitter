@@ -180,7 +180,7 @@ failures. They port verbatim:
   `MAX_ARG_STRLEN`, giving `E2BIG`).
 - `extractJsonObject` scans *all* balanced top-level objects and returns the first with a
   `traffic_light`, because Bob's `--output-format json` appends a stats object.
-- Unparseable classifier output is salvaged from prose, then escalated to Orange — never
+- Unparsable classifier output is salvaged from prose, then escalated to Orange — never
   hard-failed, because a hard fail strands the agent at a blocked prompt.
 - A user-facing question (`ask_followup_question`, `AskUserQuestion`) is **never** resolved
   through the approval channel; it goes to the question relay.

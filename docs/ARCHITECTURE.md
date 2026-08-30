@@ -369,7 +369,7 @@ blocked prompt forever:
 2. Failing that, `salvageAssessmentFromText` reads the light out of the prose and builds a
    minimal valid assessment. It deliberately refuses to salvage *structured* output: a
    structured-but-invalid assessment must fail loudly rather than be silently patched.
-3. Failing that, the action is escalated to the human as Orange. Unparseable is not approval.
+3. Failing that, the action is escalated to the human as Orange. Unparsable is not approval.
 
 ### Identity and safety rules
 

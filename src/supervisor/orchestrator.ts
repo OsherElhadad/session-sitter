@@ -286,7 +286,7 @@ export class Orchestrator {
       // The agent CLI decided but narrated it as prose instead of JSON (Bob does this
       // intermittently). Salvage the light from the prose; if even that fails, escalate to the
       // human (orange) rather than hard-fail — the supervisor must NEVER strand the agent on a
-      // blocked prompt because the classifier returned something unparseable.
+      // blocked prompt because the classifier returned something unparsable.
       const label = actionLabel(session);
       let salvaged = salvageAssessmentFromText(result.raw, label);
       if (salvaged !== null) {

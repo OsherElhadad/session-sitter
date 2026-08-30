@@ -177,7 +177,7 @@ export function unclassifiedOrangeAssessment(actionLabel: string, raw = ''): Ass
   const detail = (raw ?? '').trim().replace(/\n/g, ' ').slice(0, 300);
   let note =
     'The supervisor could not automatically classify this action (the classifier returned an '
-    + `unparseable response). Please decide.\nAction: ${actionLabel}`;
+    + `unparsable response). Please decide.\nAction: ${actionLabel}`;
   if (detail) { note += `\nClassifier said: ${detail}`; }
   return {
     traffic_light: 'orange', confidence: 0.3,
