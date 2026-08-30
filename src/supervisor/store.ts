@@ -1,7 +1,7 @@
 /**
  * Durable, restart-safe persistence for supervision records.
  *
- * Ported from `reckon_supervisor/store.py`. One JSON file per request under `records/`. Writes
+ * Ported from the Python supervisor (`store.py`. One JSON file per request under `records/`. Writes
  * are atomic (temp file + rename). Consumed messaging update-ids are persisted so duplicate or
  * late responses are idempotent. A per-session lock guards the check-and-create of a new Orange
  * so two active Orange notifications can never exist for one unresolved decision.

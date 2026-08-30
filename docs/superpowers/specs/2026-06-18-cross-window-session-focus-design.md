@@ -61,7 +61,7 @@ foreground.
 ### Panel focus (within the target window)
 
 Every session switcher instance watches for a focus-request file addressed to
-its own PID: `~/.claude/session-switcher/focus-<process.pid>.json`. When the
+its own PID: `~/.claude/session-sitter/focus-<process.pid>.json`. When the
 file appears (written by the sender in another window), the receiver calls
 `vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId)`
 locally. This is the same command used today for local switching; Claude Code
@@ -79,7 +79,7 @@ User clicks session X in Window A
   ├─ read /proc/9999/environ
   │    → VSCODE_IPC_HOOK_CLI=/run/user/1000/vscode-ipc-XXXX.sock
   │
-  ├─ write ~/.claude/session-switcher/focus-9999.json
+  ├─ write ~/.claude/session-sitter/focus-9999.json
   │    { sessionId, workspacePath, requestedAt }
   │
   ├─ execFile('code', [workspacePath], { env: { VSCODE_IPC_HOOK_CLI: targetSocket } })
@@ -113,11 +113,11 @@ export async function readActiveLockFiles(): Promise<LockFileInfo[]>
 export async function getIPCSocketForPid(pid: number): Promise<string | null>
 ```
 
-### `SessionSwitcherViewProvider.ts` — three additions
+### `SessionSitterViewProvider.ts` — three additions
 
 **`_startFocusRequestWatcher()`** — called from `resolveWebviewView`.  
 Creates a `vscode.workspace.createFileSystemWatcher` on
-`~/.claude/session-switcher/focus-<process.pid>.json`.  
+`~/.claude/session-sitter/focus-<process.pid>.json`.  
 On create/change: reads file, validates `requestedAt` freshness (≤10 s),
 calls `primaryEditor.open(sessionId)`, deletes file.
 
@@ -143,7 +143,7 @@ calls `primaryEditor.open(sessionId)`, deletes file.
 | Multiple live lock files for same workspace | First live foreign PID wins |
 | Same PID in multiple lock files | Handled naturally — PID is the same process |
 | Stale focus-request file (crashed switcher) | Receiver ignores if `requestedAt` > 10 s, deletes |
-| `~/.claude/session-switcher/` missing | Created lazily on first write |
+| `~/.claude/session-sitter/` missing | Created lazily on first write |
 | `code` not on PATH | `execFile` throws → `'foreign-failed'` → toast |
 | `/proc/<pid>/environ` unreadable | `getIPCSocketForPid` returns null → `'foreign-failed'` → toast |
 | No lock file matches session workspace | `'local'` → existing behaviour (session has no running owner) |

@@ -40,7 +40,7 @@ filename, the title, the model, and when.
 From the panel: right-click a session → **Upload to Corpus**. It runs in-process — no script path
 to configure, no subprocess.
 
-Set `reckon.dataRepoPath` to the corpus repo root first.
+Set `sessionSitter.dataRepoPath` to the corpus repo root first.
 
 From the CLI:
 

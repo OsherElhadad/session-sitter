@@ -1,12 +1,12 @@
 {
-  "name": "claude-session-switcher",
-  "displayName": "Claude Session Switcher",
+  "name": "session-sitter",
+  "displayName": "Session Sitter",
   "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "publisher": "eranra",
   "repository": {
     "type": "git",
-    "url": "https://github.com/eranra/claude-session-switcher"
+    "url": "https://github.com/eranra/session-sitter"
   },
   "engines": {
     "vscode": "^1.64.0"
@@ -25,115 +25,115 @@
     "viewsContainers": {
       "secondarySidebar": [
         {
-          "id": "claude-session-switcher",
-          "title": "AI Sessions",
+          "id": "session-sitter",
+          "title": "Session Sitter",
           "icon": "resources/icon.svg"
         }
       ]
     },
     "views": {
-      "claude-session-switcher": [
+      "session-sitter": [
         {
           "type": "webview",
-          "id": "claudeSessionSwitcher.view",
+          "id": "sessionSitter.view",
           "name": "Sessions"
         }
       ]
     },
     "commands": [
       {
-        "command": "claudeSessionSwitcher.refresh",
+        "command": "sessionSitter.refresh",
         "title": "Refresh Sessions",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.newSession",
+        "command": "sessionSitter.newSession",
         "title": "New Claude Session",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.uploadToReckon",
+        "command": "sessionSitter.uploadToCorpus",
         "title": "Upload Session to Corpus",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.exportSessionForSupervision",
+        "command": "sessionSitter.exportSessionForSupervision",
         "title": "Export Session for Supervision",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.superviseNow",
+        "command": "sessionSitter.superviseNow",
         "title": "Supervise the Blocked Session Now",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.testBobSend",
+        "command": "sessionSitter.testBobSend",
         "title": "Test Bob Send (to existing session)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.testClaudeSend",
+        "command": "sessionSitter.testClaudeSend",
         "title": "Test Claude Send (to existing session)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.testClaudeListApprovals",
+        "command": "sessionSitter.testClaudeListApprovals",
         "title": "Test Claude List Approvals (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.probeClaudeOpen",
+        "command": "sessionSitter.probeClaudeOpen",
         "title": "Probe Claude Open Panels (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.probeClaudeInternals",
+        "command": "sessionSitter.probeClaudeInternals",
         "title": "Probe Claude Internals — send + approval (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.probeBobQuestion",
+        "command": "sessionSitter.probeBobQuestion",
         "title": "Probe Bob Question — ask_followup_question (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.probeBobQuestionFull",
+        "command": "sessionSitter.probeBobQuestionFull",
         "title": "Probe Bob Question — full approval state (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.probeClaudeQuestion",
+        "command": "sessionSitter.probeClaudeQuestion",
         "title": "Probe Claude Question — AskUserQuestion (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.installClaudeQuestionHook",
+        "command": "sessionSitter.installClaudeQuestionHook",
         "title": "Install Claude Question Hook (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.captureClaudeQuestion",
+        "command": "sessionSitter.captureClaudeQuestion",
         "title": "Capture Claude Question (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.installClaudeAnswerHook",
+        "command": "sessionSitter.installClaudeAnswerHook",
         "title": "Install Claude Answer Hook (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       },
       {
-        "command": "claudeSessionSwitcher.captureClaudeAnswer",
+        "command": "sessionSitter.captureClaudeAnswer",
         "title": "Capture Claude Answer (debug)",
-        "category": "AI Sessions"
+        "category": "Session Sitter"
       }
     ],
     "configuration": {
-      "title": "AI Sessions",
+      "title": "Session Sitter",
       "properties": {
-        "claudeSessionSwitcher.autoRespond": {
+        "sessionSitter.autoRespond": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Auto-respond rules for **Bob** and **Claude** sessions, evaluated in order (first match wins). Each rule is either a **text rule** `{ matchPattern, response }` (sends `response` when the latest assistant message matches the `matchPattern` regex) or an **approval rule** `{ toolPattern, decision }` (resolves a pending tool-approval prompt when `toolPattern` — a glob, `*` = any run of characters, `|` = alternatives — matches the tool name, optionally narrowed by an `argumentPattern` regex over the arguments JSON). Set `source` to `bob` (default) or `claude`. Add an optional `sessionPattern` (regex) to scope a rule to sessions whose project path matches.\n\nA pending prompt that no rule handles is left for you — or handed to the supervisor when `reckon.autoSupervise` is on. A user-facing question (`ask_followup_question` / `AskUserQuestion`) is never auto-approved.",
+          "markdownDescription": "Auto-respond rules for **Bob** and **Claude** sessions, evaluated in order (first match wins). Each rule is either a **text rule** `{ matchPattern, response }` (sends `response` when the latest assistant message matches the `matchPattern` regex) or an **approval rule** `{ toolPattern, decision }` (resolves a pending tool-approval prompt when `toolPattern` — a glob, `*` = any run of characters, `|` = alternatives — matches the tool name, optionally narrowed by an `argumentPattern` regex over the arguments JSON). Set `source` to `bob` (default) or `claude`. Add an optional `sessionPattern` (regex) to scope a rule to sessions whose project path matches.\n\nA pending prompt that no rule handles is left for you — or handed to the supervisor when `sessionSitter.autoSupervise` is on. A user-facing question (`ask_followup_question` / `AskUserQuestion`) is never auto-approved.",
           "items": {
             "type": "object",
             "properties": {
@@ -178,63 +178,51 @@
             }
           }
         },
-        "reckon.uploadScriptPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "**Deprecated** — the uploader is built in and needs no script. Kept only so an existing setting still works: when `reckon.dataRepoPath` is empty, the corpus repo root is derived from this path. Set `reckon.dataRepoPath` instead.",
-          "deprecationMessage": "The uploader now runs in-process. Set reckon.dataRepoPath to your corpus repo root instead."
-        },
-        "claudeSessionSwitcher.probelessActiveWindowMinutes": {
+        "sessionSitter.probelessActiveWindowMinutes": {
           "type": "number",
           "default": 120,
           "minimum": 0,
           "markdownDescription": "How recently a **Codex** or **VS Code Chat** session must have been updated to count as active in the Sessions list. Those sources expose no live-process signal, so recency is the only available proxy; Claude and Bob sessions are judged by what their extension hosts actually report as open. Set to `0` to keep them in History always."
         },
-        "reckon.supervisorStateDir": {
+        "sessionSitter.supervisorStateDir": {
           "type": "string",
           "default": "",
           "markdownDescription": "Absolute path to the supervision state directory. **Required to enable supervision.** Transcripts are exported to `<stateDir>/history/`, decisions are recorded in `<stateDir>/records/` (what the Supervision activity panel shows), and interventions queue in `<stateDir>/outbox/` until the agent confirms them.\n\nExample: `/home/you/.ai-sessions/state`"
         },
-        "reckon.autoSupervise": {
+        "sessionSitter.autoSupervise": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "When on, every agent prompt that no auto-approve rule handles is handed to the supervisor: the transcript is exported, the action is classified into a traffic light, and the decision is applied back into the agent. Requires `reckon.supervisorStateDir`."
+          "markdownDescription": "When on, every agent prompt that no auto-approve rule handles is handed to the supervisor: the transcript is exported, the action is classified into a traffic light, and the decision is applied back into the agent. Requires `sessionSitter.supervisorStateDir`."
         },
-        "reckon.supervisorRepoPath": {
+        "sessionSitter.supervisorRepoPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Workspace root the supervisor runs against — used to locate `.env` files and as the classifier's working directory. Derived from `reckon.supervisorStateDir` (its parent) when empty."
+          "markdownDescription": "Workspace root the supervisor runs against — used to locate `.env` files and as the classifier's working directory. Derived from `sessionSitter.supervisorStateDir` (its parent) when empty."
         },
-        "reckon.dataRepoPath": {
+        "sessionSitter.dataRepoPath": {
           "type": "string",
           "default": "",
           "markdownDescription": "Absolute path to your corpus repository — the one containing `data/sessions/` (uploaded sessions) and `data/knowledge/` (the BDI tier files). Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source for supervision."
         },
-        "reckon.knowledge.user": {
+        "sessionSitter.knowledge.user": {
           "type": "string",
           "default": "",
           "markdownDescription": "Knowledge-routing `user` slug → `data/knowledge/users/<user>/bottom-line.md` (highest precedence tier)."
         },
-        "reckon.knowledge.project": {
+        "sessionSitter.knowledge.project": {
           "type": "string",
           "default": "",
           "markdownDescription": "Knowledge-routing `project` slug → `data/knowledge/projects/<project>/bottom-line.md`."
         },
-        "reckon.knowledge.team": {
+        "sessionSitter.knowledge.team": {
           "type": "string",
           "default": "",
           "markdownDescription": "Knowledge-routing `team` slug → `data/knowledge/teams/<team>/bottom-line.md` (broadest, lowest precedence tier)."
         },
-        "reckon.knowledge.registryPath": {
+        "sessionSitter.knowledge.registryPath": {
           "type": "string",
           "default": "",
           "markdownDescription": "Optional path to a knowledge **registry** markdown file. When set, the `(user, project, team)` triple is validated against its tables and the documented fallbacks apply (a user on exactly one project may omit the project; an unknown slug is an error). When empty, the three slugs above are used as given. See `knowledge/REGISTRY.example.md`."
-        },
-        "reckon.pythonPath": {
-          "type": "string",
-          "default": "python3",
-          "markdownDescription": "**Deprecated and unused** — the supervisor is TypeScript and runs in-process. Reading IBM Bob's SQLite store still uses the `python3` on your PATH (see `docs/ARCHITECTURE.md`), but that path is not configurable through this setting.",
-          "deprecationMessage": "Unused: the supervisor no longer runs a Python interpreter."
         }
       }
     }

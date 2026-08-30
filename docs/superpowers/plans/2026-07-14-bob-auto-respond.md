@@ -38,8 +38,8 @@ Facts established from Bob's bundle (`…/IBM Bob/resources/app/extensions/bob-c
 - Create: `src/AutoResponder.ts` — `AutoResponder` class (rule matching + dedup + wiring to `SessionManager`), and pure helpers `matchRule` and `messageKey`.
 - Create: `src/test/BobSender.test.ts` — tests for `pickClosureTaskManager` against mocked CDP `getProperties` shapes.
 - Create: `src/test/AutoResponder.test.ts` — tests for `matchRule`, `messageKey`, and dedup behaviour.
-- Modify: `src/extension.ts` — construct `AutoResponder`; repurpose `claudeSessionSwitcher.testBobSend` into a manual send-to-existing-session test.
-- Modify: `package.json` — add `contributes.configuration` for `claudeSessionSwitcher.autoRespond`; keep the `testBobSend` command entry.
+- Modify: `src/extension.ts` — construct `AutoResponder`; repurpose `sessionSitter.testBobSend` into a manual send-to-existing-session test.
+- Modify: `package.json` — add `contributes.configuration` for `sessionSitter.autoRespond`; keep the `testBobSend` command entry.
 
 ---
 
@@ -49,7 +49,7 @@ Facts established from Bob's bundle (`…/IBM Bob/resources/app/extensions/bob-c
 
 **Files:**
 - Create (throwaway): `src/spikeInspector.ts`
-- Modify: `src/extension.ts` (temporarily register `claudeSessionSwitcher.spikeInspectorSend`)
+- Modify: `src/extension.ts` (temporarily register `sessionSitter.spikeInspectorSend`)
 
 **Interfaces:**
 - Produces (for Task 3): a proven CDP call sequence and the closure-walk shape that `InspectorBobSender` will productionize.
@@ -71,7 +71,7 @@ export async function spikeInspectorSend(taskId: string, text: string): Promise<
   if (!api?.startTask) { return 'FAIL: no api.startTask'; }
 
   // Expose the api object so Runtime.evaluate can obtain an objectId for it.
-  (globalThis as any).__csw_bobApi = api;
+  (globalThis as any).__sessionSitter_bobApi = api;
 
   const session = new inspector.Session();
   session.connect();
@@ -83,7 +83,7 @@ export async function spikeInspectorSend(taskId: string, text: string): Promise<
 
     // 1. objectId of one of the api's closure-bearing methods.
     const fn = await post('Runtime.evaluate', {
-      expression: 'globalThis.__csw_bobApi.startTask',
+      expression: 'globalThis.__sessionSitter_bobApi.startTask',
       returnByValue: false,
     });
     const fnId = fn.result.objectId as string;
@@ -124,7 +124,7 @@ export async function spikeInspectorSend(taskId: string, text: string): Promise<
     return 'FAIL: TaskManager not found in any closure scope';
   } finally {
     session.disconnect();
-    delete (globalThis as any).__csw_bobApi;
+    delete (globalThis as any).__sessionSitter_bobApi;
   }
 }
 ```
@@ -135,7 +135,7 @@ Add inside `activate()` (near the existing `testBobSend` registration):
 
 ```ts
 context.subscriptions.push(
-  vscode.commands.registerCommand('claudeSessionSwitcher.spikeInspectorSend', async () => {
+  vscode.commands.registerCommand('sessionSitter.spikeInspectorSend', async () => {
     const { spikeInspectorSend } = await import('./spikeInspector');
     const sessions = sessionManager.getSessions()
       .filter(s => s.source === 'bob')
@@ -151,7 +151,7 @@ context.subscriptions.push(
 Add the command to `package.json` `contributes.commands`:
 
 ```json
-{ "command": "claudeSessionSwitcher.spikeInspectorSend", "title": "Claude Session Switcher: SPIKE Inspector Send", "category": "Claude Session Switcher" }
+{ "command": "sessionSitter.spikeInspectorSend", "title": "Session Sitter: SPIKE Inspector Send", "category": "Session Sitter" }
 ```
 
 - [ ] **Step 3: Compile**
@@ -163,7 +163,7 @@ Expected: no TypeScript errors.
 
 1. Package/install the extension into Bob (`vsce package` → install the `.vsix`, or run the Extension Development Host if available in Bob).
 2. Open a Bob session and note it as the most-recently-updated Bob session.
-3. Run **"Claude Session Switcher: SPIKE Inspector Send"** from the Command Palette.
+3. Run **"Session Sitter: SPIKE Inspector Send"** from the Command Palette.
 4. Observe the info message. **PASS** = `OK: sent to <taskId>` AND the text `SPIKE OK — auto-respond test` appears as a **user message in that existing session** (verify with:
    `python3 -c "import sqlite3;c=sqlite3.connect('/home/eranra/.bob/db/bob.db');[print(r) for r in c.execute(\"SELECT role,substr(data,1,60),created_at FROM messages WHERE task_id=? ORDER BY created_at DESC LIMIT 3\", ('<taskId>',))]"`)
    and Bob begins responding — **not** a brand-new empty task.
@@ -292,7 +292,7 @@ export class InspectorBobSender implements BobSender {
     const api = bobExt.isActive ? bobExt.exports : await bobExt.activate();
     if (typeof api?.startTask !== 'function') { this.log('send skipped: no api.startTask'); return; }
 
-    (globalThis as any).__csw_bobApi = api;
+    (globalThis as any).__sessionSitter_bobApi = api;
     const session = new inspector.Session();
     session.connect();
     const post = (method: string, params?: any): Promise<any> =>
@@ -300,7 +300,7 @@ export class InspectorBobSender implements BobSender {
 
     try {
       await post('Runtime.enable');
-      const fn = await post('Runtime.evaluate', { expression: 'globalThis.__csw_bobApi.startTask', returnByValue: false });
+      const fn = await post('Runtime.evaluate', { expression: 'globalThis.__sessionSitter_bobApi.startTask', returnByValue: false });
       const fnId = fn.result?.objectId;
       if (!fnId) { this.log('send failed: no objectId for api.startTask'); return; }
 
@@ -336,7 +336,7 @@ export class InspectorBobSender implements BobSender {
       this.log('send error: ' + String(err));
     } finally {
       session.disconnect();
-      delete (globalThis as any).__csw_bobApi;
+      delete (globalThis as any).__sessionSitter_bobApi;
     }
   }
 }
@@ -452,9 +452,9 @@ Under `contributes`, add:
 
 ```json
 "configuration": {
-  "title": "Claude Session Switcher",
+  "title": "Session Sitter",
   "properties": {
-    "claudeSessionSwitcher.autoRespond": {
+    "sessionSitter.autoRespond": {
       "type": "array",
       "default": [],
       "markdownDescription": "Auto-reply rules for Bob sessions. On each scan, if the latest assistant message of a Bob session matches `matchPattern` (a JavaScript regular expression), `response` is sent into that same session automatically.",
@@ -686,13 +686,13 @@ import { InspectorBobSender, type AutoRespondRule } from './BobSender';
 import { AutoResponder } from './AutoResponder';
 
 // ...inside activate(), after provider setup:
-const output = vscode.window.createOutputChannel('Claude Session Switcher');
+const output = vscode.window.createOutputChannel('Session Sitter');
 context.subscriptions.push(output);
 const log = (msg: string) => output.appendLine(`[${new Date().toISOString()}] ${msg}`);
 
 const sender = new InspectorBobSender(log);
 const getRules = (): AutoRespondRule[] =>
-  vscode.workspace.getConfiguration('claudeSessionSwitcher').get<AutoRespondRule[]>('autoRespond', []);
+  vscode.workspace.getConfiguration('sessionSitter').get<AutoRespondRule[]>('autoRespond', []);
 
 const autoResponder = new AutoResponder(sessionManager, sender, getRules, log);
 autoResponder.start();
@@ -701,11 +701,11 @@ context.subscriptions.push({ dispose: () => autoResponder.dispose() });
 
 - [ ] **Step 2: Repurpose `testBobSend` to send into the EXISTING session via the sender**
 
-Replace the body of the `claudeSessionSwitcher.testBobSend` command registration with:
+Replace the body of the `sessionSitter.testBobSend` command registration with:
 
 ```ts
 context.subscriptions.push(
-  vscode.commands.registerCommand('claudeSessionSwitcher.testBobSend', async () => {
+  vscode.commands.registerCommand('sessionSitter.testBobSend', async () => {
     const target = sessionManager.getSessions()
       .filter(s => s.source === 'bob')
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
@@ -719,7 +719,7 @@ context.subscriptions.push(
 
 - [ ] **Step 3: Remove the throwaway spike**
 
-Delete `src/spikeInspector.ts`, remove the `claudeSessionSwitcher.spikeInspectorSend` command registration from `src/extension.ts`, and remove its entry from `package.json` `contributes.commands`.
+Delete `src/spikeInspector.ts`, remove the `sessionSitter.spikeInspectorSend` command registration from `src/extension.ts`, and remove its entry from `package.json` `contributes.commands`.
 
 Run: `rm src/spikeInspector.ts`
 
@@ -733,12 +733,12 @@ Expected: no errors; all tests pass.
 1. Install the built extension into Bob.
 2. Set a rule in settings, e.g.:
    ```json
-   "claudeSessionSwitcher.autoRespond": [
+   "sessionSitter.autoRespond": [
      { "matchPattern": "Do you want to continue", "response": "yes", "source": "bob" }
    ]
    ```
 3. In a Bob session, get Bob to emit a message containing "Do you want to continue".
-4. Within ~5 s (one scan cycle), confirm "yes" is sent into **that same session** and Bob continues. Check the "Claude Session Switcher" output channel for the `auto-respond:` and `sent to task` log lines.
+4. Within ~5 s (one scan cycle), confirm "yes" is sent into **that same session** and Bob continues. Check the "Session Sitter" output channel for the `auto-respond:` and `sent to task` log lines.
 5. Confirm it fires only once for that message (no repeat on subsequent scans).
 
 - [ ] **Step 6: Commit**

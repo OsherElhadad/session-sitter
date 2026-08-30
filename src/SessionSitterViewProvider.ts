@@ -27,8 +27,8 @@ function getNonce(): string {
   return randomBytes(16).toString('hex');
 }
 
-export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  public static readonly viewType = 'claudeSessionSwitcher.view';
+export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+  public static readonly viewType = 'sessionSitter.view';
 
   private _view?: vscode.WebviewView;
   private _viewDisposables: vscode.Disposable[] = [];
@@ -201,7 +201,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           }
           case 'openSettings': {
             void vscode.commands.executeCommand(
-              'workbench.action.openSettings', 'claudeSessionSwitcher.autoRespond');
+              'workbench.action.openSettings', 'sessionSitter.autoRespond');
             break;
           }
           case 'loadActivity': {
@@ -223,10 +223,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
             void vscode.env.clipboard.writeText(recordPath);
             break;
           }
-          case 'uploadToReckon': {
+          case 'uploadToCorpus': {
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
-            void this._uploadSessionToReckon(sessionId);
+            void this._uploadSessionToCorpus(sessionId);
             break;
           }
           case 'copyToClipboard': {
@@ -379,7 +379,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
   /** How long a probeless session (Codex / VS Code Chat) counts as active. */
   private _probelessWindowMs(): number {
-    const minutes = vscode.workspace.getConfiguration('claudeSessionSwitcher')
+    const minutes = vscode.workspace.getConfiguration('sessionSitter')
       .get<number>('probelessActiveWindowMinutes', DEFAULT_PROBELESS_ACTIVE_WINDOW_MINUTES);
     const safe = typeof minutes === 'number' && minutes >= 0
       ? minutes : DEFAULT_PROBELESS_ACTIVE_WINDOW_MINUTES;
@@ -400,7 +400,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
    *    momentarily silent (a WSL2 / inspector hiccup).
    *  - **Codex / VS Code Chat** — no extension host to ask, no liveness signal of any kind.
    *    Recency is the only honest proxy, so they count as active while updated within
-   *    `claudeSessionSwitcher.probelessActiveWindowMinutes`.
+   *    `sessionSitter.probelessActiveWindowMinutes`.
    *
    * Both partitions stay sorted by recency.
    */
@@ -464,7 +464,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     }
   }
 
-  // Called when a focus-<pid>.json file is created/changed in the session-switcher dir.
+  // Called when a focus-<pid>.json file is created/changed in the session-sitter dir.
   // Reads the request, checks freshness, calls primaryEditor.open, and deletes the file.
   async _handleFocusRequest(uri: { fsPath: string }): Promise<void> {
     try {
@@ -480,7 +480,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 
   // Watch for focus requests addressed to this window's PID and handle them.
   private _startFocusRequestWatcher(): vscode.Disposable {
-    const dir = path.join(os.homedir(), '.claude', 'session-switcher');
+    const dir = path.join(os.homedir(), '.claude', 'session-sitter');
     try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
     const pattern = new vscode.RelativePattern(
       vscode.Uri.file(dir),
@@ -511,7 +511,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     if (!owner.ipcSocket || !owner.ideCli) { return 'foreign-failed'; }
 
     try {
-      const dir = path.join(os.homedir(), '.claude', 'session-switcher');
+      const dir = path.join(os.homedir(), '.claude', 'session-sitter');
       await fs.promises.mkdir(dir, { recursive: true });
       await fs.promises.writeFile(
         path.join(dir, `focus-${owner.pid}.json`),
@@ -534,23 +534,10 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     }
   }
 
-  /**
-   * Resolve the corpus repo root for the uploader.
-   *
-   * Preferred: `reckon.dataRepoPath`. For backwards compatibility with the Python-era setup, an
-   * existing `reckon.uploadScriptPath` (which pointed at `<root>/scripts/upload_session.py`) is
-   * accepted and its repo root derived, so upgrading needs no reconfiguration.
-   */
+  /** The corpus repo root the uploader writes into (`sessionSitter.dataRepoPath`). */
   private _corpusRepoRoot(): string {
-    const config = vscode.workspace.getConfiguration('reckon');
-    const explicit = (config.get<string>('dataRepoPath') ?? '').trim();
-    if (explicit) { return explicit; }
-    const legacyScript = (config.get<string>('uploadScriptPath') ?? '').trim();
-    if (legacyScript) {
-      // <root>/scripts/upload_session.py -> <root>
-      return path.dirname(path.dirname(legacyScript));
-    }
-    return '';
+    return (vscode.workspace.getConfiguration('sessionSitter')
+      .get<string>('dataRepoPath') ?? '').trim();
   }
 
   /**
@@ -558,11 +545,11 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
    * `upload_session.py`; the uploader is TypeScript now, so there is no subprocess and no
    * Python involved.
    */
-  private async _uploadSessionToReckon(sessionId: string): Promise<void> {
+  private async _uploadSessionToCorpus(sessionId: string): Promise<void> {
     const repoRoot = this._corpusRepoRoot();
     if (!repoRoot || !fs.existsSync(repoRoot)) {
       void vscode.window.showErrorMessage(
-        'Set `reckon.dataRepoPath` to your corpus repository before uploading sessions.');
+        'Set `sessionSitter.dataRepoPath` to your corpus repository before uploading sessions.');
       return;
     }
 
@@ -634,7 +621,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${stylesUri}">
-  <title>Claude Session Switcher</title>
+  <title>Session Sitter</title>
 </head>
 <body>
   <div id="tab-bar">
@@ -650,7 +637,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     <div id="activity-panel"></div>
   </div>
   <div id="about-box" hidden>
-    <div class="about-name">Claude Session Switcher</div>
+    <div class="about-name">Session Sitter</div>
     <div class="about-version">v${BUILD_VERSION}</div>
     <div class="about-built">Built ${buildDisplay}</div>
     <button id="about-close">Close</button>

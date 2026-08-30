@@ -1,4 +1,4 @@
-# Plan: Consolidate the reckon supervision runtime into claude-session-switcher
+# Plan: Consolidate the Session Sitter supervision runtime into session-sitter
 
 Spec: [`2026-08-30-supervision-consolidation-design.md`](../specs/2026-08-30-supervision-consolidation-design.md)
 
@@ -9,11 +9,11 @@ Every step ends green: `npx tsc -p ./ --noEmit && npx vitest run && npx eslint s
 ## Phase 1 — Foundation (merge, don't overwrite)
 
 1. **`WindowRegistry.ts`** — add `openBobTaskIds?` / `openClaudeSessionIds?` to `WindowEntry`.
-   Keep `~/.claude/session-switcher/windows` (this repo's path). Tests: entries round-trip
+   Keep `~/.claude/session-sitter/windows` (this repo's path). Tests: entries round-trip
    with and without the new fields.
 2. **`SessionManager.ts`** — merge:
    - keep this repo's Codex + Chat scanners, `exportFullTranscript`, markdown renderer;
-   - restore reckon's **atomic map swap** (build local `filePaths`/`sources` maps, swap at the
+   - restore the supervision project's **atomic map swap** (build local `filePaths`/`sources` maps, swap at the
      end) so a concurrent reader never sees an emptied map mid-scan;
    - all four scanners record both `filePaths` *and* `sources` (Claude currently records
      neither source nor path atomically);
@@ -32,7 +32,7 @@ Every step ends green: `npx tsc -p ./ --noEmit && npx vitest run && npx eslint s
    `pickClosureTaskManager` so existing imports and tests keep working.
 5. `BobApprover.ts`, `ClaudeInspector.ts`, `ClaudeSender.ts`, `ClaudeApprover.ts`,
    `QuestionProbe.ts` — port as-is.
-6. `AutoResponder.ts` — reckon's superset (text + approval sweeps, Claude sweep, question
+6. `AutoResponder.ts` — the supervision project's superset (text + approval sweeps, Claude sweep, question
    guards, unhandled-prompt handoff).
 
 ## Phase 3 — Export + supervisor core
@@ -52,7 +52,7 @@ Every step ends green: `npx tsc -p ./ --noEmit && npx vitest run && npx eslint s
 11. `SupervisionService.ts` — replaces `SupervisionTrigger`: owns the in-process
     `Orchestrator`, dedupes per `requestId`, exports the transcript, classifies, then kicks
     `outbox.poll()`; runs a `poll()` timer for Telegram replies and timeouts.
-12. `SessionSwitcherViewProvider.ts` — merge: keep Codex/Chat routing + the three
+12. `SessionSitterViewProvider.ts` — merge: keep Codex/Chat routing + the three
     `copyTranscript*` handlers; add the activity feed, `openSettings`,
     `openSupervisionRecord` / `copySupervisionRecordPath` (with the `req-<hex>` path guard),
     the per-source active/history partition, and publication of open ids.
@@ -69,7 +69,7 @@ Every step ends green: `npx tsc -p ./ --noEmit && npx vitest run && npx eslint s
 17. `upload.ts` — upload / delete / list / import (Bob DB + Claude JSONL), masking before
     commit, git via `child_process`.
 18. `kbFetch.ts` + `cli.ts` — the knowledge loader CLI the kb-sitter skill calls.
-19. Wire `claudeSessionSwitcher.uploadToReckon` to `upload.ts` (no shell-out), with the
+19. Wire `sessionSitter.uploadToCorpus` to `upload.ts` (no shell-out), with the
     `uploadScriptPath` → `dataRepoPath` fallback.
 
 ## Phase 6 — Docs + knowledge assets

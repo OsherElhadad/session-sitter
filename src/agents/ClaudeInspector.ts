@@ -33,7 +33,7 @@ const MANAGER_PROBE =
 
 // Global slot used to hand Claude's `activate` function to the inspector eval
 // context (the eval context has no `require`, but our CommonJS module does).
-const GLOBAL_SLOT = '__csw_claudeActivate';
+const GLOBAL_SLOT = '__sessionSitter_claudeActivate';
 
 /**
  * Find Claude Code's exported `activate` function (minified `wdt`) from the

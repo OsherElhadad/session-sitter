@@ -251,8 +251,8 @@
               vscodeApi.postMessage({ type: 'copyTranscriptToFile', sessionId: session.sessionId });
           }},
       ]},
-      { label: 'Upload to reckon', action: function () {
-          vscodeApi.postMessage({ type: 'uploadToReckon', sessionId: session.sessionId });
+      { label: 'Upload to the corpus', action: function () {
+          vscodeApi.postMessage({ type: 'uploadToCorpus', sessionId: session.sessionId });
       }},
     ];
 
@@ -796,8 +796,8 @@
     // The hamburger menu (About + Settings…) lives in its own small module. It cannot call
     // acquireVsCodeApi() itself — only one call per webview is allowed — so it is handed a
     // postMessage function.
-    if (window.SessionSwitcherMenu) {
-      window.SessionSwitcherMenu.init({ postMessage: (msg) => vscodeApi.postMessage(msg) });
+    if (window.SessionSitterMenu) {
+      window.SessionSitterMenu.init({ postMessage: (msg) => vscodeApi.postMessage(msg) });
     }
 
     renderTabs();

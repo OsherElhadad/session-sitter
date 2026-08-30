@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Right-click any row in the AI Sessions view → **Copy transcript ▸** → **Editor** / **Clipboard** / **File**. Extracts the session's full conversation as handoff-clean markdown from any of the four sources (Claude · Bob · Codex · Chat).
+**Goal:** Right-click any row in the Session Sitter view → **Copy transcript ▸** → **Editor** / **Clipboard** / **File**. Extracts the session's full conversation as handoff-clean markdown from any of the four sources (Claude · Bob · Codex · Chat).
 
 **Architecture:** One new public method on `SessionManager` (`exportFullTranscript(sessionId)`) that dispatches to one of four per-source extractors (`_getClaudeFullTranscript`, `_getBobFullTranscript`, `_getCodexFullTranscript`, `_getChatFullTranscript`), each returning a structured `TranscriptTurn[]`. A shared `renderTranscriptAsMarkdown()` formats the turns into markdown. The webview submenu adds a `Copy transcript ▸` parent item that expands to three leaf items (each one a `postMessage` type the ViewProvider handles by calling `exportFullTranscript` and delivering to its destination). No new VS Code commands, no user config.
 
@@ -977,8 +977,8 @@ git commit -m "feat: full-transcript extractor for VS Code Chat sessions"
 ### Task 6: ViewProvider — three postMessage handlers + delivery mechanisms
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts` — three new cases in the `webview.onDidReceiveMessage` switch.
-- Modify: `src/test/SessionSwitcherViewProvider.test.ts` — new describe block for the three handlers.
+- Modify: `src/SessionSitterViewProvider.ts` — three new cases in the `webview.onDidReceiveMessage` switch.
+- Modify: `src/test/SessionSitterViewProvider.test.ts` — new describe block for the three handlers.
 
 **Interfaces:**
 - Consumes: `exportFullTranscript(sessionId)` from Tasks 1–5.
@@ -989,22 +989,22 @@ git commit -m "feat: full-transcript extractor for VS Code Chat sessions"
 
 - [ ] **Step 1: Locate the existing postMessage switch**
 
-Read the existing `webview.onDidReceiveMessage` handler in `src/SessionSwitcherViewProvider.ts`. Find the `case 'uploadToReckon':` block (added in a prior PR) — the new three cases go alongside it. Note: existing handlers use `void (async () => { ... })()` inside `case` blocks to run awaited code. Follow the same pattern.
+Read the existing `webview.onDidReceiveMessage` handler in `src/SessionSitterViewProvider.ts`. Find the `case 'uploadToCorpus':` block (added in a prior PR) — the new three cases go alongside it. Note: existing handlers use `void (async () => { ... })()` inside `case` blocks to run awaited code. Follow the same pattern.
 
 - [ ] **Step 2: Write the failing tests**
 
-Append to `src/test/SessionSwitcherViewProvider.test.ts`. Look for the existing `describe('SessionSwitcherViewProvider — upload to reckon', ...)` block for the shape of mocks (mock `vscode.env.clipboard`, mock `vscode.window.showTextDocument`, mock `vscode.window.showInformationMessage`, spy on `sessionManager.exportFullTranscript`).
+Append to `src/test/SessionSitterViewProvider.test.ts`. Look for the existing `describe('SessionSitterViewProvider — upload to the corpus', ...)` block for the shape of mocks (mock `vscode.env.clipboard`, mock `vscode.window.showTextDocument`, mock `vscode.window.showInformationMessage`, spy on `sessionManager.exportFullTranscript`).
 
 ```ts
-describe('SessionSwitcherViewProvider — copy transcript handlers', () => {
-  let vp: SessionSwitcherViewProvider;
+describe('SessionSitterViewProvider — copy transcript handlers', () => {
+  let vp: SessionSitterViewProvider;
   let ctx: FakeContext;
   let mgr: FakeSessionManager;
 
   beforeEach(() => {
     ctx = makeContext();
     mgr = new FakeSessionManager();
-    vp = new SessionSwitcherViewProvider(ctx as unknown as vscode.ExtensionContext, mgr as unknown as SessionManager);
+    vp = new SessionSitterViewProvider(ctx as unknown as vscode.ExtensionContext, mgr as unknown as SessionManager);
   });
 
   it('copyTranscriptToEditor opens an untitled markdown document with the transcript', async () => {
@@ -1061,7 +1061,7 @@ describe('SessionSwitcherViewProvider — copy transcript handlers', () => {
 The `postMessage(vp, ctx, msg)` helper simulates a webview message by calling the registered `onDidReceiveMessage` callback. If it doesn't exist in the test file, add it near `makeContext`:
 
 ```ts
-async function postMessage(vp: SessionSwitcherViewProvider, ctx: FakeContext, msg: unknown): Promise<void> {
+async function postMessage(vp: SessionSitterViewProvider, ctx: FakeContext, msg: unknown): Promise<void> {
   const webview = ctx.__lastResolvedWebview;
   if (!webview) { throw new Error('resolveWebviewView must be called first'); }
   await webview.onDidReceiveMessage.mock.calls[0][0](msg);
@@ -1091,12 +1091,12 @@ window: {
 
 - [ ] **Step 3: Run test to verify failure**
 
-Run: `npm test -- src/test/SessionSwitcherViewProvider.test.ts -t "copy transcript"`
+Run: `npm test -- src/test/SessionSitterViewProvider.test.ts -t "copy transcript"`
 Expected: FAIL — handlers don't exist yet.
 
 - [ ] **Step 4: Implement the three handlers**
 
-In `src/SessionSwitcherViewProvider.ts`, inside the `onDidReceiveMessage` switch, alongside `case 'uploadToReckon':`:
+In `src/SessionSitterViewProvider.ts`, inside the `onDidReceiveMessage` switch, alongside `case 'uploadToCorpus':`:
 
 ```ts
 case 'copyTranscriptToEditor': {
@@ -1166,7 +1166,7 @@ Expected: **122 tests** (118 + 4 new).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/test/SessionSwitcherViewProvider.test.ts
+git add src/SessionSitterViewProvider.ts src/test/SessionSitterViewProvider.test.ts
 git commit -m "feat: ViewProvider handlers for copyTranscriptToEditor/Clipboard/File"
 ```
 
@@ -1310,7 +1310,7 @@ function renderSubmenu(parentBtn, items) {
 
 - [ ] **Step 4: Add the `Copy transcript ▸` parent to the items array**
 
-In `openContextMenu`, extend the `items` array (insert before `Upload to reckon` — the copy actions belong grouped with the other Copy items):
+In `openContextMenu`, extend the `items` array (insert before `Upload to the corpus` — the copy actions belong grouped with the other Copy items):
 
 ```js
 const items = [
@@ -1322,7 +1322,7 @@ const items = [
       { label: 'To clipboard', action: function () { vscodeApi.postMessage({ type: 'copyTranscriptToClipboard', sessionId: session.sessionId }); }},
       { label: 'To file',      action: function () { vscodeApi.postMessage({ type: 'copyTranscriptToFile',     sessionId: session.sessionId }); }},
   ]},
-  { label: 'Upload to reckon', action: function () { /* existing */ } },
+  { label: 'Upload to the corpus', action: function () { /* existing */ } },
 ];
 ```
 
@@ -1381,7 +1381,7 @@ Expected: 122 tests still passing (no new tests — the DOM submenu is manually 
 
 ```bash
 git add src/webview/main.js src/webview/styles.css
-git commit -m "feat: DOM submenu utility + Copy transcript submenu in the AI Sessions right-click menu"
+git commit -m "feat: DOM submenu utility + Copy transcript submenu in the Session Sitter right-click menu"
 ```
 
 ---
@@ -1390,7 +1390,7 @@ git commit -m "feat: DOM submenu utility + Copy transcript submenu in the AI Ses
 
 **Files:**
 - Modify: `package.json` — version `0.0.8` → `0.0.9`.
-- Produce: `claude-session-switcher-0.0.9.vsix` (git-ignored artifact).
+- Produce: `session-sitter-0.0.9.vsix` (git-ignored artifact).
 
 **Interfaces:**
 - Consumes: all prior tasks.
@@ -1419,20 +1419,20 @@ Expected: 122 tests pass; 0 lint errors (1 pre-existing warning OK); tsc clean. 
 - [ ] **Step 3: Package**
 
 ```bash
-rm -f claude-session-switcher-*.vsix
+rm -f session-sitter-*.vsix
 npx --yes @vscode/vsce package
 ```
-Expected: `Packaged: /…/claude-session-switcher-0.0.9.vsix`.
+Expected: `Packaged: /…/session-sitter-0.0.9.vsix`.
 
 - [ ] **Step 4: Install**
 
 ```bash
-code --install-extension "$(pwd)/claude-session-switcher-0.0.9.vsix" --force
+code --install-extension "$(pwd)/session-sitter-0.0.9.vsix" --force
 ```
 
 - [ ] **Step 5: Reload VS Code and verify manually**
 
-Cmd+Shift+P → **Developer: Reload Window**. In the AI Sessions view:
+Cmd+Shift+P → **Developer: Reload Window**. In the Session Sitter view:
 
 - Right-click any Claude row → the menu shows a `Copy transcript ▸` row with the chevron indicator.
 - Hover the parent row for ~150 ms → the submenu opens to the right (or left, if the parent is near the viewport edge).
@@ -1460,13 +1460,13 @@ git push -u bcarmeli feat_2/copy-transcript-to-editor
 Then open the PR against `eranra:main` (this is a fork-based PR — same flow as PR #10). Compose the body from the spec's overview plus the manual-verification checklist above. Reference PR #10 in the body — if #10 has not merged yet, note that reviewers should look at it first since this branch is stacked on top:
 
 ```bash
-gh pr create --repo eranra/claude-session-switcher --base main \
+gh pr create --repo eranra/session-sitter --base main \
   --head bcarmeli:feat_2/copy-transcript-to-editor \
-  --title "feat: Copy transcript context-menu on AI Sessions view" \
+  --title "feat: Copy transcript context-menu on Session Sitter view" \
   --body "$(cat <<'EOF'
 ## Summary
 
-Right-click any row in the AI Sessions view → **Copy transcript ▸** → **To editor** / **To clipboard** / **To file**. Extracts the session's full conversation as handoff-clean markdown from any of the four sources (Claude · Bob · Codex · Chat).
+Right-click any row in the Session Sitter view → **Copy transcript ▸** → **To editor** / **To clipboard** / **To file**. Extracts the session's full conversation as handoff-clean markdown from any of the four sources (Claude · Bob · Codex · Chat).
 
 **Stacked on:** #10 (Codex + VS Code Chat session support). Review PR #10 first if it has not merged yet.
 
@@ -1475,7 +1475,7 @@ Right-click any row in the AI Sessions view → **Copy transcript ▸** → **To
 - `SessionManager.exportFullTranscript(sessionId)` — one entry-point, dispatches to per-source extractors.
 - Per-source extractors: `_getClaudeFullTranscript`, `_getBobFullTranscript`, `_getCodexFullTranscript`, `_getChatFullTranscript` — read-only, handoff-clean (tool_use / tool_result / thinking / function_call / scaffolding dropped).
 - `_renderTranscriptAsMarkdown` — shared markdown formatter.
-- Three postMessage handlers in `SessionSwitcherViewProvider` (editor / clipboard / file).
+- Three postMessage handlers in `SessionSitterViewProvider` (editor / clipboard / file).
 - DOM submenu utility in `webview/main.js` — reusable pattern for the follow-up **Send to ▸** feature.
 
 ## Non-goals (deferred to follow-up PRs)

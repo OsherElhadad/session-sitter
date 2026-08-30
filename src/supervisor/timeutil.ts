@@ -2,7 +2,7 @@
  * Small time helpers. A single `Clock` type lets tests inject controllable time
  * (essential for the Orange timeout lifecycle).
  *
- * Ported from `reckon_supervisor/timeutil.py`. All timestamps are ISO 8601 in UTC.
+ * Ported from the Python supervisor (`timeutil.py`. All timestamps are ISO 8601 in UTC.
  */
 
 export type Clock = () => Date;

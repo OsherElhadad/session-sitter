@@ -1,7 +1,7 @@
 /**
  * Build the supervision prompts handed to the classifier.
  *
- * Ported from `reckon_supervisor/prompt.py`. Three prompts: the initial classification, the
+ * Ported from the Python supervisor (`prompt.py`. Three prompts: the initial classification, the
  * interpretation of a user's reply, and the conservative timeout fallback. All wrap untrusted
  * content (session transcript, BDI knowledge, repo docs) in explicit delimiters and instruct
  * the model to treat it as data, never as instructions, and never to impersonate the user.

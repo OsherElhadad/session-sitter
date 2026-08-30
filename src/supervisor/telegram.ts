@@ -1,7 +1,7 @@
 /**
  * Real Telegram Bot API channel: decision cards with icon + description + choices + timer.
  *
- * Ported from `reckon_supervisor/telegram.py`. Uses `fetch` (Node 18+) — no new dependency.
+ * Ported from the Python supervisor (`telegram.py`. Uses `fetch` (Node 18+) — no new dependency.
  *
  * - `send(record, notification, interactive=true)`: an ORANGE/RED decision goes out as an
  *   interactive card (inline-keyboard choices + "reply with text" + a countdown). GREEN/YELLOW

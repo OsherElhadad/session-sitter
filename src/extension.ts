@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { SessionManager } from './SessionManager';
-import { SessionSwitcherViewProvider } from './SessionSwitcherViewProvider';
+import { SessionSitterViewProvider } from './SessionSitterViewProvider';
 import { InspectorBobSender, type AutoRespondRule } from './agents/BobSender';
 import { InspectorBobApprover, type PendingApproval } from './agents/BobApprover';
 import { AutoResponder } from './AutoResponder';
@@ -31,16 +31,16 @@ export function activate(context: vscode.ExtensionContext) {
   const sessionManager = new SessionManager(context);
 
   // The supervisor's state directory also feeds the panel's activity feed.
-  const supervisionCfg = () => vscode.workspace.getConfiguration('reckon');
+  const supervisionCfg = () => vscode.workspace.getConfiguration('sessionSitter');
   const stateDir = supervisionCfg().get<string>('supervisorStateDir', '');
 
   // Shared output channel for logging. Also mirror to a durable file under the state dir: in a
   // multi-window (or WSL) setup the in-memory Output channel is per-extension-host and easy to
   // read from the wrong window, so a single on-disk log is the reliable record of what each
   // window's sweep/handoff actually did. Best-effort — a failed append must never break logging.
-  const output = vscode.window.createOutputChannel('AI Sessions');
+  const output = vscode.window.createOutputChannel('Session Sitter');
   context.subscriptions.push(output);
-  const logFile = stateDir ? path.join(stateDir, 'session-switcher.log') : undefined;
+  const logFile = stateDir ? path.join(stateDir, 'session-sitter.log') : undefined;
   const log = (msg: string) => {
     const line = `[${new Date().toISOString()}] [pid:${process.pid}] ${msg}`;
     output.appendLine(line);
@@ -48,12 +48,12 @@ export function activate(context: vscode.ExtensionContext) {
       try { fs.appendFileSync(logFile, `${line}\n`); } catch { /* best-effort */ }
     }
   };
-  log(`AI Sessions activated — build v${BUILD_VERSION} @ ${BUILD_TIME}`);
+  log(`Session Sitter activated — build v${BUILD_VERSION} @ ${BUILD_TIME}`);
 
-  const provider = new SessionSwitcherViewProvider(
+  const provider = new SessionSitterViewProvider(
     context.extensionUri, sessionManager, log, stateDir);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(SessionSwitcherViewProvider.viewType, provider),
+    vscode.window.registerWebviewViewProvider(SessionSitterViewProvider.viewType, provider),
   );
 
   const sender = new InspectorBobSender(log);
@@ -69,10 +69,10 @@ export function activate(context: vscode.ExtensionContext) {
   };
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.refresh', () => {
+    vscode.commands.registerCommand('sessionSitter.refresh', () => {
       void vscode.window.showInformationMessage('Sessions update automatically.');
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.newSession', () => {
+    vscode.commands.registerCommand('sessionSitter.newSession', () => {
       // Open a fresh conversation in the current window's editor. We avoid
       // `claude-vscode.newConversation` — it only notifies already-open Claude panels and does
       // nothing when none is open. `primaryEditor.open` with no sessionId creates a new panel.
@@ -82,7 +82,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Manual test: send a message into the most-recently-active EXISTING Bob session.
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.testBobSend', async () => {
+    vscode.commands.registerCommand('sessionSitter.testBobSend', async () => {
       const target = mostRecent(sessionManager, 'bob');
       if (!target) { void vscode.window.showWarningMessage('No Bob sessions found.'); return; }
       if (!(await sender.isAvailable())) {
@@ -96,14 +96,14 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Manual test: inject a message into the running Claude session (v1 single-channel targeting).
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.testClaudeSend', async () => {
+    vscode.commands.registerCommand('sessionSitter.testClaudeSend', async () => {
       const target = mostRecent(sessionManager, 'claude');
       if (!target) { void vscode.window.showWarningMessage('No Claude sessions found.'); return; }
       if (!(await claudeSender.isAvailable())) {
         void vscode.window.showErrorMessage('Claude extension not available.');
         return;
       }
-      const result = await claudeSender.inject('Hello from AI Sessions — test Claude send');
+      const result = await claudeSender.inject('Hello from Session Sitter — test Claude send');
       const msg = `Claude send result: ${result} (target: ${target.title})`;
       if (result === 'ok') { void vscode.window.showInformationMessage(msg); }
       else { void vscode.window.showWarningMessage(msg); }
@@ -112,7 +112,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Diagnostic: install the metadata hook and list Claude's pending tool-permission prompts.
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.testClaudeListApprovals', async () => {
+    vscode.commands.registerCommand('sessionSitter.testClaudeListApprovals', async () => {
       const hook = await claudeApprover.installHook();
       const pending = await claudeApprover.listAllPending();
       const summary = pending.length
@@ -125,7 +125,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ── Read-only internals probes (debugging the agent bridges) ──────────────
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.probeClaudeOpen', async () => {
+    vscode.commands.registerCommand('sessionSitter.probeClaudeOpen', async () => {
       const state = await getOpenClaudeSessionIds(log);
       const shape = await dumpClaudeManagerShape(log);
       await openJson(
@@ -134,52 +134,52 @@ export function activate(context: vscode.ExtensionContext) {
         + '// Manager field shape (find which field holds your open session id):\n',
         shape);
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.probeClaudeInternals', async () => {
+    vscode.commands.registerCommand('sessionSitter.probeClaudeInternals', async () => {
       await openJson(
         '// Claude send + approval shape probe (read-only). Find:\n'
         + '//  - a message-inject method on a session state or one of its children\n'
         + '//  - where a pending permission request + its resolver live\n',
         await dumpClaudeSendApprovalShape(log));
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.probeBobQuestion', async () => {
+    vscode.commands.registerCommand('sessionSitter.probeBobQuestion', async () => {
       await openJson(
         '// Bob ask_followup_question shape probe (read-only). Find:\n'
         + '//  - signatureArgs: the question + options/choices INPUT schema\n'
         + '//  - requestOwnProps / approvalHandlerShape: how a selected answer resolves\n',
         await dumpBobQuestionShape(log));
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.probeBobQuestionFull', async () => {
+    vscode.commands.registerCommand('sessionSitter.probeBobQuestionFull', async () => {
       await openJson(
         '// Bob FULL approval-state probe (read-only). Use when "Probe Bob Question" returns\n'
         + '// questions:[] to locate where a live question actually lives.\n',
         await dumpBobQuestionShapeFull(log));
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.probeClaudeQuestion', async () => {
+    vscode.commands.registerCommand('sessionSitter.probeClaudeQuestion', async () => {
       await openJson(
         '// Claude AskUserQuestion shape probe (read-only). Find:\n'
         + '//  - the request type + inputs (questions/options/multiSelect)\n'
         + '//  - the deferred resolve join point + expected value shape\n',
         await dumpClaudeQuestionShape(log));
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.installClaudeQuestionHook', async () => {
+    vscode.commands.registerCommand('sessionSitter.installClaudeQuestionHook', async () => {
       const result = await installClaudeQuestionHook(log);
       void vscode.window.showInformationMessage(
         `Claude question hook: ${result}. Now trigger a NEW AskUserQuestion, then run `
         + '"Capture Claude Question".');
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.captureClaudeQuestion', async () => {
+    vscode.commands.registerCommand('sessionSitter.captureClaudeQuestion', async () => {
       await openJson(
         '// Claude AskUserQuestion capture (needs the hook installed first). Find:\n'
         + '//  - outstanding[].recorded.type / .toolName / .payload = the request + input schema\n'
         + '//  - recentRecorded[] = recently-resolved requests (answer-flow confirmation)\n',
         await captureClaudeQuestion(log));
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.installClaudeAnswerHook', async () => {
+    vscode.commands.registerCommand('sessionSitter.installClaudeAnswerHook', async () => {
       const result = await installClaudeAnswerHook(log);
       void vscode.window.showInformationMessage(
         `Claude answer hook: ${result}. Now ANSWER the question, then run "Capture Claude Answer".`);
     }),
-    vscode.commands.registerCommand('claudeSessionSwitcher.captureClaudeAnswer', async () => {
+    vscode.commands.registerCommand('sessionSitter.captureClaudeAnswer', async () => {
       await openJson(
         '// Claude AskUserQuestion answer capture (needs the answer hook installed before\n'
         + '// answering). answers[].resolvedWith = the exact value passed to deferred.resolve.\n',
@@ -230,8 +230,8 @@ export function activate(context: vscode.ExtensionContext) {
     supervision.start();
     context.subscriptions.push({ dispose: () => supervision?.dispose() });
   } else if (autoSupervise) {
-    log('supervision not started: set reckon.supervisorStateDir '
-      + '(and reckon.supervisorRepoPath if it cannot be derived from it).');
+    log('supervision not started: set sessionSitter.supervisorStateDir '
+      + '(and sessionSitter.supervisorRepoPath if it cannot be derived from it).');
   }
 
   // Export the most-recent Claude session's transcript (with its live pending approval) for the
@@ -266,7 +266,7 @@ export function activate(context: vscode.ExtensionContext) {
   // pending tool-approval prompts per configured approval rules, and hand any UNHANDLED pending
   // prompt to the supervisor (export + classify).
   const getRules = (): AutoRespondRule[] =>
-    vscode.workspace.getConfiguration('claudeSessionSwitcher')
+    vscode.workspace.getConfiguration('sessionSitter')
       .get<AutoRespondRule[]>('autoRespond', []);
 
   const autoResponder = new AutoResponder(
@@ -285,9 +285,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Manual export of a Bob session's full transcript, for classifying it by hand.
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.exportSessionForSupervision', async () => {
+    vscode.commands.registerCommand('sessionSitter.exportSessionForSupervision', async () => {
       if (!stateDir) {
-        void vscode.window.showErrorMessage('Set reckon.supervisorStateDir first.');
+        void vscode.window.showErrorMessage('Set sessionSitter.supervisorStateDir first.');
         return;
       }
       // The interrupt point is a LIVE pending approval in Bob's memory. Read it first and target
@@ -333,11 +333,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Classify the currently-blocked session on demand (useful with autoSupervise off).
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.superviseNow', async () => {
+    vscode.commands.registerCommand('sessionSitter.superviseNow', async () => {
       if (!supervision) {
         void vscode.window.showErrorMessage(
-          'Supervision is not running. Set reckon.supervisorStateDir and enable '
-          + 'reckon.autoSupervise.');
+          'Supervision is not running. Set sessionSitter.supervisorStateDir and enable '
+          + 'sessionSitter.autoSupervise.');
         return;
       }
       const pending = await approver.listAllPending();

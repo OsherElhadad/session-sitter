@@ -331,7 +331,7 @@ git commit -m "feat: add MessageExchange interface and getRecentExchanges() to S
 ### Task 2: `getSessionPreview` message handler + `#session-preview` overlay div
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
+- Modify: `src/SessionSitterViewProvider.ts`
 
 **Interfaces:**
 - Consumes: `SessionManager.getRecentExchanges(sessionId: string): Promise<MessageExchange[]>` (from Task 1)
@@ -340,7 +340,7 @@ git commit -m "feat: add MessageExchange interface and getRecentExchanges() to S
 
 ---
 
-- [ ] **Step 1: Add `MessageExchange` to the import in `SessionSwitcherViewProvider.ts`**
+- [ ] **Step 1: Add `MessageExchange` to the import in `SessionSitterViewProvider.ts`**
 
 Find the existing import at the top of the file (line 7):
 ```typescript
@@ -393,8 +393,8 @@ Expected: no errors.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts
-git commit -m "feat: wire getSessionPreview message handler in SessionSwitcherViewProvider"
+git add src/SessionSitterViewProvider.ts
+git commit -m "feat: wire getSessionPreview message handler in SessionSitterViewProvider"
 ```
 
 ---
@@ -623,7 +623,7 @@ Expected: all tests pass, no TypeScript errors.
 
 - [ ] **Step 8: Manual verification**
 
-Reload the VS Code extension (`Developer: Reload Window` or press F5 to launch Extension Development Host). Open the Claude Session Switcher panel. Verify:
+Reload the VS Code extension (`Developer: Reload Window` or press F5 to launch Extension Development Host). Open the Session Sitter panel. Verify:
 
 1. Hovering a session row for 250ms shows the floating card with project path and recent exchanges.
 2. Moving the mouse away hides the card.

@@ -1,4 +1,4 @@
-# Design: Consolidate the reckon supervision runtime into claude-session-switcher (TypeScript only)
+# Design: Consolidate the Session Sitter supervision runtime into session-sitter (TypeScript only)
 
 **Date:** 2026-08-30
 **Status:** Approved
@@ -7,15 +7,15 @@
 
 ## Goal
 
-Fold everything the `reckon` project added on top of `claude-session-switcher` back into this
+Fold everything the `session-sitter` project added on top of `session-sitter` back into this
 repository, as **one VS Code extension written entirely in TypeScript**. Nothing that ships in
 this repo is written in Python.
 
-reckon was a fork-by-copy of this extension plus:
+the private supervision project was a fork-by-copy of this extension plus:
 
 1. **TypeScript additions** — Bob/Claude inspector bridges, an approval sweep, a session
    exporter, a supervision activity feed, a supervisor outbox bridge, question probes.
-2. **A Python runtime supervisor** (`supervisor/reckon_supervisor/*.py`, ~2 600 lines) that
+2. **A Python runtime supervisor** (`supervisor/*.py`, ~2 600 lines) that
    classified a paused agent action into a traffic light, notified a human over Telegram, and
    applied the outcome back into the agent.
 3. **Python corpus tooling** — a session uploader and a secret masker.
@@ -30,11 +30,11 @@ must survive the merge**, so this is a merge, not a copy.
 ## What ships after this change
 
 ```
-claude-session-switcher/
+session-sitter/
 ├── src/
 │   ├── extension.ts                    # wires everything
 │   ├── SessionManager.ts               # 4 session sources: claude | bob | codex | chat
-│   ├── SessionSwitcherViewProvider.ts  # sidebar UI + supervision activity feed
+│   ├── SessionSitterViewProvider.ts  # sidebar UI + supervision activity feed
 │   ├── WindowRegistry.ts               # cross-window focus + open-session publication
 │   ├── AutoResponder.ts                # text rules + approval rules + supervisor handoff
 │   ├── SessionExporter.ts              # full transcript export contract
@@ -60,9 +60,9 @@ claude-session-switcher/
 
 ### Python removed, one-for-one
 
-| Removed (reckon) | Replacement (this repo) |
+| Removed (session-sitter) | Replacement (this repo) |
 |---|---|
-| `supervisor/reckon_supervisor/config.py` | `src/supervisor/config.ts` |
+| `supervisor/config.py` | `src/supervisor/config.ts` |
 | `…/models.py` | `src/supervisor/models.ts` |
 | `…/timeutil.py` | `src/supervisor/timeutil.ts` |
 | `…/schema.py` | `src/supervisor/schema.ts` |
@@ -83,7 +83,7 @@ claude-session-switcher/
 
 The one *runtime* use of `python3` that remains is the pre-existing read-only SQLite query
 against Bob's `~/.bob/db/bob.db`, inherited unchanged from this repo's `SessionManager`. It is
-not our code being ported — it is a two-line `python3 -c` shim that predates reckon. See
+not our code being ported — it is a two-line `python3 -c` shim that predates sessionSitter. See
 [Deliberately unchanged](#deliberately-unchanged).
 
 ---
@@ -92,7 +92,7 @@ not our code being ported — it is a two-line `python3 -c` shim that predates r
 
 ### D1 — The supervisor runs in-process, not as a spawned interpreter
 
-reckon spawned `python3 supervise.py run <id>` per prompt plus a long-lived
+the Python original spawned `python3 supervise.py run <id>` per prompt plus a long-lived
 `supervise.py poll --loop 1`. Once the supervisor is TypeScript there is no reason for a
 process boundary: `SupervisionService` owns an `Orchestrator` inside the extension host and
 calls `supervise()` / `poll()` directly.
@@ -102,7 +102,7 @@ calls `supervise()` / `poll()` directly.
 retried until the agent confirms them, and a crash mid-decision is recoverable. Losing the
 process boundary does not mean losing durability.
 
-**Consequence:** `reckon.pythonPath` is no longer used by supervision. It stays in the
+**Consequence:** `sessionSitter.pythonPath` is no longer used by supervision. It stays in the
 settings schema, marked deprecated, so an existing `settings.json` does not error.
 
 ### D2 — The outbox stays the delivery queue, but is kicked synchronously
@@ -117,7 +117,7 @@ returns, so an approval reaches the blocked agent in milliseconds instead of on 
 
 ### D3 — Knowledge routing is settings-first; the registry file is optional
 
-reckon resolved the `(user, project, team)` triple by parsing registry tables out of a
+the Python original resolved the `(user, project, team)` triple by parsing registry tables out of a
 `session-sitter.skill.md` that hard-coded real IBM team, project, and user slugs. Those names
 are internal and do not belong in a public repository.
 
@@ -125,17 +125,17 @@ The **mechanism** ports (`parseRegistry`, `resolveTriple`, `parseBottomLine`, ti
 team < project < user). The **data** does not:
 
 - With no registry file configured, the triple comes straight from
-  `reckon.knowledge.{user,project,team}` and no validation against a registry happens.
-- With `reckon.knowledgeRegistryPath` set, the file is parsed and the triple is validated
+  `sessionSitter.knowledge.{user,project,team}` and no validation against a registry happens.
+- With `sessionSitter.knowledgeRegistryPath` set, the file is parsed and the triple is validated
   against it exactly as before (unknown slug → hard error, single-project fallback, etc.).
 - `knowledge/REGISTRY.example.md` ships a generic registry (`alice`, `demo-project`,
   `platform`) so the parser has a documented, testable shape.
 
-Nothing from reckon's private `data/` submodule is copied.
+Nothing from the supervision project's private `data/` submodule is copied.
 
-### D4 — "Active" sessions: reckon's live-worklist rule, extended to probeless sources
+### D4 — "Active" sessions: the supervision project's live-worklist rule, extended to probeless sources
 
-reckon replaced "top 20 by recency" with an **active-only** main list (everything else goes to
+the supervision project replaced "top 20 by recency" with an **active-only** main list (everything else goes to
 History), where active = the IDE reports the session open, via Bob's `TaskManager` and
 Claude's manager, unioned across windows through `WindowRegistry`.
 
@@ -146,17 +146,17 @@ becomes per-source:
 ```
 isActive(s) =
     source has a liveness probe (bob | claude)  ->  IDE reports it open  OR  s.status !== 'idle'
-    source has no probe        (codex | chat)   ->  updatedAt within reckon.probelessActiveWindowMinutes (default 120)
+    source has no probe        (codex | chat)   ->  updatedAt within sessionSitter.probelessActiveWindowMinutes (default 120)
 ```
 
 The recency window is an honest proxy, named and configurable rather than hidden.
 
 ### D5 — The uploader loses its shell-out and its Python
 
-`reckon.uploadScriptPath` pointed at `upload_session.py`. The port makes uploading an
+`sessionSitter.uploadScriptPath` pointed at `upload_session.py`. The port makes uploading an
 in-process TypeScript call, so the extension needs the **corpus repo root**, not a script path:
 
-- New: `reckon.dataRepoPath` — absolute path to the corpus repo (contains `data/sessions/`).
+- New: `sessionSitter.dataRepoPath` — absolute path to the corpus repo (contains `data/sessions/`).
 - Backwards compatible: when `dataRepoPath` is empty and the legacy `uploadScriptPath` is set,
   the repo root is derived from it (`<root>/scripts/upload_session.py` → `<root>`). Users
   upgrading do not have to reconfigure.
@@ -164,12 +164,12 @@ in-process TypeScript call, so the extension needs the **corpus repo root**, not
 Secret masking runs before any commit, unchanged in behavior: same rule set, same
 deterministic same-shape/same-length fakes, same `MASKED` marker, same idempotency.
 
-### D6 — Identity stays claude-session-switcher
+### D6 — Identity stays session-sitter
 
-Command ids stay `claudeSessionSwitcher.*`, the view stays `claudeSessionSwitcher.view`, the
-container stays "AI Sessions", the cross-window dir stays `~/.claude/session-switcher/`. Only
-the supervision and corpus settings live under the `reckon.*` namespace — where this repo
-already put `reckon.uploadScriptPath`.
+Command ids stay `sessionSitter.*`, the view stays `sessionSitter.view`, the
+container stays "Session Sitter", the cross-window dir stays `~/.claude/session-sitter/`. Only
+the supervision and corpus settings live under the `sessionSitter.*` namespace — where this repo
+already put `sessionSitter.uploadScriptPath`.
 
 ### D7 — Ported code keeps its verified behavior, quirks included
 
@@ -213,11 +213,11 @@ failures. They port verbatim:
 - **`python3 -c` for reading `bob.db`.** Pre-existing in this repo (`SessionManager`,
   `SessionExporter`). Bob ships no Node SQLite driver; the alternatives are a native module
   (breaks VSIX portability) or bundling a WASM SQLite (~1.5 MB, new dependency). Neither is in
-  scope for "port the Python that reckon added". Documented as the single external runtime
+  scope for "port the Python that session-sitter added". Documented as the single external runtime
   dependency, with the WASM path noted as the upgrade.
 - **The inspector approach.** Reaching Bob's `TaskManager` and Claude's manager through the
   in-process V8 inspector is the only channel that reaches a prompt-blocked agent. Ported as-is.
-- **reckon's private `data/` corpus and its internal slugs.** Not copied. See D3.
+- **the supervision project's private `data/` corpus and its internal slugs.** Not copied. See D3.
 
 ---
 
@@ -249,6 +249,6 @@ Codex/Chat/transcript paths.
 
 ## Out of scope
 
-- Rewriting the corpus analyzer that authors BDI files (reckon never automated it either).
+- Rewriting the corpus analyzer that authors BDI files (session-sitter never automated it either).
 - Slack / WhatsApp channels (`MessagingChannel` stays the seam; only stub + Telegram ship).
 - Multi-channel Claude targeting (v1 single-channel limitation ports as-is).

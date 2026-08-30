@@ -1,7 +1,7 @@
 /**
  * Messaging boundary for human-in-the-loop notifications.
  *
- * Ported from `reckon_supervisor/messaging.py`. `StubChannel` writes notifications to files and
+ * Ported from the Python supervisor (`messaging.py`. `StubChannel` writes notifications to files and
  * reads simulated replies from `inbox/<requestId>.txt`, so the full Orange lifecycle is
  * exercisable with no network. `TelegramChannel` (telegram.ts) is the real channel. Correlation,
  * dedupe, and failure handling live in the orchestrator/store — not here — so they hold for

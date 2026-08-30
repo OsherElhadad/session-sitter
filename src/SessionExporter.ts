@@ -7,7 +7,7 @@ import { PendingApproval } from './agents/BobApprover';
 // This extension is the single reader of Bob/Claude sessions. It exports the full
 // transcript (tool calls + the pending approval) to STATE_DIR/history/<id>.json, which
 // the Python supervisor consumes. Keep these field names (camelCase) in sync with
-// supervisor/reckon_supervisor/transcript.py.
+// supervisor/transcript.py.
 
 export const EXPORT_SCHEMA_VERSION = '1.0';
 

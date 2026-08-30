@@ -8,7 +8,7 @@
 #   2. package     — does a real installable .vsix build, and what is in it?
 #   3. links       — does every relative link in the docs resolve?
 #   4. spellcheck  — are the docs free of typos?
-#   5. guards      — is it still TypeScript only, with no internal names?
+#   5. guards      — TypeScript only, settings consistent, one project name?
 #
 # Every job runs the SAME commands a developer runs locally, through the Makefile or
 # `ci/`. Nothing here is CI-only, so a green pipeline means `make check` was honest.
@@ -99,7 +99,7 @@ jobs:
       - name: Upload the .vsix
         uses: actions/upload-artifact@v4
         with:
-          name: claude-session-switcher-vsix
+          name: session-sitter-vsix
           path: '*.vsix'
           if-no-files-found: error
           retention-days: 14
@@ -164,3 +164,13 @@ jobs:
 
       - name: No Python source, no internal names
         run: bash ci/check-no-python.sh
+
+      # Catches the drift a rename causes: the code reading one settings namespace while
+      # package.json declares another. Nothing fails at runtime — every `config.get()` just
+      # returns its fallback — so only comparing the two sides finds it.
+      - name: Settings in code match package.json
+        run: node ci/check-settings.mjs
+
+      # The whole project carries one name. A leftover is a bug report waiting to happen.
+      - name: No leftovers of the old project names
+        run: bash ci/check-naming.sh

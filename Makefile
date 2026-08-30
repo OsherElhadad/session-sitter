@@ -1,5 +1,5 @@
 # ============================================================================
-# claude-session-switcher — one entry point for every task
+# session-sitter — one entry point for every task
 # ============================================================================
 #
 # Run `make` with no target for the list. The three you will actually use:
@@ -24,7 +24,7 @@ VSCE    ?= $(NPX) --yes @vscode/vsce@3.9.2
 CODE    ?= code
 
 VERSION := $(shell node -p "require('./package.json').version")
-VSIX    := claude-session-switcher-$(VERSION).vsix
+VSIX    := session-sitter-$(VERSION).vsix
 
 # Generated, and gitignored — so a fresh clone has no copy of it. The source imports it, which
 # means typecheck, lint AND the tests all need it to exist first. Making it a real prerequisite
@@ -39,7 +39,7 @@ BUILD_INFO := src/buildInfo.ts
 
 .PHONY: help
 help:
-	@echo "claude-session-switcher $(VERSION)"
+	@echo "session-sitter $(VERSION)"
 	@echo
 	@echo "Usage: make <target>"
 	@echo
@@ -108,6 +108,13 @@ test-file: node_modules $(BUILD_INFO) ## Run one test file: make test-file FILE=
 coverage: node_modules $(BUILD_INFO) ## Run the tests with a coverage report
 	$(NPX) vitest run --coverage
 
+.PHONY: guards
+guards: compile ## Run every CI guard: no Python, settings match, one project name
+	bash ci/check-no-python.sh
+	node ci/check-settings.mjs
+	bash ci/check-naming.sh
+	node ci/check-links.mjs
+
 .PHONY: check
 check: typecheck lint test ## compile + lint + test — the same gate CI applies
 	@echo
@@ -131,7 +138,7 @@ install: package ## Build the .vsix and install it (CODE=bobide for IBM Bob IDE)
 
 .PHONY: uninstall
 uninstall: ## Remove the installed extension
-	$(CODE) --uninstall-extension eranra.claude-session-switcher
+	$(CODE) --uninstall-extension eranra.session-sitter
 
 .PHONY: ls-package
 ls-package: compile ## List exactly what would ship inside the .vsix

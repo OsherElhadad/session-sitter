@@ -3,7 +3,7 @@
  *
  *     load transcript -> route+parse BDI -> build prompt -> classify -> validate -> act -> persist
  *
- * Ported from `reckon_supervisor/orchestrator.py`. It enforces the state machine, the
+ * Ported from the Python supervisor (`orchestrator.py`. It enforces the state machine, the
  * identity/safety rules, and the Orange timeout / Yellow fallback. It never keeps a classifier
  * alive while waiting on a human — Orange persists and returns; `poll()` resumes later
  * (idempotently, restart-safe).

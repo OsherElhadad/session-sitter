@@ -333,13 +333,13 @@ describe('AutoResponder session-scoped rules', () => {
   });
 
   it('text rule scoped by sessionPattern fires only on the matching project', async () => {
-    const rules: AutoRespondRule[] = [{ sessionPattern: 'reckon', matchPattern: 'continue', response: 'yes' }];
+    const rules: AutoRespondRule[] = [{ sessionPattern: 'session-sitter', matchPattern: 'continue', response: 'yes' }];
     const ex = { s: [{ role: 'assistant', text: 'please continue', timestamp: 'T1' }] };
     const sender = new FakeSender();
     const r = new AutoResponder(fakeManager(ex), sender, () => rules, () => {});
     await r.evaluateSession(bobSession('s', 'idle', '/home/me/other'));   // no match → no fire
     expect(sender.calls.length).toBe(0);
-    await r.evaluateSession(bobSession('s', 'idle', '/home/me/reckon/x')); // match → fires
+    await r.evaluateSession(bobSession('s', 'idle', '/home/me/session-sitter/x')); // match → fires
     expect(sender.calls.length).toBe(1);
   });
 });

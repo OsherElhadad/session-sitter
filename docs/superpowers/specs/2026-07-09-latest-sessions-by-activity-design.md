@@ -7,7 +7,7 @@
 
 Show the user's 20 most recently active sessions in the sidebar's Sessions view, mixed across Claude and Bob, sorted by `updatedAt` descending. Retire the current "active-only" filter that gates list membership behind tab-open / PID-liveness / 2-hour-recency signals. The History panel continues to exist and covers the deeper archive.
 
-Also rename the sidebar container title from **"Claude Sessions"** to **"AI Sessions"** to reflect that the view lists both Claude and Bob sessions.
+Also rename the sidebar container title from **"Claude Sessions"** to **"Session Sitter"** to reflect that the view lists both Claude and Bob sessions.
 
 ## Motivation
 
@@ -15,20 +15,20 @@ Today the Sessions view only surfaces sessions the extension classifies as "curr
 
 ## Approach
 
-Simplify `_pushSessions` and `_pushHistory` in `src/SessionSwitcherViewProvider.ts` to pure slice-and-sort operations against the full session list:
+Simplify `_pushSessions` and `_pushHistory` in `src/SessionSitterViewProvider.ts` to pure slice-and-sort operations against the full session list:
 
 - **Sessions**: all sessions, sorted by `updatedAt` desc, take the first 20.
 - **History**: same list, skip 20, take the next 50.
 
 The tab-open / PID / 2-hour signals are removed from list-membership decisions. They remain in use for `_openSessionLocal` (which uses `_openClaudeTabLabels()` to decide whether to reveal an editor tab or focus a side panel) and for `session.status`, which the webview continues to render as a green/gray dot.
 
-Rename the sidebar container title in `package.json` from `"Claude Sessions"` to `"AI Sessions"`. No other name/branding surface changes in this PR.
+Rename the sidebar container title in `package.json` from `"Claude Sessions"` to `"Session Sitter"`. No other name/branding surface changes in this PR.
 
 ## Behavior Details
 
 **Ordering.** `Array.prototype.sort` with `(a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()`. Ties broken arbitrarily (JS sort is stable in Node — order among ties matches insertion order from `SessionManager.getSessions()`).
 
-**Sessions view constant.** `const SESSIONS_LIMIT = 20;` at the top of `SessionSwitcherViewProvider.ts`. History uses the existing `.slice(0, 50)` post-skip.
+**Sessions view constant.** `const SESSIONS_LIMIT = 20;` at the top of `SessionSitterViewProvider.ts`. History uses the existing `.slice(0, 50)` post-skip.
 
 **Cross-source mixing.** Claude and Bob sessions occupy the same list. The renderer already draws a "Bob" badge next to Bob titles ([src/webview/main.js:152-156](src/webview/main.js#L152-L156)) and no badge for Claude, so no CSS or template changes are needed.
 
@@ -44,15 +44,15 @@ Rationale for accepting this: if 20 other sessions have been touched more recent
 
 ## Files Changed
 
-- `src/SessionSwitcherViewProvider.ts` — replace both `_pushSessions` and `_pushHistory` bodies with the slice-and-sort logic. Delete now-unused code paths that consulted `_openClaudeTabLabels()`, `getActiveSessionIds()`, and the 2-hour recency window for list membership. Keep `_openClaudeTabLabels()` itself — still used by `_openSessionLocal`.
+- `src/SessionSitterViewProvider.ts` — replace both `_pushSessions` and `_pushHistory` bodies with the slice-and-sort logic. Delete now-unused code paths that consulted `_openClaudeTabLabels()`, `getActiveSessionIds()`, and the 2-hour recency window for list membership. Keep `_openClaudeTabLabels()` itself — still used by `_openSessionLocal`.
 - `src/webview/main.js` — update the empty-state placeholder text.
-- `package.json` — change `contributes.viewsContainers.secondarySidebar[0].title` from `"Claude Sessions"` to `"AI Sessions"`.
-- `src/test/SessionSwitcherViewProvider.test.ts` — the existing "Bob open tab surfacing" and Copilot-flagged regression tests test filter behavior that is going away. Replace them with tests for the new slice-and-sort behavior.
+- `package.json` — change `contributes.viewsContainers.secondarySidebar[0].title` from `"Claude Sessions"` to `"Session Sitter"`.
+- `src/test/SessionSitterViewProvider.test.ts` — the existing "Bob open tab surfacing" and Copilot-flagged regression tests test filter behavior that is going away. Replace them with tests for the new slice-and-sort behavior.
 - `docs/superpowers/specs/2026-07-09-latest-sessions-by-activity-design.md` — this spec.
 
 ## Testing
 
-New unit tests in `src/test/SessionSwitcherViewProvider.test.ts`:
+New unit tests in `src/test/SessionSitterViewProvider.test.ts`:
 
 1. **`Sessions view returns top 20 across sources, sorted by updatedAt desc`** — construct 25 sessions with monotonically decreasing `updatedAt` (mixed Claude and Bob). Assert Sessions message contains exactly 20 sessionIds, in the expected order, and History contains the remaining 5.
 2. **`History skips the first 20 and caps at 50`** — construct 75 sessions. Assert Sessions has 20, History has 50 starting from index 20 through 69, dropping the last 5.

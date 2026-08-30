@@ -4,13 +4,13 @@
 
 **Goal:** When the user clicks a session that belongs to a different IDE window, jump to that window and focus the correct Claude panel there instead of opening it locally.
 
-**Architecture:** Each session switcher instance watches for a focus-request file addressed to its own PID (`~/.claude/session-switcher/focus-<pid>.json`). The clicking window identifies the foreign owner via `~/.claude/ide/*.lock` files, writes the signal file, and uses the owner's `VSCODE_IPC_HOOK_CLI` socket to bring the IDE window to the OS foreground. The target window's watcher fires, calls `claude-vscode.primaryEditor.open(sessionId)` locally, then deletes the file. If no foreign owner is found or any step fails, a warning toast is shown and nothing opens.
+**Architecture:** Each session switcher instance watches for a focus-request file addressed to its own PID (`~/.claude/session-sitter/focus-<pid>.json`). The clicking window identifies the foreign owner via `~/.claude/ide/*.lock` files, writes the signal file, and uses the owner's `VSCODE_IPC_HOOK_CLI` socket to bring the IDE window to the OS foreground. The target window's watcher fires, calls `claude-vscode.primaryEditor.open(sessionId)` locally, then deletes the file. If no foreign owner is found or any step fails, a warning toast is shown and nothing opens.
 
 **Tech Stack:** TypeScript, VS Code Extension API, Node.js `child_process.execFile`, Vitest
 
 ## Global Constraints
 
-- No new source files — changes to `src/SessionManager.ts` and `src/SessionSwitcherViewProvider.ts` only
+- No new source files — changes to `src/SessionManager.ts` and `src/SessionSitterViewProvider.ts` only
 - All tests go in `src/test/` and run with `npm test` (Vitest)
 - Compile must pass: `npm run compile`
 - `addFromHistory` handler is untouched — history sessions always open locally
@@ -201,11 +201,11 @@ git commit -m "feat: add readActiveLockFiles and getIPCSocketForPid helpers"
 
 ---
 
-### Task 2: Focus-request receiver in SessionSwitcherViewProvider.ts
+### Task 2: Focus-request receiver in SessionSitterViewProvider.ts
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
-- Create: `src/test/SessionSwitcherViewProvider.test.ts`
+- Modify: `src/SessionSitterViewProvider.ts`
+- Create: `src/test/SessionSitterViewProvider.test.ts`
 
 **Interfaces:**
 - Consumes: nothing from Task 1 (receiver is self-contained; it only calls the vscode command)
@@ -217,7 +217,7 @@ git commit -m "feat: add readActiveLockFiles and getIPCSocketForPid helpers"
 
 - [ ] **Step 1: Write failing tests for the receiver**
 
-Create `src/test/SessionSwitcherViewProvider.test.ts`:
+Create `src/test/SessionSitterViewProvider.test.ts`:
 
 ```typescript
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -272,7 +272,7 @@ vi.mock('../SessionManager', async (importOriginal) => {
 // ── child_process stub ─────────────────────────────────────────────────────────
 vi.mock('child_process', () => ({ execFile: vi.fn() }));
 
-import { SessionSwitcherViewProvider } from '../SessionSwitcherViewProvider';
+import { SessionSitterViewProvider } from '../SessionSitterViewProvider';
 import { SessionManager } from '../SessionManager';
 
 function makeProvider(sessions: import('../SessionManager').ClaudeSession[] = []) {
@@ -281,7 +281,7 @@ function makeProvider(sessions: import('../SessionManager').ClaudeSession[] = []
     onDidChangeSessions: vi.fn().mockReturnValue({ dispose: vi.fn() }),
     dispose: vi.fn(),
   } as unknown as SessionManager;
-  return new SessionSwitcherViewProvider(
+  return new SessionSitterViewProvider(
     { fsPath: '/fake' } as unknown as import('vscode').Uri,
     mockManager,
   );
@@ -364,13 +364,13 @@ describe('_handleFocusRequest', () => {
 - [ ] **Step 2: Run tests to confirm they fail**
 
 ```bash
-npm test -- SessionSwitcherViewProvider
+npm test -- SessionSitterViewProvider
 ```
 Expected: 4 failures — `_handleFocusRequest is not a function`
 
-- [ ] **Step 3: Add imports, field, constructor call, and methods to SessionSwitcherViewProvider.ts**
+- [ ] **Step 3: Add imports, field, constructor call, and methods to SessionSitterViewProvider.ts**
 
-At the top of `src/SessionSwitcherViewProvider.ts`, replace:
+At the top of `src/SessionSitterViewProvider.ts`, replace:
 ```typescript
 import * as vscode from 'vscode';
 import { randomBytes } from 'crypto';
@@ -428,7 +428,7 @@ with:
 Append these two methods immediately before `_getHtmlForWebview` (before line 218):
 
 ```typescript
-  // Called when a focus-<pid>.json file is created/changed in the session-switcher dir.
+  // Called when a focus-<pid>.json file is created/changed in the session-sitter dir.
   // Reads the request, checks freshness, calls primaryEditor.open, and deletes the file.
   async _handleFocusRequest(uri: { fsPath: string }): Promise<void> {
     try {
@@ -444,7 +444,7 @@ Append these two methods immediately before `_getHtmlForWebview` (before line 21
 
   // Watch for focus requests addressed to this window's PID and handle them.
   private _startFocusRequestWatcher(): vscode.Disposable {
-    const dir = path.join(os.homedir(), '.claude', 'session-switcher');
+    const dir = path.join(os.homedir(), '.claude', 'session-sitter');
     try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
     const pattern = new vscode.RelativePattern(
       vscode.Uri.file(dir),
@@ -460,7 +460,7 @@ Append these two methods immediately before `_getHtmlForWebview` (before line 21
 - [ ] **Step 4: Run tests to confirm they pass**
 
 ```bash
-npm test -- SessionSwitcherViewProvider
+npm test -- SessionSitterViewProvider
 ```
 Expected: 4 passing
 
@@ -474,7 +474,7 @@ Expected: no errors
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/test/SessionSwitcherViewProvider.test.ts
+git add src/SessionSitterViewProvider.ts src/test/SessionSitterViewProvider.test.ts
 git commit -m "feat: add focus-request receiver to session switcher"
 ```
 
@@ -483,8 +483,8 @@ git commit -m "feat: add focus-request receiver to session switcher"
 ### Task 3: Focus-request sender + updated switchSession handler
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
-- Modify: `src/test/SessionSwitcherViewProvider.test.ts` (append new describe blocks)
+- Modify: `src/SessionSitterViewProvider.ts`
+- Modify: `src/test/SessionSitterViewProvider.test.ts` (append new describe blocks)
 
 **Interfaces:**
 - Consumes: `readActiveLockFiles(): Promise<LockFileInfo[]>` from Task 1
@@ -494,9 +494,9 @@ git commit -m "feat: add focus-request receiver to session switcher"
 
 ---
 
-- [ ] **Step 1: Append failing tests for `_tryFocusForeignWindow` to SessionSwitcherViewProvider.test.ts**
+- [ ] **Step 1: Append failing tests for `_tryFocusForeignWindow` to SessionSitterViewProvider.test.ts**
 
-Append to the end of `src/test/SessionSwitcherViewProvider.test.ts`:
+Append to the end of `src/test/SessionSitterViewProvider.test.ts`:
 
 ```typescript
 // ── Tests: _tryFocusForeignWindow ─────────────────────────────────────────────
@@ -609,7 +609,7 @@ describe('_tryFocusForeignWindow', () => {
     const result = await provider._tryFocusForeignWindow('success-id');
 
     expect(result).toBe('focused');
-    const focusFile = path.join(tmpDir, '.claude', 'session-switcher', `focus-${foreignPid}.json`);
+    const focusFile = path.join(tmpDir, '.claude', 'session-sitter', `focus-${foreignPid}.json`);
     const written = JSON.parse(await fs.promises.readFile(focusFile, 'utf8'));
     expect(written.sessionId).toBe('success-id');
     expect(written.workspacePath).toBe('/home/user/myproject');
@@ -621,11 +621,11 @@ describe('_tryFocusForeignWindow', () => {
 - [ ] **Step 2: Run tests to confirm they fail**
 
 ```bash
-npm test -- SessionSwitcherViewProvider
+npm test -- SessionSitterViewProvider
 ```
 Expected: 6 new failures — `_tryFocusForeignWindow is not a function`
 
-- [ ] **Step 3: Implement `_tryFocusForeignWindow` in SessionSwitcherViewProvider.ts**
+- [ ] **Step 3: Implement `_tryFocusForeignWindow` in SessionSitterViewProvider.ts**
 
 Append this method immediately after `_startFocusRequestWatcher` (before `_getHtmlForWebview`):
 
@@ -649,7 +649,7 @@ Append this method immediately after `_startFocusRequestWatcher` (before `_getHt
       const ipcSocket = await getIPCSocketForPid(ownerLock.pid);
       if (!ipcSocket) { return 'foreign-failed'; }
 
-      const dir = path.join(os.homedir(), '.claude', 'session-switcher');
+      const dir = path.join(os.homedir(), '.claude', 'session-sitter');
       await fs.promises.mkdir(dir, { recursive: true });
 
       const focusFile = path.join(dir, `focus-${ownerLock.pid}.json`);
@@ -677,7 +677,7 @@ Append this method immediately after `_startFocusRequestWatcher` (before `_getHt
 
 - [ ] **Step 4: Update the `switchSession` case in `onDidReceiveMessage`**
 
-In `SessionSwitcherViewProvider.ts`, find the `switchSession` case (around line 57):
+In `SessionSitterViewProvider.ts`, find the `switchSession` case (around line 57):
 ```typescript
           case 'switchSession': {
             const sessionId = message.sessionId as string | undefined;
@@ -719,7 +719,7 @@ Expected: no errors
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/test/SessionSwitcherViewProvider.test.ts
+git add src/SessionSitterViewProvider.ts src/test/SessionSitterViewProvider.test.ts
 git commit -m "feat: jump to foreign IDE window when switching sessions"
 ```
 

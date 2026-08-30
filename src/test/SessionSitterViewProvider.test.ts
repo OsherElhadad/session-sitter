@@ -105,7 +105,7 @@ vi.mock('../WindowRegistry', async (importOriginal) => {
 vi.mock('child_process', () => ({ execFile: vi.fn() }));
 
 import * as vscode from 'vscode';
-import { SessionSwitcherViewProvider } from '../SessionSwitcherViewProvider';
+import { SessionSitterViewProvider } from '../SessionSitterViewProvider';
 import { SessionManager } from '../SessionManager';
 import { execFile } from 'child_process';
 
@@ -127,7 +127,7 @@ function makeProvider(
     dispose: vi.fn(),
     ...extra,
   } as unknown as SessionManager;
-  return new SessionSwitcherViewProvider(
+  return new SessionSitterViewProvider(
     { fsPath: '/fake' } as unknown as import('vscode').Uri,
     mockManager,
   );
@@ -395,7 +395,7 @@ describe('_openSessionLocal (Bob)', () => {
 describe('webview message: newBobSession', () => {
   beforeEach(() => { mockExecuteCommand.mockClear(); });
 
-  function resolveWebview(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
+  function resolveWebview(provider: import('../SessionSitterViewProvider').SessionSitterViewProvider) {
     const webview = {
       options: {},
       html: '',
@@ -428,7 +428,7 @@ describe('webview message: newBobSession', () => {
 describe('webview message: addFromHistory (Bob)', () => {
   beforeEach(() => { mockExecuteCommand.mockClear(); });
 
-  function resolveWebview(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
+  function resolveWebview(provider: import('../SessionSitterViewProvider').SessionSitterViewProvider) {
     const webview = {
       options: {},
       html: '',
@@ -475,7 +475,7 @@ describe('webview message: addFromHistory (Bob)', () => {
 // windows) plus a not-idle status; Codex and VS Code Chat have no such signal, so they fall back
 // to a recency window. Everything else is History.
 describe('Sessions view: active-vs-history partition', () => {
-  function resolveWebviewCapturing(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
+  function resolveWebviewCapturing(provider: import('../SessionSitterViewProvider').SessionSitterViewProvider) {
     const postMessage = vi.fn();
     const webview = {
       options: {},
@@ -658,7 +658,7 @@ describe('webview message: copy transcript handlers', () => {
     mockExecuteCommand.mockClear();
   });
 
-  function resolveWebview(provider: SessionSwitcherViewProvider) {
+  function resolveWebview(provider: SessionSitterViewProvider) {
     const webview = {
       options: {},
       html: '',

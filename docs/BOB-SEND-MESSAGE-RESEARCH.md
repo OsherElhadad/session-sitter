@@ -1,6 +1,6 @@
 # Research: Sending Messages Programmatically to IBM Bob Sessions
 
-**Goal:** From the Claude Session Switcher panel, detect a specific text pattern in the
+**Goal:** From the Session Sitter panel, detect a specific text pattern in the
 last messages of a Bob session and automatically send a configured reply into that session
 as if the user typed it — so Bob continues without manual intervention.
 
@@ -131,7 +131,7 @@ await bobApi.startTask({ workspaceFolder, mode: 'agent', content: 'Hello World',
 ```
 
 **Current status:** This is the current implementation in `src/extension.ts` as
-`claudeSessionSwitcher.testBobSend`. **Not yet tested.**
+`sessionSitter.testBobSend`. **Not yet tested.**
 
 **Limitation:** `startTask` calls `openTask({useWorkspace})` — no `taskId` — so it
 **still creates a new task** in the given workspace. It won't continue an existing
@@ -283,7 +283,7 @@ Once reliable message sending is available, the auto-respond feature works as fo
 ### Configuration (VS Code settings)
 
 ```json
-"claudeSessionSwitcher.autoRespond": [
+"sessionSitter.autoRespond": [
   {
     "matchPattern": "Do you want to continue",
     "response": "yes",
@@ -313,7 +313,7 @@ SessionManager._runScan()  (every 5 s)
 prevent re-firing the same rule on the same message. Clear when the session gets a
 new user message.
 
-**Location:** Add to `SessionSwitcherViewProvider` or a new `AutoResponder` class
+**Location:** Add to `SessionSitterViewProvider` or a new `AutoResponder` class
 that `SessionManager.onDidChangeSessions` feeds into.
 
 ---
@@ -322,10 +322,10 @@ that `SessionManager.onDidChangeSessions` feeds into.
 
 | File | Change |
 |---|---|
-| `src/extension.ts` | Added `claudeSessionSwitcher.testBobSend` command (test only) |
-| `package.json` | Registered `claudeSessionSwitcher.testBobSend` in `contributes.commands` |
+| `src/extension.ts` | Added `sessionSitter.testBobSend` command (test only) |
+| `package.json` | Registered `sessionSitter.testBobSend` in `contributes.commands` |
 
-The test command (`claudeSessionSwitcher.testBobSend`) should be **removed** once a
+The test command (`sessionSitter.testBobSend`) should be **removed** once a
 working send mechanism is confirmed. It currently calls `bobApi.startTask(…)` which
 creates a new task — useful for proving the API surface works but not the final goal.
 
@@ -333,7 +333,7 @@ creates a new task — useful for proving the API surface works but not the fina
 
 ## Next Steps
 
-1. **Test current code** — run `claudeSessionSwitcher.testBobSend` and confirm
+1. **Test current code** — run `sessionSitter.testBobSend` and confirm
    `bobApi.startTask` at least sends "Hello World" into Bob (new task is acceptable
    for now as a proof-of-concept for the API path)
 

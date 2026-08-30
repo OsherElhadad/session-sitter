@@ -8,7 +8,7 @@
 
 ## Overview
 
-Extend the Claude Session Switcher to also display and switch IBM Bob sessions in the same unified panel, interleaved with Claude sessions. Each row shows a "Bob" or "Claude" source badge so the user can tell them apart at a glance. All existing Claude features — status indicators, history, hover preview, cross-window focus, new session button — are replicated for Bob sessions.
+Extend the Session Sitter to also display and switch IBM Bob sessions in the same unified panel, interleaved with Claude sessions. Each row shows a "Bob" or "Claude" source badge so the user can tell them apart at a glance. All existing Claude features — status indicators, history, hover preview, cross-window focus, new session button — are replicated for Bob sessions.
 
 ---
 
@@ -116,7 +116,7 @@ Store the `ui_messages.json` path in `_sessionFilePaths` keyed by `sessionId`, s
 
 ---
 
-## `SessionSwitcherViewProvider` Changes
+## `SessionSitterViewProvider` Changes
 
 ### Tab detection
 
@@ -248,7 +248,7 @@ New tests in `src/test/SessionManager.test.ts`:
 - `source` is `'bob'` on all returned sessions
 - Merged scan sorts both Claude and Bob sessions by `updatedAt` descending
 
-New tests in `src/test/SessionSwitcherViewProvider.test.ts`:
+New tests in `src/test/SessionSitterViewProvider.test.ts`:
 
 - Switching a Bob session calls `bobChatView.focus`, not `claude-vscode.primaryEditor.open`
 - `newBobSession` message calls `bob-code.task.pickWorkspace`

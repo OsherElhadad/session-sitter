@@ -1,10 +1,10 @@
 /**
  * Configuration for the runtime supervisor.
  *
- * Ported from `reckon_supervisor/config.py`. Values come from (highest precedence first):
+ * Ported from the Python supervisor (`config.py`. Values come from (highest precedence first):
  * explicit overrides, the process environment, a `.env` file, then built-in defaults.
  *
- * The extension builds this from its `reckon.*` settings; the CLI builds it from the
+ * The extension builds this from its `sessionSitter.*` settings; the CLI builds it from the
  * environment + `.env`, so both drive the same orchestrator.
  */
 

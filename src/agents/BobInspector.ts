@@ -10,7 +10,7 @@ export function pickClosureTaskManager(
 }
 
 // Serializes ALL inspector access. There is one shared inspector surface in the ext-host,
-// and `callOnBobTaskManager` stashes `globalThis.__csw_bobApi` and deletes it in
+// and `callOnBobTaskManager` stashes `globalThis.__sessionSitter_bobApi` and deletes it in
 // its `finally`. Several features now drive it on independent timers (auto-reply send, the
 // approval sweep, and the supervision outbox — all every ~5s), so overlapping calls could
 // let one call's cleanup yank the shared global mid-flight of another → intermittent silent
@@ -117,7 +117,7 @@ async function callOnBobTaskManagerUnsafe(
   if (typeof api?.startTask !== 'function') { log('bob inspector: no api.startTask'); return undefined; }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).__csw_bobApi = api;
+  (globalThis as any).__sessionSitter_bobApi = api;
   const session = new inspector.Session();
   session.connect();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -127,7 +127,7 @@ async function callOnBobTaskManagerUnsafe(
 
   try {
     await post('Runtime.enable');
-    const fn = await post('Runtime.evaluate', { expression: 'globalThis.__csw_bobApi.startTask', returnByValue: false });
+    const fn = await post('Runtime.evaluate', { expression: 'globalThis.__sessionSitter_bobApi.startTask', returnByValue: false });
     const fnId = fn.result?.objectId;
     if (!fnId) { log('bob inspector: no objectId for api.startTask'); return undefined; }
 
@@ -166,6 +166,6 @@ async function callOnBobTaskManagerUnsafe(
   } finally {
     session.disconnect();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (globalThis as any).__csw_bobApi;
+    delete (globalThis as any).__sessionSitter_bobApi;
   }
 }
