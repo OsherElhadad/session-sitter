@@ -1,7 +1,7 @@
 /**
  * Deterministic pre-classification tier — decide the obvious cases WITHOUT calling a model.
  *
- * Ported from `reckon_supervisor/tiers.py`. The orchestrator calls `preClassify` before loading
+ * Ported from the Python supervisor (`tiers.py`. The orchestrator calls `preClassify` before loading
  * BDI knowledge or invoking the classifier:
  *  - GREEN → a read-only / safe non-mutating action: auto-approve it (and post a green update).
  *  - RED   → an unambiguously destructive/irreversible action: raise an interactive block.

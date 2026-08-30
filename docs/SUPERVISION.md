@@ -28,18 +28,18 @@ Supervision is off until you give it a state directory.
 ```jsonc
 {
   // Required. Where transcripts, decisions and deliveries live.
-  "reckon.supervisorStateDir": "/home/you/.ai-sessions/state",
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",
 
   // Where your BDI knowledge lives (a repo containing data/knowledge/).
-  "reckon.dataRepoPath": "/home/you/work/team-corpus",
+  "sessionSitter.dataRepoPath": "/home/you/work/team-corpus",
 
   // Which knowledge applies to you.
-  "reckon.knowledge.user": "your-slug",
-  "reckon.knowledge.project": "your-project",
-  "reckon.knowledge.team": "your-team",
+  "sessionSitter.knowledge.user": "your-slug",
+  "sessionSitter.knowledge.project": "your-project",
+  "sessionSitter.knowledge.team": "your-team",
 
   // On by default.
-  "reckon.autoSupervise": true
+  "sessionSitter.autoSupervise": true
 }
 ```
 
@@ -112,7 +112,7 @@ The supervisor is the fallback, not the first responder. A prompt that a rule ha
 reaches it — which keeps a read-only sweep from spending a model call.
 
 ```jsonc
-"claudeSessionSwitcher.autoRespond": [
+"sessionSitter.autoRespond": [
   // Approval rules: resolve a pending prompt.
   { "toolPattern": "read_file|list_files|glob|grep", "decision": "approveOnce" },
   { "toolPattern": "execute_command", "argumentPattern": "\"command\":\\s*\"git (status|diff)",
@@ -151,7 +151,7 @@ node out/supervisor/cli.js poll
 node out/supervisor/cli.js poll --loop 5
 ```
 
-Run `poll` from the CLI **only** when `reckon.autoSupervise` is off. Two pollers both calling
+Run `poll` from the CLI **only** when `sessionSitter.autoSupervise` is off. Two pollers both calling
 Telegram `getUpdates` is one consumer too many, and Telegram answers the second with
 `409 Conflict`.
 
@@ -177,16 +177,16 @@ The next poll picks it up and the full Orange lifecycle runs, offline.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| No activity at all | no state dir | set `reckon.supervisorStateDir` |
-| `supervision not started` in the log | no workspace root could be derived | set `reckon.supervisorRepoPath` |
+| No activity at all | no state dir | set `sessionSitter.supervisorStateDir` |
+| `supervision not started` in the log | no workspace root could be derived | set `sessionSitter.supervisorRepoPath` |
 | Decisions always time out | `getUpdates` is failing — usually a second consumer or a webhook | check the log for `getUpdates failed`; stop the other poller |
 | Records say `classify: … not found` | the classifier CLI is not on `PATH` | fix `SUPERVISOR_ENGINE`, or set `BOB_CLI_PATH` / `CLAUDE_CLI_PATH` |
-| `state: failed` with `knowledge:` | a slug is unknown to a **configured registry** | fix the slug, or drop `reckon.knowledge.registryPath` |
-| Decisions cite no BDI | no `reckon.knowledge.user`, or the tier files are absent | supervision still runs, just without knowledge; set the routing slugs and check `reckon.dataRepoPath` |
+| `state: failed` with `knowledge:` | a slug is unknown to a **configured registry** | fix the slug, or drop `sessionSitter.knowledge.registryPath` |
+| Decisions cite no BDI | no `sessionSitter.knowledge.user`, or the tier files are absent | supervision still runs, just without knowledge; set the routing slugs and check `sessionSitter.dataRepoPath` |
 | An approval never lands | the delivery is being retried, not lost | the `outbox/` file stays until the agent confirms; check the log for `resolve … → notfound` |
 
-Everything is logged to the **AI Sessions** output channel and mirrored to
-`<stateDir>/session-switcher.log`, which is the one to read in a multi-window setup.
+Everything is logged to the **Session Sitter** output channel and mirrored to
+`<stateDir>/session-sitter.log`, which is the one to read in a multi-window setup.
 
 ---
 

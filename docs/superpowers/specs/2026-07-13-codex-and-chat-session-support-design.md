@@ -5,12 +5,12 @@
 
 ## Goal
 
-Add two new session sources to the AI Sessions view alongside Claude and Bob:
+Add two new session sources to the Session Sitter view alongside Claude and Bob:
 
 - **Codex** — OpenAI Codex CLI (rollout files under `~/.codex/sessions/`).
 - **Chat** — VS Code's built-in Chat panel (`Ctrl+Cmd+I`), whose sessions live under each workspace's `chatSessions/` folder.
 
-Full parity with Claude/Bob: sessions appear in the top-20-by-recency view, can be previewed via the right-click **Show details**, and can be uploaded via **Upload to reckon**.
+Full parity with Claude/Bob: sessions appear in the top-20-by-recency view, can be previewed via the right-click **Show details**, and can be uploaded via **Upload to the corpus**.
 
 ## Storage layouts
 
@@ -82,13 +82,13 @@ Everything downstream (`getRecentExchanges`, `exportSessionAsJson`, view provide
   - `'chat'` → new `_getChatRecentExchanges(filePath)`: parse line 0 snapshot's `requests[]`; for each request pull the user text (`.message.text` fallback chain above) and the response text (structure differs by responder). Cap at 6.
 - Extend `exportSessionAsJson(sessionId)` similarly:
   - `'codex'` → return the raw `.jsonl` file path directly (envelope-compatible — same JSONL shape as Claude).
-  - `'chat'` → build a `.chat.json` envelope (mirroring the `.bob.json` shape from the reckon PR): `{session_id, harness: 'chat', username, created_at, title, messages[]}`. Write to a temp file with a `cleanup` fn.
+  - `'chat'` → build a `.chat.json` envelope (mirroring the `.bob.json` shape from the session-sitter PR): `{session_id, harness: 'chat', username, created_at, title, messages[]}`. Write to a temp file with a `cleanup` fn.
 - Watcher setup in `constructor`: add file watchers for
   - `~/.codex/session_index.jsonl` (create/change → refresh)
   - `~/Library/Application Support/Code/User/workspaceStorage/*/chatSessions/*.jsonl` — glob watcher, debounced 500 ms
   Same pattern as `bobDbWatcher`.
 
-### `src/SessionSwitcherViewProvider.ts`
+### `src/SessionSitterViewProvider.ts`
 
 - `_openSessionLocal(sessionId)` gains two branches:
   - `'codex'` → `vscode.commands.executeCommand('openai.chatgpt.focus')` (verify command ID against the installed OpenAI extension; fall back to opening the Codex sidebar via view container ID).
@@ -110,7 +110,7 @@ Everything downstream (`getRecentExchanges`, `exportSessionAsJson`, view provide
 ### `package.json`
 
 - Bump `version` to `0.0.7`.
-- No new commands or config settings (upload path from the reckon PR is reused).
+- No new commands or config settings (upload path from the session-sitter PR is reused).
 
 ## Behaviour details
 
@@ -125,7 +125,7 @@ Everything downstream (`getRecentExchanges`, `exportSessionAsJson`, view provide
 ## Files changed (target diff)
 
 - `src/SessionManager.ts` — most of the work (~250 lines added: two scanners + two exchange extractors + two export branches + widened type)
-- `src/SessionSwitcherViewProvider.ts` — ~30 lines (two branches in `_openSessionLocal`, two in `addFromHistory`, badges pass-through)
+- `src/SessionSitterViewProvider.ts` — ~30 lines (two branches in `_openSessionLocal`, two in `addFromHistory`, badges pass-through)
 - `src/webview/main.js` — ~40 lines (badges + preview labels)
 - `src/webview/styles.css` — ~10 lines (two badge colors)
 - `package.json` — one-line version bump
@@ -143,7 +143,7 @@ New unit tests in `src/test/SessionManager.test.ts`:
 6. `exportSessionAsJson` returns the raw jsonl path for a Codex session (no envelope needed).
 7. `exportSessionAsJson` produces a `.chat.json` temp envelope with expected keys for a Chat session and provides a working `cleanup()`.
 
-No new tests for `SessionSwitcherViewProvider` beyond re-running the existing top-20 tests (they don't distinguish source and continue to pass).
+No new tests for `SessionSitterViewProvider` beyond re-running the existing top-20 tests (they don't distinguish source and continue to pass).
 
 ## Non-goals
 

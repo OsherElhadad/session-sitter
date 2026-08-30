@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add IBM Bob task sessions to the unified Claude Session Switcher panel, interleaved with Claude sessions, with identical feature parity (status indicators, history, hover preview, cross-window focus, new session button).
+**Goal:** Add IBM Bob task sessions to the unified Session Sitter panel, interleaved with Claude sessions, with identical feature parity (status indicators, history, hover preview, cross-window focus, new session button).
 
-**Architecture:** Approach A — add `source: 'claude' | 'bob'` to `ClaudeSession`, extend `SessionManager` with a Bob-specific scanner that reads `~/.config/IBM Bob/User/globalStorage/ibm.bob-code/tasks/`, and branch on `source` in `SessionSwitcherViewProvider` and the webview for dispatch and rendering.
+**Architecture:** Approach A — add `source: 'claude' | 'bob'` to `ClaudeSession`, extend `SessionManager` with a Bob-specific scanner that reads `~/.config/IBM Bob/User/globalStorage/ibm.bob-code/tasks/`, and branch on `source` in `SessionSitterViewProvider` and the webview for dispatch and rendering.
 
 **Tech Stack:** TypeScript, VS Code extension API, vitest, vanilla JS webview
 
@@ -28,11 +28,11 @@
 | File | Change |
 |---|---|
 | `src/SessionManager.ts` | Add `source` to `ClaudeSession`; add `_scanBobSessions` + `_parseBobTaskDir`; merge both scanners; extend `getRecentExchanges` for Bob; add second watcher |
-| `src/SessionSwitcherViewProvider.ts` | Branch on `source` in `_openSessionLocal`, `addFromHistory`; add `newBobSession` handler; extend `_openClaudeTabLabels` for Bob viewType |
+| `src/SessionSitterViewProvider.ts` | Branch on `source` in `_openSessionLocal`, `addFromHistory`; add `newBobSession` handler; extend `_openClaudeTabLabels` for Bob viewType |
 | `src/webview/main.js` | Add Bob source badge; hide `×` for Bob rows; add `+B` button |
 | `src/webview/styles.css` | Add `.tab-badge--bob` style |
 | `src/test/SessionManager.test.ts` | Add Bob parsing and merged scan tests |
-| `src/test/SessionSwitcherViewProvider.test.ts` | Add Bob dispatch tests |
+| `src/test/SessionSitterViewProvider.test.ts` | Add Bob dispatch tests |
 
 ---
 
@@ -705,8 +705,8 @@ git commit -m "feat: extend getRecentExchanges for Bob ui_messages.json"
 ## Task 4: Provider dispatch — switch, new session, history, tab detection
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
-- Test: `src/test/SessionSwitcherViewProvider.test.ts`
+- Modify: `src/SessionSitterViewProvider.ts`
+- Test: `src/test/SessionSitterViewProvider.test.ts`
 
 **Interfaces:**
 - Consumes: `ClaudeSession.source: 'claude' | 'bob'` (Task 1)
@@ -714,7 +714,7 @@ git commit -m "feat: extend getRecentExchanges for Bob ui_messages.json"
 
 - [ ] **Step 1: Write failing tests**
 
-Add to `src/test/SessionSwitcherViewProvider.test.ts` at the end:
+Add to `src/test/SessionSitterViewProvider.test.ts` at the end:
 
 ```typescript
 // ── Helpers for Bob sessions ──────────────────────────────────────────────────
@@ -922,8 +922,8 @@ Expected: no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/test/SessionSwitcherViewProvider.test.ts
-git commit -m "feat: dispatch Bob session commands in SessionSwitcherViewProvider"
+git add src/SessionSitterViewProvider.ts src/test/SessionSitterViewProvider.test.ts
+git commit -m "feat: dispatch Bob session commands in SessionSitterViewProvider"
 ```
 
 ---
@@ -933,7 +933,7 @@ git commit -m "feat: dispatch Bob session commands in SessionSwitcherViewProvide
 **Files:**
 - Modify: `src/webview/main.js`
 - Modify: `src/webview/styles.css`
-- Modify: `src/SessionSwitcherViewProvider.ts` (HTML template only — adds second button)
+- Modify: `src/SessionSitterViewProvider.ts` (HTML template only — adds second button)
 
 **Interfaces:**
 - Consumes: `session.source: 'claude' | 'bob'` in webview session objects (passed through `updateSessions` / `updateHistory` messages)
@@ -1002,13 +1002,13 @@ if (session.source === 'bob') {
 }
 ```
 
-- [ ] **Step 5: Add the `+B` button to the HTML template in `SessionSwitcherViewProvider.ts`**
+- [ ] **Step 5: Add the `+B` button to the HTML template in `SessionSitterViewProvider.ts`**
 
 In `_getHtmlForWebview`, change the toolbar div:
 
 ```html
 <div id="toolbar">
-  <button id="about-btn" title="About Claude Session Switcher">&#x24D8;</button>
+  <button id="about-btn" title="About Session Sitter">&#x24D8;</button>
   <button id="new-session-btn" title="New Claude Session">+</button>
   <button id="new-bob-session-btn" title="New Bob Session">+B</button>
 </div>
@@ -1037,7 +1037,7 @@ Expected: all tests pass, no compile errors.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/webview/main.js src/webview/styles.css src/SessionSwitcherViewProvider.ts
+git add src/webview/main.js src/webview/styles.css src/SessionSitterViewProvider.ts
 git commit -m "feat: add Bob badge, hide close button for Bob sessions, add +B button"
 ```
 
@@ -1064,7 +1064,7 @@ Expected: 0 errors, 0 warnings.
 ```bash
 npx @vscode/vsce package --no-dependencies
 ```
-Expected: generates `claude-session-switcher-*.vsix` with no errors.
+Expected: generates `session-sitter-*.vsix` with no errors.
 
 - [ ] **Step 4: Final commit**
 

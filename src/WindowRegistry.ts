@@ -87,7 +87,7 @@ export function discoverOwnIpcSocket(
 const STALE_MS = 24 * 60 * 60 * 1000;
 
 export function windowsDir(homedir: string = os.homedir()): string {
-  return path.join(homedir, '.claude', 'session-switcher', 'windows');
+  return path.join(homedir, '.claude', 'session-sitter', 'windows');
 }
 
 export async function writeWindowEntry(entry: WindowEntry, homedir: string = os.homedir()): Promise<void> {

@@ -1,4 +1,4 @@
-# Architecture: Claude Session Switcher
+# Architecture: Session Sitter
 
 ## Overview
 
@@ -28,11 +28,11 @@ Two design rules shape everything below:
 ## Project Structure
 
 ```
-claude-session-switcher/
+session-sitter/
 ├── src/
 │   ├── extension.ts                    # activate() — wires everything together
 │   ├── SessionManager.ts               # the four session stores; scanning + transcripts
-│   ├── SessionSwitcherViewProvider.ts  # the sidebar webview + the activity feed
+│   ├── SessionSitterViewProvider.ts  # the sidebar webview + the activity feed
 │   ├── WindowRegistry.ts               # cross-window focus + published open-session ids
 │   ├── BobDatabase.ts                  # the one read-only SQLite shim (see below)
 │   ├── AutoResponder.ts                # text rules, approval rules, supervisor handoff
@@ -209,7 +209,7 @@ interface ClaudeSession {
 }
 ```
 
-### `SessionSwitcherViewProvider`
+### `SessionSitterViewProvider`
 
 Implements `WebviewViewProvider`. Wires `SessionManager` events and the VS Code tab API to the webview.
 
@@ -258,7 +258,7 @@ Session rows respond to `updateSessions` messages. History responds to `updateHi
 ```
 User clicks a session row
   → webview: postMessage({ type: 'switchSession', sessionId })
-  → SessionSwitcherViewProvider
+  → SessionSitterViewProvider
   → vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId)
   → Claude Code's createPanel():
       if sessionPanels.get(sessionId) exists → panel.reveal()   (same window)
@@ -433,12 +433,12 @@ that is decided depends on what each source can actually tell us:
 | **VS Code Chat** | *nothing* |
 
 For Bob and Claude the answer is read fresh from this window and unioned with what other live
-windows published to `~/.claude/session-switcher/windows/` — so the answer is cross-window. A
+windows published to `~/.claude/session-sitter/windows/` — so the answer is cross-window. A
 session is also treated as active when its status is not idle, so a session you are working in
 does not vanish because the probe was momentarily silent.
 
 Codex and Chat have no liveness signal at all, so recency is the only honest proxy: they count as
-active while updated within `claudeSessionSwitcher.probelessActiveWindowMinutes` (default 120,
+active while updated within `sessionSitter.probelessActiveWindowMinutes` (default 120,
 `0` to keep them in History always). The rule is named and configurable rather than hidden.
 
 ---

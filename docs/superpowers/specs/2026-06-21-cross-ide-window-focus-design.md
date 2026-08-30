@@ -6,7 +6,7 @@
 ## Problem
 
 Clicking a session in the switcher runs `_tryFocusForeignWindow()`
-([`SessionSwitcherViewProvider.ts`](../../../src/SessionSwitcherViewProvider.ts)).
+([`SessionSitterViewProvider.ts`](../../../src/SessionSitterViewProvider.ts)).
 That feature was designed and tested for **desktop VS Code on a local machine**.
 Under **IBM Bob** (and any remote/server IDE such as VS Code Remote-WSL/SSH), every
 assumption it makes is false, so clicking a session that belongs to a running window
@@ -61,13 +61,13 @@ to a file; peers read those files to address and focus each other.
 
 ### 1. Per-window registry
 
-Directory: `~/.claude/session-switcher/windows/`
+Directory: `~/.claude/session-sitter/windows/`
 File: `<extHostPid>.json`
 
 ```json
 {
   "pid": 1353707,
-  "workspaceFolders": ["/home/eranra/go/src/github.com/eranra/claude-session-switcher"],
+  "workspaceFolders": ["/home/eranra/go/src/github.com/eranra/session-sitter"],
   "ideCli": "bobide",
   "ipcSocket": "/run/user/1000/vscode-ipc-ce311aff-8557-4800-9501-97cc0f3a2343.sock",
   "updatedAt": 1750000000000
@@ -143,7 +143,7 @@ Talking to the owner window's own socket brings **that** window to the OS foregr
 
 ### 6. Panel / session focus within the target window
 
-Every switcher instance watches `~/.claude/session-switcher/focus-<process.pid>.json`.
+Every switcher instance watches `~/.claude/session-sitter/focus-<process.pid>.json`.
 The sender writes `focus-<owner.pid>.json` (`{ sessionId, requestedAt }`). On receive,
 within the freshness window (≤10 s), the receiver reveals the session **tab-aware**.
 
@@ -177,13 +177,13 @@ focus — they always open fresh in the editor via `primaryEditor.open(sessionId
 ```
 User clicks session X in Window A
   │
-  ├─ read ~/.claude/session-switcher/windows/*.json   (live entries only)
+  ├─ read ~/.claude/session-sitter/windows/*.json   (live entries only)
   │     → find entry whose workspaceFolders ∋ X.projectPath and pid ≠ process.pid
   │
   ├─ none found ──────────────► local: location-aware open in Window A   (done)
   │
   └─ owner = Window B (pid, ideCli, ipcSocket)
-       ├─ write ~/.claude/session-switcher/focus-<B.pid>.json { sessionId, requestedAt }
+       ├─ write ~/.claude/session-sitter/focus-<B.pid>.json { sessionId, requestedAt }
        ├─ execFile(B.ideCli, ['--reuse-window', B.workspace], { VSCODE_IPC_HOOK_CLI: B.ipcSocket })
        │     → Window B comes to the OS foreground
        └─ if B has no usable socket/cli → warning toast (cannot focus)   (done)
@@ -213,7 +213,7 @@ Window B's FileSystemWatcher fires on focus-<B.pid>.json
 - Pure, file-system-and-`/proc`-based; unit-testable with a temp dir and injectable
   `/proc` reader.
 
-### `SessionSwitcherViewProvider.ts`
+### `SessionSitterViewProvider.ts`
 - On activation: detect CLI, discover own socket, `writeWindowEntry`; start refresh timer +
   `onDidChangeWindowState` listener; `removeWindowEntry` on dispose.
 - `_findOwnerWindow(session)` — §4 (replaces lock-file matching in `_tryFocusForeignWindow`).
@@ -232,7 +232,7 @@ Window B's FileSystemWatcher fires on focus-<B.pid>.json
 | Owner window has empty `ipcSocket` (socket not yet discoverable) | Cannot raise → warning toast; refresh timer re-resolves socket for next time |
 | Multiple live windows match the same workspace | First live entry wins (documented, same as before) |
 | Stale `windows/<pid>.json` from a crashed window | Reader skips dead pid; file best-effort unlinked |
-| `~/.claude/session-switcher/windows/` missing | Created lazily on first write |
+| `~/.claude/session-sitter/windows/` missing | Created lazily on first write |
 | Owner CLI not found / `execFile` throws | `'foreign-failed'` → warning toast |
 | Non-`/proc` desktop OS | Socket via `process.env.VSCODE_IPC_HOOK_CLI`; CLI via `vscode.env.appName`/default |
 | `addFromHistory` | Unchanged — always opens locally (location-aware) |

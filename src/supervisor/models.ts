@@ -1,7 +1,7 @@
 /**
  * Typed models for the supervisor: traffic lights, assessments, and lifecycle records.
  *
- * Ported from `reckon_supervisor/models.py`. `Assessment` mirrors the structured JSON the
+ * Ported from the Python supervisor (`models.py`. `Assessment` mirrors the structured JSON the
  * classifier must return; `SupervisionRecord` is the durable lifecycle object the store
  * persists. Record field names stay **snake_case** so records written by either the Python
  * original or this port round-trip through the same JSON files, and so the activity feed's

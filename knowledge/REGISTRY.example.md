@@ -1,7 +1,7 @@
 # Knowledge registry (example)
 
 An **optional** roster of the teams, projects and users your corpus has knowledge for. Point
-`reckon.knowledge.registryPath` at a file like this one and the `(user, project, team)` triple is
+`sessionSitter.knowledge.registryPath` at a file like this one and the `(user, project, team)` triple is
 validated against it before any file is read.
 
 Without a registry the three configured slugs are used as given — which is the simpler setup, and

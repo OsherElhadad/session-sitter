@@ -1,12 +1,12 @@
-# Copy Transcript from AI Sessions Context Menu
+# Copy Transcript from Session Sitter Context Menu
 
 **Date:** 2026-07-20
 **Status:** Draft — for review
-**Stacked on:** [PR #10 — Codex + VS Code Chat session support](https://github.com/eranra/claude-session-switcher/pull/10)
+**Stacked on:** [PR #10 — Codex + VS Code Chat session support](https://github.com/eranra/session-sitter/pull/10)
 
 ## Goal
 
-Right-click any row in the AI Sessions view → **Copy transcript ▸** → **Editor** /
+Right-click any row in the Session Sitter view → **Copy transcript ▸** → **Editor** /
 **Clipboard** / **File**. Extracts the session's full conversation as
 handoff-ready markdown, from any of the four sources (Claude · Bob · Codex ·
 Chat). Nothing is written to any live session; this is read-and-export only.
@@ -153,7 +153,7 @@ helper formats them into the markdown shape shown above. Returns `null` if
 the session isn't found; returns an empty string if no exchangeable text is
 present (edge: a brand-new session with no completed turns).
 
-### `src/SessionSwitcherViewProvider.ts` — three new command handlers
+### `src/SessionSitterViewProvider.ts` — three new command handlers
 
 New commands (registered in `resolveWebviewView`):
 - `copyTranscriptToEditor` → open untitled markdown editor
@@ -239,7 +239,7 @@ verified in the same VSIX install pass we already do.
 
 - `src/SessionManager.ts` — one dispatcher + four extractors + one markdown
   renderer. ~250 lines added.
-- `src/SessionSwitcherViewProvider.ts` — three command handlers. ~60 lines
+- `src/SessionSitterViewProvider.ts` — three command handlers. ~60 lines
   added.
 - `src/webview/main.js` — submenu utility + one parent item + three postMessage
   wiring cases. ~90 lines added.

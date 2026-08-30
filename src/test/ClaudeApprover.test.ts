@@ -54,7 +54,7 @@ describe('buildQuestionResolveFn', () => {
     expect(fn).toContain('allow');
     expect(fn).toContain('answers');
     expect(fn).toContain('"Pick"');                        // the answers map is embedded
-    expect(fn).toContain('__csw_claudePerms');   // reads captured inputs
+    expect(fn).toContain('__sessionSitter_claudePerms');   // reads captured inputs
     expect(fn).toContain('cancel_request');                // dismisses the orphaned card
     expect(fn).toContain('.resolve(payload)');
   });

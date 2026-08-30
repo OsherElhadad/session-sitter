@@ -84,7 +84,7 @@ describe('CLAUDE_ANSWER_HOOK_INSTALL_FN', () => {
 
 describe('CLAUDE_ANSWER_CAPTURE_FN', () => {
   it('dumps the recorded answers map read-only', () => {
-    expect(CLAUDE_ANSWER_CAPTURE_FN).toContain('__csw_claudeAnswers');
+    expect(CLAUDE_ANSWER_CAPTURE_FN).toContain('__sessionSitter_claudeAnswers');
     expect(CLAUDE_ANSWER_CAPTURE_FN).not.toContain('.resolve(');
   });
 });

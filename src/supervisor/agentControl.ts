@@ -1,7 +1,7 @@
 /**
  * Deliver supervisor guidance back to the coding agent.
  *
- * Ported from `reckon_supervisor/agent_control.py`. The orchestrator writes a labeled delivery
+ * Ported from the Python supervisor (`agent_control.py`. The orchestrator writes a labeled delivery
  * to `<stateDir>/outbox/<deliveryId>.json`; the extension's `SupervisorOutbox` watcher reads it
  * and applies it — through the agent's approval emitter for a prompt-blocked task, or as an
  * injected chat message for an idle one. This module owns the *write* side + the outbox

@@ -8,7 +8,7 @@
 
 ## Goal
 
-From the Claude Session Switcher, detect a configured text pattern in a Bob
+From the Session Sitter, detect a configured text pattern in a Bob
 session's most recent **assistant** message and automatically send a configured
 reply **into that same existing session** — fully automatically, deduplicated so
 each rule fires at most once per message. This lets Bob continue without manual
@@ -78,7 +78,7 @@ Three decoupled units, each independently testable.
     5 s `_runScan()` loop).
   - For each `source === 'bob'` session, reads recent exchanges and takes the
     latest **assistant** message.
-  - Matches its text against each rule in `claudeSessionSwitcher.autoRespond`
+  - Matches its text against each rule in `sessionSitter.autoRespond`
     (`{matchPattern, response, source}`); `matchPattern` is a JS regex string.
   - **Dedup:** `Map<sessionId, string>` of the last-fired message key (message
     `created_at`/id). Fire only when the matched message key differs from the
@@ -117,7 +117,7 @@ interface BobSender {
 
 - `package.json` → `contributes.configuration`:
   ```json
-  "claudeSessionSwitcher.autoRespond": {
+  "sessionSitter.autoRespond": {
     "type": "array",
     "items": { "type": "object",
       "properties": {
@@ -130,7 +130,7 @@ interface BobSender {
   ```
 - `extension.ts` constructs `AutoResponder` with the selected `BobSender` and pushes
   it to `context.subscriptions`.
-- The existing `claudeSessionSwitcher.testBobSend` command is **repurposed** into a
+- The existing `sessionSitter.testBobSend` command is **repurposed** into a
   manual "send to *this existing* session" test that exercises the chosen sender
   (replacing the current `startTask` new-task test). Removed once auto-respond is
   confirmed.
@@ -191,7 +191,7 @@ _runScan() every 5 s
 ## Spike results (2026-07-14)
 
 - **Spike A — `InspectorBobSender`: PASS.** Built the throwaway
-  `claudeSessionSwitcher.spikeInspectorSend` command, installed the extension into
+  `sessionSitter.spikeInspectorSend` command, installed the extension into
   the live Bob, and ran it. Result toast: `[spike] OK: sent to 2349128589afc99…`.
   The message `SPIKE OK — auto-respond test` appeared as a **user message in the
   existing conversation** (not a new task) and Bob began responding. Confirms:

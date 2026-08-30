@@ -1,4 +1,4 @@
-// Toolbar hamburger menu + about box for the AI Sessions webview.
+// Toolbar hamburger menu + about box for the Session Sitter webview.
 // Loaded as its own classic <script> before main.js. It only DEFINES a factory
 // on window and does nothing until init() is called — main.js owns the single
 // acquireVsCodeApi() and passes in a postMessage function.
@@ -81,5 +81,5 @@
     });
   }
 
-  window.SessionSwitcherMenu = { init: init };
+  window.SessionSitterMenu = { init: init };
 }());

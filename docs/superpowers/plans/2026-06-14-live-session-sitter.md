@@ -4,7 +4,7 @@
 
 **Goal:** Replace the disk-scan-driven tab bar with a user-managed `LiveSessionRegistry` so the switcher shows only the sessions the user has pinned, keeps them alive as hidden editor tabs, and correctly switches between them without opening new OS windows.
 
-**Architecture:** A new `LiveSessionRegistry` class holds an ordered list of session IDs persisted in `ExtensionContext.globalState`. `SessionSwitcherViewProvider` is rewired to drive its tab bar from the registry rather than from the full disk scan. New sessions are auto-added to the registry when a fresh JSONL file is detected within 60 s of creation. A collapsible history panel in the webview lets users add any past session.
+**Architecture:** A new `LiveSessionRegistry` class holds an ordered list of session IDs persisted in `ExtensionContext.globalState`. `SessionSitterViewProvider` is rewired to drive its tab bar from the registry rather than from the full disk scan. New sessions are auto-added to the registry when a fresh JSONL file is detected within 60 s of creation. A collapsible history panel in the webview lets users add any past session.
 
 **Tech Stack:** TypeScript, VS Code Extension API, plain HTML/CSS/JS webview, vitest for unit tests.
 
@@ -16,7 +16,7 @@
 |---|---|---|
 | `src/LiveSessionRegistry.ts` | **Create** | Ordered session ID list; globalState persistence; onDidChange event |
 | `src/test/LiveSessionRegistry.test.ts` | **Create** | Unit tests for registry logic |
-| `src/SessionSwitcherViewProvider.ts` | **Modify** | Accept registry; drive tabs from it; handle history messages |
+| `src/SessionSitterViewProvider.ts` | **Modify** | Accept registry; drive tabs from it; handle history messages |
 | `src/extension.ts` | **Modify** | Instantiate registry; wire auto-add on new JSONL creation |
 | `src/webview/main.js` | **Modify** | History panel toggle; updateHistory handler; addFromHistory message |
 | `src/webview/styles.css` | **Modify** | History panel styles |
@@ -355,7 +355,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { SessionManager } from './SessionManager';
-import { SessionSwitcherViewProvider } from './SessionSwitcherViewProvider';
+import { SessionSitterViewProvider } from './SessionSitterViewProvider';
 import { LiveSessionRegistry } from './LiveSessionRegistry';
 
 const NEW_SESSION_WINDOW_MS = 60_000; // auto-add JSONL files created within this window
@@ -367,7 +367,7 @@ export function activate(context: vscode.ExtensionContext) {
   const registry = new LiveSessionRegistry(context.globalState);
   context.subscriptions.push(registry);
 
-  const provider = new SessionSwitcherViewProvider(
+  const provider = new SessionSitterViewProvider(
     context.extensionUri,
     sessionManager,
     registry,
@@ -375,7 +375,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
-      SessionSwitcherViewProvider.viewType,
+      SessionSitterViewProvider.viewType,
       provider,
     )
   );
@@ -402,13 +402,13 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.refresh', () => {
+    vscode.commands.registerCommand('sessionSitter.refresh', () => {
       void vscode.window.showInformationMessage('Claude sessions update automatically.');
     })
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeSessionSwitcher.newSession', () => {
+    vscode.commands.registerCommand('sessionSitter.newSession', () => {
       void vscode.commands.executeCommand('claude-vscode.newConversation');
     })
   );
@@ -425,7 +425,7 @@ export function deactivate() {}
 npm run compile
 ```
 
-Expected: compiler error on `SessionSwitcherViewProvider` because it doesn't yet accept a third argument. That is expected — it will be fixed in Task 4.
+Expected: compiler error on `SessionSitterViewProvider` because it doesn't yet accept a third argument. That is expected — it will be fixed in Task 4.
 
 - [ ] **Step 4: Commit (with compile error intentionally noted)**
 
@@ -436,14 +436,14 @@ git commit -m "feat: wire LiveSessionRegistry in extension activate"
 
 ---
 
-## Task 4: Update SessionSwitcherViewProvider
+## Task 4: Update SessionSitterViewProvider
 
 Replace `_removedSessionIds` with registry-based tab list. Handle new webview messages.
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
+- Modify: `src/SessionSitterViewProvider.ts`
 
-- [ ] **Step 1: Replace SessionSwitcherViewProvider.ts**
+- [ ] **Step 1: Replace SessionSitterViewProvider.ts**
 
 ```typescript
 import * as vscode from 'vscode';
@@ -455,8 +455,8 @@ function getNonce(): string {
   return randomBytes(16).toString('hex');
 }
 
-export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  public static readonly viewType = 'claudeSessionSwitcher.view';
+export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+  public static readonly viewType = 'sessionSitter.view';
 
   private _view?: vscode.WebviewView;
   private _viewDisposables: vscode.Disposable[] = [];
@@ -599,7 +599,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <link rel="stylesheet" href="${stylesUri}">
-  <title>Claude Session Switcher</title>
+  <title>Session Sitter</title>
 </head>
 <body>
   <div id="tab-bar">
@@ -634,8 +634,8 @@ Expected: `14 passed`.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts
-git commit -m "feat: wire SessionSwitcherViewProvider to LiveSessionRegistry"
+git add src/SessionSitterViewProvider.ts
+git commit -m "feat: wire SessionSitterViewProvider to LiveSessionRegistry"
 ```
 
 ---
@@ -1039,7 +1039,7 @@ npx @vscode/vsce --version 2>/dev/null || npm install -g @vscode/vsce
 npx @vscode/vsce package --no-dependencies
 ```
 
-Expected: produces `claude-session-switcher-0.0.1.vsix`.
+Expected: produces `session-sitter-0.0.1.vsix`.
 
 - [ ] **Step 3: Install in VS Code**
 

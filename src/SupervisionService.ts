@@ -9,7 +9,7 @@ import { SupervisionRecord } from './supervisor/models';
 /**
  * Drives the runtime supervisor **in-process**.
  *
- * This replaces reckon's `SupervisionTrigger`, which spawned `python3 supervise.py run <id>` per
+ * This replaces the supervision project's `SupervisionTrigger`, which spawned `python3 supervise.py run <id>` per
  * blocked prompt plus a long-lived `supervise.py poll --loop 1`. The supervisor is TypeScript
  * now, so there is no reason for a process boundary: this owns an `Orchestrator` directly.
  *
@@ -92,7 +92,7 @@ export class SupervisionService {
 
   start(): void {
     if (!this.cfg.enabled) {
-      this.log('supervision disabled (claudeSessionSwitcher.autoSupervise=false)');
+      this.log('supervision disabled (sessionSitter.autoSupervise=false)');
       return;
     }
     const cfg = this.supervisorConfig();

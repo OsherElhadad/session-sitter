@@ -47,7 +47,7 @@ async getRecentExchanges(sessionId: string): Promise<MessageExchange[]>
 - Truncates: user text to 150 chars, assistant text to 250 chars (appends `…` if cut).
 - Returns the resulting `MessageExchange[]`.
 
-### SessionSwitcherViewProvider.ts
+### SessionSitterViewProvider.ts
 
 1. Add `getSessionPreview` case to `onDidReceiveMessage`:
 
@@ -154,6 +154,6 @@ mouseleave
 | File | Change |
 |------|--------|
 | `src/SessionManager.ts` | `MessageExchange` interface, `_sessionFilePaths` map, `getRecentExchanges()` |
-| `src/SessionSwitcherViewProvider.ts` | `getSessionPreview` handler, `#session-preview` div in HTML |
+| `src/SessionSitterViewProvider.ts` | `getSessionPreview` handler, `#session-preview` div in HTML |
 | `src/webview/main.js` | hover-intent timers, `showPreview`/`hidePreview`, `sessionPreview` message handler |
 | `src/webview/styles.css` | `.session-preview` card styles |

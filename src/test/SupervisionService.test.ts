@@ -2,7 +2,7 @@
  * The in-process supervision driver: handing an unhandled prompt to the supervisor, dedupe and
  * re-arm, the outbox kick, and the self-scheduling poll loop.
  *
- * This replaces reckon's `SupervisionTrigger`, which spawned a Python interpreter per prompt.
+ * This replaces the supervision project's `SupervisionTrigger`, which spawned a Python interpreter per prompt.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';

@@ -1,7 +1,7 @@
 /**
  * Source-agnostic structured-question model + normalization.
  *
- * Ported from `reckon_supervisor/questions.py`. A Bob `ask_followup_question` and a Claude
+ * Ported from the Python supervisor (`questions.py`. A Bob `ask_followup_question` and a Claude
  * `AskUserQuestion` both collapse into a `QuestionSpec` (1..N sub-questions, each with a flat
  * option list + a multi-select flag). Bob is always a single sub-question, single-select.
  *

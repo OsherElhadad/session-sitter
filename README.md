@@ -1,9 +1,9 @@
-<h1 align="center">Claude Session Switcher</h1>
+<h1 align="center">Session Sitter</h1>
 
 <p align="center"><em>see every agent session · switch in one click · supervise what they pause on</em></p>
 
 <p align="center">
-  <a href="https://github.com/eranra/claude-session-switcher/actions/workflows/ci.yml"><img src="https://github.com/eranra/claude-session-switcher/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/eranra/session-sitter/actions/workflows/ci.yml"><img src="https://github.com/eranra/session-sitter/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/tests-602-success" alt="tests">
   <img src="https://img.shields.io/badge/TypeScript-only-3178c6?logo=typescript&logoColor=white" alt="TypeScript only">
   <img src="https://img.shields.io/badge/VS%20Code-1.65%2B-007ACC?logo=visualstudiocode&logoColor=white" alt="VS Code 1.65+">
@@ -38,8 +38,8 @@ you with a countdown. Silence is never approval. *Optional — off until you tur
 **Two commands, from source:**
 
 ```bash
-git clone https://github.com/eranra/claude-session-switcher.git
-cd claude-session-switcher
+git clone https://github.com/eranra/session-sitter.git
+cd session-sitter
 make install
 ```
 
@@ -61,10 +61,10 @@ make install CODE=code-insiders
 <details>
 <summary><strong>Installing a prebuilt .vsix (no toolchain)</strong></summary>
 
-Grab the `.vsix` from the [latest release](https://github.com/eranra/claude-session-switcher/releases/latest), then either:
+Grab the `.vsix` from the [latest release](https://github.com/eranra/session-sitter/releases/latest), then either:
 
 - **In the IDE:** Extensions panel → `···` → **Install from VSIX…**
-- **From a terminal:** `code --install-extension claude-session-switcher-*.vsix`
+- **From a terminal:** `code --install-extension session-sitter-*.vsix`
 
 Every pull request also attaches a build, under the CI run's **Artifacts** — handy for trying a
 change before it lands.
@@ -95,10 +95,16 @@ Not on the Marketplace yet, so installation is by VSIX.
 
 ---
 
+> **Upgrading from before 0.5.0?** The project was renamed, and every setting now lives under one
+> `sessionSitter.*` namespace — earlier names are no longer read. The old-to-new table is in
+> [`CHANGELOG.md`](CHANGELOG.md#050). Your supervision state directory carries over untouched.
+
+---
+
 ## First run
 
 Open the **Secondary Sidebar** — `Ctrl+Alt+B`, or **View → Secondary Side Bar**. The
-**AI Sessions** panel is there. Open a Claude or Bob session and it shows up within seconds.
+**Session Sitter** panel is there. Open a Claude or Bob session and it shows up within seconds.
 
 | I want to… | Do this |
 |---|---|
@@ -137,11 +143,11 @@ there: it classifies each action an agent pauses on and acts.
 
 ```jsonc
 {
-  "reckon.supervisorStateDir": "/home/you/.ai-sessions/state",   // required
-  "reckon.dataRepoPath": "/home/you/work/team-corpus",           // where your rules live
-  "reckon.knowledge.user": "your-slug",
-  "reckon.knowledge.project": "your-project",
-  "reckon.knowledge.team": "your-team"
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",   // required
+  "sessionSitter.dataRepoPath": "/home/you/work/team-corpus",           // where your rules live
+  "sessionSitter.knowledge.user": "your-slug",
+  "sessionSitter.knowledge.project": "your-project",
+  "sessionSitter.knowledge.team": "your-team"
 }
 ```
 
@@ -161,7 +167,7 @@ MESSAGING_CHANNEL=stub         # writes decision cards to files — try it with 
 
 **There is nothing to run.** The supervisor runs inside the extension — no daemon, no interpreter,
 no background script. Watch decisions land in the **Supervision activity** panel. Turn it off with
-`reckon.autoSupervise: false`.
+`sessionSitter.autoSupervise: false`.
 
 → [`docs/SUPERVISION.md`](docs/SUPERVISION.md) for the lifecycle, the CLI, and troubleshooting.
 
@@ -170,7 +176,7 @@ no background script. Watch decisions land in the **Supervision activity** panel
 Prompts you never want to see again are resolved by rule, before any model call:
 
 ```jsonc
-"claudeSessionSwitcher.autoRespond": [
+"sessionSitter.autoRespond": [
   { "toolPattern": "read_file|list_files|glob|grep", "decision": "approveOnce" },
   { "matchPattern": "Do you want to continue\\?", "response": "Yes" }
 ]
@@ -261,7 +267,7 @@ the full gate, and publishes the `.vsix` to a GitHub Release.
 - **Bob cannot report which task is open in its sidebar**, so a running task plus a recency window
   is the best available signal.
 - **Codex and Chat have no liveness signal at all** — recency is the proxy
-  (`claudeSessionSwitcher.probelessActiveWindowMinutes`).
+  (`sessionSitter.probelessActiveWindowMinutes`).
 - **`python3` is required for Bob sessions** — a VS Code extension has no SQLite driver, and a
   native module would break VSIX portability. Confined to one file, read-only.
   → [why](docs/ARCHITECTURE.md#why-one-python3-call-remains)

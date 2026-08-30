@@ -95,9 +95,9 @@ Supervision needs one `(user, project, team)` triple. There are two ways to get 
 ### Settings-driven (the default)
 
 ```jsonc
-"reckon.knowledge.user": "your-slug",
-"reckon.knowledge.project": "your-project",
-"reckon.knowledge.team": "your-team"
+"sessionSitter.knowledge.user": "your-slug",
+"sessionSitter.knowledge.project": "your-project",
+"sessionSitter.knowledge.team": "your-team"
 ```
 
 The three slugs are used as given. A slug you leave empty means that tier is simply not
@@ -106,7 +106,7 @@ no wrong slug is ever substituted.
 
 ### Registry-driven (optional)
 
-Point `reckon.knowledge.registryPath` at a markdown file with the roster, and the triple is
+Point `sessionSitter.knowledge.registryPath` at a markdown file with the roster, and the triple is
 validated against it:
 
 - **project omitted** and the user is on exactly one project → that project is used.
@@ -128,7 +128,7 @@ rather than silently route to a file that does not exist.
 
 In precedence order:
 
-1. `reckon.dataRepoPath` — a local checkout. Offline, instant, and it picks up uncommitted edits.
+1. `sessionSitter.dataRepoPath` — a local checkout. Offline, instant, and it picks up uncommitted edits.
 2. `KNOWLEDGE_REPO` (git URL) + `KNOWLEDGE_REF` — shallow-cloned per load, so what is read is
    what is committed.
 

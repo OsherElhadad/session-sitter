@@ -4,10 +4,23 @@ Three places, by design: **VS Code settings** for what is per-user and harmless,
 **environment** for credentials and runtime choices, and **CLI flags** for one-off runs.
 
 Nothing here is required to use the session switcher. Supervision needs
-`reckon.supervisorStateDir`; everything else has a default.
+`sessionSitter.supervisorStateDir`; everything else has a default.
 
 On a remote setup (WSL, SSH, Bob IDE) put the settings in your **user** settings — they are read
 from the client machine.
+
+---
+
+## Upgrading to 0.5.0
+
+The project became **Session Sitter** in 0.5.0, and every setting moved into one `sessionSitter.*`
+namespace. The previous names are **not** read, so an existing configuration needs renaming — a
+stale key is silently ignored, which looks like the feature simply not working.
+
+The full old-to-new table, plus the two paths that moved on disk, is in
+[`CHANGELOG.md`](../CHANGELOG.md#050). Supervision state carries over untouched: point
+`sessionSitter.supervisorStateDir` at the same directory and pending decisions resume with their
+deadlines intact.
 
 ---
 
@@ -17,26 +30,26 @@ from the client machine.
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `claudeSessionSwitcher.autoRespond` | `[]` | Auto-reply and auto-approve rules. See [below](#auto-respond-rules). |
-| `claudeSessionSwitcher.probelessActiveWindowMinutes` | `120` | How recently a **Codex** or **VS Code Chat** session must have been updated to count as active. Those sources expose no live-process signal, so recency is the only proxy; Claude and Bob are judged by what their extension hosts report as open. `0` keeps them in History always. |
+| `sessionSitter.autoRespond` | `[]` | Auto-reply and auto-approve rules. See [below](#auto-respond-rules). |
+| `sessionSitter.probelessActiveWindowMinutes` | `120` | How recently a **Codex** or **VS Code Chat** session must have been updated to count as active. Those sources expose no live-process signal, so recency is the only proxy; Claude and Bob are judged by what their extension hosts report as open. `0` keeps them in History always. |
 
 ### Supervision
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `reckon.supervisorStateDir` | `""` | **Required to enable supervision.** Holds `history/`, `records/`, `outbox/`, `inbox/`, `notifications/`, `locks/`. |
-| `reckon.autoSupervise` | `true` | Hand every prompt no rule handled to the supervisor, and poll for replies and timeouts. |
-| `reckon.supervisorRepoPath` | `""` | Workspace root: where `.env` is read from and the classifier's working directory. Derived from the state dir's parent when empty. |
+| `sessionSitter.supervisorStateDir` | `""` | **Required to enable supervision.** Holds `history/`, `records/`, `outbox/`, `inbox/`, `notifications/`, `locks/`. |
+| `sessionSitter.autoSupervise` | `true` | Hand every prompt no rule handled to the supervisor, and poll for replies and timeouts. |
+| `sessionSitter.supervisorRepoPath` | `""` | Workspace root: where `.env` is read from and the classifier's working directory. Derived from the state dir's parent when empty. |
 
 ### Knowledge
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `reckon.dataRepoPath` | `""` | Corpus repo root — contains `data/sessions/` and `data/knowledge/`. Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source. |
-| `reckon.knowledge.user` | `""` | Routes to `data/knowledge/users/<user>/bottom-line.md` — highest precedence tier. |
-| `reckon.knowledge.project` | `""` | Routes to `data/knowledge/projects/<project>/bottom-line.md`. |
-| `reckon.knowledge.team` | `""` | Routes to `data/knowledge/teams/<team>/bottom-line.md` — lowest precedence. |
-| `reckon.knowledge.registryPath` | `""` | Optional registry markdown. When set the triple is validated against it and the documented fallbacks apply; when empty the three slugs are used as given. See [`KNOWLEDGE.md`](KNOWLEDGE.md#routing-which-files-apply-to-this-session). |
+| `sessionSitter.dataRepoPath` | `""` | Corpus repo root — contains `data/sessions/` and `data/knowledge/`. Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source. |
+| `sessionSitter.knowledge.user` | `""` | Routes to `data/knowledge/users/<user>/bottom-line.md` — highest precedence tier. |
+| `sessionSitter.knowledge.project` | `""` | Routes to `data/knowledge/projects/<project>/bottom-line.md`. |
+| `sessionSitter.knowledge.team` | `""` | Routes to `data/knowledge/teams/<team>/bottom-line.md` — lowest precedence. |
+| `sessionSitter.knowledge.registryPath` | `""` | Optional registry markdown. When set the triple is validated against it and the documented fallbacks apply; when empty the three slugs are used as given. See [`KNOWLEDGE.md`](KNOWLEDGE.md#routing-which-files-apply-to-this-session). |
 
 A slug left empty means that tier is not configured: its file is reported missing and the others
 still load. With **no** user configured at all, supervision still runs — the classifier judges the
@@ -47,8 +60,8 @@ the agent is blocked on it. Nothing is ever guessed.
 
 | Setting | Status |
 |---|---|
-| `reckon.uploadScriptPath` | **Deprecated.** The uploader is built in. Still read as a fallback: when `reckon.dataRepoPath` is empty, the corpus root is derived from this path, so an existing setup keeps working. Set `reckon.dataRepoPath` instead. |
-| `reckon.pythonPath` | **Deprecated and unused.** The supervisor is TypeScript and runs in-process. Reading Bob's SQLite store still uses the `python3` on your `PATH`, but that is not configurable here — see [`ARCHITECTURE.md`](ARCHITECTURE.md#why-one-python3-call-remains). |
+| `sessionSitter.uploadScriptPath` | **Deprecated.** The uploader is built in. Still read as a fallback: when `sessionSitter.dataRepoPath` is empty, the corpus root is derived from this path, so an existing setup keeps working. Set `sessionSitter.dataRepoPath` instead. |
+| `sessionSitter.pythonPath` | **Deprecated and unused.** The supervisor is TypeScript and runs in-process. Reading Bob's SQLite store still uses the `python3` on your `PATH`, but that is not configurable here — see [`ARCHITECTURE.md`](ARCHITECTURE.md#why-one-python3-call-remains). |
 
 ---
 
@@ -90,7 +103,7 @@ is logged — supervision degrades rather than failing silently.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `STATE_DIR` | `<workspaceRoot>/.supervisor-state` | Only used by the CLI; the extension passes `reckon.supervisorStateDir`. Supports a leading `~`. |
+| `STATE_DIR` | `<workspaceRoot>/.supervisor-state` | Only used by the CLI; the extension passes `sessionSitter.supervisorStateDir`. Supports a leading `~`. |
 | `KNOWLEDGE_LOCAL_REPO` | — | Local corpus checkout. Also accepted as `KB_SITTER_LOCAL_REPO`. |
 | `KNOWLEDGE_REPO` | — | Git URL, used only when no local checkout is set. Also accepted as `KB_SITTER_KNOWLEDGE_REPO`. |
 | `KNOWLEDGE_REF` | `main` | Ref to clone when reading remotely. |
@@ -116,7 +129,7 @@ One array, two kinds of rule, evaluated in order — first match wins.
 execute-style tools, that specific command.
 
 ```jsonc
-"claudeSessionSwitcher.autoRespond": [
+"sessionSitter.autoRespond": [
   { "toolPattern": "read_file|list_files|glob|grep", "decision": "approveOnce" },
   { "toolPattern": "execute_command",
     "argumentPattern": "\"command\":\\s*\"(git (status|diff|log)|ls|pwd)",
@@ -171,7 +184,7 @@ Both CLIs take `--help`.
 
 ## Commands
 
-All under the **AI Sessions** category:
+All under the **Session Sitter** category:
 
 | Command | What it does |
 |---|---|

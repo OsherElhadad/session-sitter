@@ -26,7 +26,7 @@ export function claudeDecisionToPayload(
 // Global (in Claude's ext-host) where the send-hook records requestId →
 // {toolName, inputs} for tool_permission_request payloads, since the
 // outstandingRequests deferred itself carries no tool metadata.
-const PERMS_GLOBAL = '__csw_claudePerms';
+const PERMS_GLOBAL = '__sessionSitter_claudePerms';
 
 // Idempotently wrap each comm's `send` so tool_permission_request payloads are
 // recorded before they reach the webview. Defensive: always calls the original,
@@ -37,7 +37,7 @@ const INSTALL_HOOK_FN = `function(){
     var store = globalThis.${PERMS_GLOBAL};
     var n = 0;
     if (this.allComms && this.allComms.forEach) this.allComms.forEach(function(comm){
-      if (!comm || comm.__csw_sendHooked) return;
+      if (!comm || comm.__sessionSitter_sendHooked) return;
       var orig = comm.send;
       if (typeof orig !== 'function') return;
       comm.send = function(m){
@@ -48,7 +48,7 @@ const INSTALL_HOOK_FN = `function(){
         } catch (e) {}
         return orig.apply(this, arguments);
       };
-      comm.__csw_sendHooked = true; n++;
+      comm.__sessionSitter_sendHooked = true; n++;
     });
     return 'hooked:' + n;
   } catch (e) { return 'err:' + String(e); }

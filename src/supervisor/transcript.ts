@@ -1,7 +1,7 @@
 /**
  * Consume the full session transcript exported by the extension.
  *
- * Ported from `reckon_supervisor/transcript.py`. `SessionExporter` is the single reader of
+ * Ported from the Python supervisor (`transcript.py`. `SessionExporter` is the single reader of
  * the agents' stores; it writes a JSON *export contract* to `STATE_DIR/history/<sessionId>.json`
  * and this module loads and validates that contract into a `NormalizedSession`.
  *

@@ -1,7 +1,7 @@
 /**
  * Route and parse BDI knowledge for one running coding-agent session.
  *
- * Ported from `reckon_supervisor/knowledge.py` **and** `kb-sitter-skill/scripts/fetch_bdi_files.py`
+ * Ported from the Python supervisor (`knowledge.py` **and** `kb-sitter-skill/scripts/fetch_bdi_files.py`
  * (the loader those two split between them is one module here).
  *
  * Given a `(user, project, team)` triple, three tier files are read in precedence order

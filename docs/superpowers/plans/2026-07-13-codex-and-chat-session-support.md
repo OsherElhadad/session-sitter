@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Codex CLI and VS Code Chat as first-class session sources in the AI Sessions view, with full parity to Claude/Bob (list, preview, upload to reckon).
+**Goal:** Add Codex CLI and VS Code Chat as first-class session sources in the Session Sitter view, with full parity to Claude/Bob (list, preview, upload to the corpus).
 
 **Architecture:** Two new private scanners (`_scanCodexSessions`, `_scanChatSessions`) on `SessionManager`, mirroring the existing `_scanBobSessions` shape. Widen `ClaudeSession.source` and `_sessionSources` to include `'codex' | 'chat'`. All downstream call sites (preview extractor, upload exporter, view provider open-behavior, webview badges) grow one dispatch branch per new source. No refactor of the existing architecture.
 
@@ -566,7 +566,7 @@ git commit -m "feat: pass through the raw Codex .jsonl on upload"
 ### Task 5: Codex UI wiring — click routing, badge, style, preview label
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts` — extend `_openSessionLocal` (around line 191) and `addFromHistory` case (around line 128-135).
+- Modify: `src/SessionSitterViewProvider.ts` — extend `_openSessionLocal` (around line 191) and `addFromHistory` case (around line 128-135).
 - Modify: `src/webview/main.js` — extend `buildTab` and `buildHistoryItem` for `source === 'codex'`; extend the `sessionPreview` handler's `assistantName` choice.
 - Modify: `src/webview/styles.css` — add `.tab-badge--codex` rule.
 
@@ -576,7 +576,7 @@ git commit -m "feat: pass through the raw Codex .jsonl on upload"
 
 - [ ] **Step 1: Update `_openSessionLocal` in view provider**
 
-Find in `src/SessionSwitcherViewProvider.ts` (around line 188):
+Find in `src/SessionSitterViewProvider.ts` (around line 188):
 ```ts
     if (session.source === 'bob') {
       void vscode.commands.executeCommand('bobChatView.focus');
@@ -605,7 +605,7 @@ Substitute the correct container id into the command name (`workbench.view.exten
 
 - [ ] **Step 2: Update the `addFromHistory` case in view provider**
 
-Find in `src/SessionSwitcherViewProvider.ts` (around line 125-135):
+Find in `src/SessionSitterViewProvider.ts` (around line 125-135):
 ```ts
           case 'addFromHistory': {
             const sessionId = message.sessionId as string | undefined;
@@ -691,7 +691,7 @@ Expected: all pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/webview/main.js src/webview/styles.css
+git add src/SessionSitterViewProvider.ts src/webview/main.js src/webview/styles.css
 git commit -m "feat: surface Codex sessions in webview with badge and click routing"
 ```
 
@@ -1187,7 +1187,7 @@ git commit -m "feat: build .chat.json envelope for Chat session upload"
 ### Task 9: Chat UI wiring — click routing, badge, style, preview label
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts` — extend `_openSessionLocal` and `addFromHistory`.
+- Modify: `src/SessionSitterViewProvider.ts` — extend `_openSessionLocal` and `addFromHistory`.
 - Modify: `src/webview/main.js` — extend `buildTab` and `buildHistoryItem`; extend preview `assistantName`.
 - Modify: `src/webview/styles.css` — add `.tab-badge--chat` rule.
 
@@ -1258,7 +1258,7 @@ Run: `npm test && npm run lint && npm run compile`
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/webview/main.js src/webview/styles.css
+git add src/SessionSitterViewProvider.ts src/webview/main.js src/webview/styles.css
 git commit -m "feat: surface Chat sessions in webview with badge and click routing"
 ```
 
@@ -1268,7 +1268,7 @@ git commit -m "feat: surface Chat sessions in webview with badge and click routi
 
 **Files:**
 - Modify: `package.json` — version `0.0.6` → `0.0.7`.
-- Produce: `claude-session-switcher-0.0.7.vsix` (git-ignored artifact).
+- Produce: `session-sitter-0.0.7.vsix` (git-ignored artifact).
 
 **Interfaces:**
 - Consumes: all prior tasks' code.
@@ -1292,25 +1292,25 @@ Expected: all tests pass; 0 lint errors; tsc clean.
 
 - [ ] **Step 3: Package**
 
-Run: `rm -f claude-session-switcher-*.vsix && npx --yes @vscode/vsce package`
-Expected: `Packaged: /…/claude-session-switcher-0.0.7.vsix`.
+Run: `rm -f session-sitter-*.vsix && npx --yes @vscode/vsce package`
+Expected: `Packaged: /…/session-sitter-0.0.7.vsix`.
 
 - [ ] **Step 4: Install**
 
-Run: `code --install-extension $(pwd)/claude-session-switcher-0.0.7.vsix --force`
-Expected: `Extension 'claude-session-switcher-0.0.7.vsix' was successfully installed.`
+Run: `code --install-extension $(pwd)/session-sitter-0.0.7.vsix --force`
+Expected: `Extension 'session-sitter-0.0.7.vsix' was successfully installed.`
 
 - [ ] **Step 5: Reload VS Code and verify manually**
 
-Open VS Code (or press `Cmd+Shift+P` → **Developer: Reload Window**). In the AI Sessions view, confirm:
+Open VS Code (or press `Cmd+Shift+P` → **Developer: Reload Window**). In the Session Sitter view, confirm:
 
 - A row appears for each recent Codex thread (green "Codex" badge), sorted correctly by recency alongside Claude and Bob rows.
 - A row appears for each VS Code Chat session (gray "Chat" badge).
 - Right-click a Codex row → **Show details** shows the last user/assistant exchanges with `assistantName === 'Codex'`.
 - Right-click a Chat row → **Show details** shows the last user/assistant exchanges with `assistantName === 'Chat'`.
 - Right-click a Codex row → **Copy title** places the title on the clipboard.
-- Right-click a Codex row → **Upload to reckon** (if `reckon.uploadScriptPath` is configured) succeeds.
-- Right-click a Chat row → **Upload to reckon** produces a `.chat.json` in `/tmp/` (verify by adding a temporary `console.log` if unsure, or by inspecting the extension host output).
+- Right-click a Codex row → **Upload to the corpus** (if `sessionSitter.uploadScriptPath` is configured) succeeds.
+- Right-click a Chat row → **Upload to the corpus** produces a `.chat.json` in `/tmp/` (verify by adding a temporary `console.log` if unsure, or by inspecting the extension host output).
 - Clicking a Codex row focuses the OpenAI/Codex sidebar panel.
 - Clicking a Chat row opens the VS Code Chat panel.
 

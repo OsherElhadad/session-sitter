@@ -1,7 +1,7 @@
 /**
  * Strict validation of the classifier's JSON output.
  *
- * Ported from `reckon_supervisor/schema.py`. Enforces required fields, types, enum
+ * Ported from the Python supervisor (`schema.py`. Enforces required fields, types, enum
  * membership, the `confidence` range, and the per-traffic-light conditional requirements.
  * Throws `SchemaError` on the first problem so the orchestrator fails loud *before* any
  * messaging / guidance / block side effect.

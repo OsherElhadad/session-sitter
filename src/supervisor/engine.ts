@@ -1,7 +1,7 @@
 /**
  * The classifier engine: run a fresh agent CLI per supervision request.
  *
- * Ported from `reckon_supervisor/engine.py`. `classify(prompt)` returns the model's raw response
+ * Ported from the Python supervisor (`engine.py`. `classify(prompt)` returns the model's raw response
  * text (expected to be the strict JSON assessment — validated separately in `schema.ts`). Each
  * call is a fresh, stateless invocation; no state carries between calls, and no process is kept
  * alive while waiting on a human.

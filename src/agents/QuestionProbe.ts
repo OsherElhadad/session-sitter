@@ -132,12 +132,12 @@ export const CLAUDE_QUESTION_PROBE_FN = `function(){
 // is created to capture it.
 export const CLAUDE_QUESTION_HOOK_INSTALL_FN = `function(){
   try {
-    if (!globalThis.__csw_claudeQProbe) globalThis.__csw_claudeQProbe = new Map();
-    var store = globalThis.__csw_claudeQProbe;
+    if (!globalThis.__sessionSitter_claudeQProbe) globalThis.__sessionSitter_claudeQProbe = new Map();
+    var store = globalThis.__sessionSitter_claudeQProbe;
     var cut = function(x){ try { var s = JSON.stringify(x); return s ? s.slice(0,4000) : (''+x); } catch(e){ return 'unstringifiable:'+(typeof x); } };
     var n = 0;
     if (this.allComms && this.allComms.forEach) this.allComms.forEach(function(comm){
-      if (!comm || comm.__csw_qProbeHooked) return;
+      if (!comm || comm.__sessionSitter_qProbeHooked) return;
       var orig = comm.send;
       if (typeof orig !== 'function') return;
       comm.send = function(m){
@@ -148,7 +148,7 @@ export const CLAUDE_QUESTION_HOOK_INSTALL_FN = `function(){
         } catch (e) {}
         return orig.apply(this, arguments);
       };
-      comm.__csw_qProbeHooked = true; n++;
+      comm.__sessionSitter_qProbeHooked = true; n++;
     });
     return 'hooked:' + n;
   } catch (e) { return 'err:' + String(e); }
@@ -161,7 +161,7 @@ export const CLAUDE_QUESTION_HOOK_INSTALL_FN = `function(){
 // resolved request's payload is still visible for schema confirmation. Mutates nothing.
 export const CLAUDE_QUESTION_CAPTURE_FN = `function(){
   try {
-    var store = globalThis.__csw_claudeQProbe || new Map();
+    var store = globalThis.__sessionSitter_claudeQProbe || new Map();
     var out = { recordedCount: store.size, outstanding: [], recentRecorded: [] };
     var liveIds = new Set();
     if (this.allComms && this.allComms.forEach) this.allComms.forEach(function(comm){
@@ -182,16 +182,16 @@ export const CLAUDE_QUESTION_CAPTURE_FN = `function(){
 // (NOT comm.send), so the v2 send-hook cannot see it. This install fn wraps the
 // resolve of every outstanding request whose recorded toolName is 'AskUserQuestion'
 // (cross-referenced against the v2 store), RECORDING the resolve argument into
-// globalThis.__csw_claudeAnswers, then ALWAYS delegating to the original
+// globalThis.__sessionSitter_claudeAnswers, then ALWAYS delegating to the original
 // resolve so the answer still propagates normally. It is the one probe that wraps
 // resolve — observational (records then delegates), never destructive. Install it
 // AFTER the question appears (the deferred must exist) and BEFORE you answer it.
 // Requires the v2 hook to have recorded the request's toolName first.
 export const CLAUDE_ANSWER_HOOK_INSTALL_FN = `function(){
   try {
-    if (!globalThis.__csw_claudeAnswers) globalThis.__csw_claudeAnswers = new Map();
-    var answers = globalThis.__csw_claudeAnswers;
-    var store = globalThis.__csw_claudeQProbe || new Map();
+    if (!globalThis.__sessionSitter_claudeAnswers) globalThis.__sessionSitter_claudeAnswers = new Map();
+    var answers = globalThis.__sessionSitter_claudeAnswers;
+    var store = globalThis.__sessionSitter_claudeQProbe || new Map();
     var cut = function(x){ try { var s = JSON.stringify(x); return s ? s.slice(0,4000) : (''+x); } catch(e){ return 'unstringifiable:'+(typeof x); } };
     var n = 0;
     if (this.allComms && this.allComms.forEach) this.allComms.forEach(function(comm){
@@ -200,14 +200,14 @@ export const CLAUDE_ANSWER_HOOK_INSTALL_FN = `function(){
       reqs.forEach(function(deferred, requestId){
         var meta = store.get(requestId);
         if (!meta || meta.toolName !== 'AskUserQuestion') return;
-        if (!deferred || deferred.__csw_answerHooked) return;
+        if (!deferred || deferred.__sessionSitter_answerHooked) return;
         var origResolve = deferred.resolve;
         if (typeof origResolve !== 'function') return;
         deferred.resolve = function(v){
           try { answers.set(requestId, cut(v)); } catch (e) {}
           return origResolve.apply(this, arguments);
         };
-        deferred.__csw_answerHooked = true; n++;
+        deferred.__sessionSitter_answerHooked = true; n++;
       });
     });
     return 'answer-hooked:' + n;
@@ -218,7 +218,7 @@ export const CLAUDE_ANSWER_HOOK_INSTALL_FN = `function(){
 // passed to deferred.resolve) so we can read the exact answer encoding. Mutates nothing.
 export const CLAUDE_ANSWER_CAPTURE_FN = `function(){
   try {
-    var answers = globalThis.__csw_claudeAnswers || new Map();
+    var answers = globalThis.__sessionSitter_claudeAnswers || new Map();
     var out = { answerCount: answers.size, answers: [] };
     answers.forEach(function(v, k){ out.answers.push({ requestId: k, resolvedWith: v }); });
     return JSON.stringify(out);

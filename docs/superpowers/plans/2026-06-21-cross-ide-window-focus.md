@@ -4,7 +4,7 @@
 
 **Goal:** Make clicking a session reliably reveal it on both IBM Bob and VS Code — locally or in another window, in the main editor or the secondary side panel — instead of failing with "Could not switch to the window containing this session."
 
-**Architecture:** Replace the broken reliance on the Claude lock-file pid (which is the shared remote *server* process, not the per-window extension host) with a self-published per-window registry. Each window discovers its own `VSCODE_IPC_HOOK_CLI` socket (by scanning its descendant processes) and its IDE CLI (`bobide`/`code`), writes them to `~/.claude/session-switcher/windows/<pid>.json`, and peers read those files to raise and focus each other.
+**Architecture:** Replace the broken reliance on the Claude lock-file pid (which is the shared remote *server* process, not the per-window extension host) with a self-published per-window registry. Each window discovers its own `VSCODE_IPC_HOOK_CLI` socket (by scanning its descendant processes) and its IDE CLI (`bobide`/`code`), writes them to `~/.claude/session-sitter/windows/<pid>.json`, and peers read those files to raise and focus each other.
 
 **Tech Stack:** TypeScript, VS Code extension API, Node `fs`/`child_process`/`/proc`, Vitest.
 
@@ -22,8 +22,8 @@
 
 - **Create** `src/WindowRegistry.ts` — window identity: IDE-CLI detection, self-socket discovery, and read/write/remove of per-window registry files. One responsibility: "who am I and how is each live window reached."
 - **Create** `src/test/WindowRegistry.test.ts` — unit tests for the above.
-- **Modify** `src/SessionSwitcherViewProvider.ts` — use the registry for owner detection and foreign focus; add a location-aware local-open helper; wire registry lifecycle.
-- **Modify** `src/test/SessionSwitcherViewProvider.test.ts` — update mocks to the registry; add location-aware + owner-detection tests.
+- **Modify** `src/SessionSitterViewProvider.ts` — use the registry for owner detection and foreign focus; add a location-aware local-open helper; wire registry lifecycle.
+- **Modify** `src/test/SessionSitterViewProvider.test.ts` — update mocks to the registry; add location-aware + owner-detection tests.
 - **Modify** `src/SessionManager.ts` — only if removing the now-unused `readActiveLockFiles`/`getIPCSocketForPid` focus exports (Task 6); `getActiveSessionIds` stays.
 
 ---
@@ -327,7 +327,7 @@ import * as os from 'os';
 const STALE_MS = 24 * 60 * 60 * 1000;
 
 export function windowsDir(homedir: string = os.homedir()): string {
-  return path.join(homedir, '.claude', 'session-switcher', 'windows');
+  return path.join(homedir, '.claude', 'session-sitter', 'windows');
 }
 
 export async function writeWindowEntry(entry: WindowEntry, homedir: string = os.homedir()): Promise<void> {
@@ -384,8 +384,8 @@ git commit -m "feat: per-window registry file read/write/remove with liveness + 
 ## Task 4: Location-aware local open helper
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
-- Test: `src/test/SessionSwitcherViewProvider.test.ts`
+- Modify: `src/SessionSitterViewProvider.ts`
+- Test: `src/test/SessionSitterViewProvider.test.ts`
 
 **Interfaces:**
 - Produces (private, but tested via cast like existing tests): `_openSessionLocal(sessionId: string): void`
@@ -395,7 +395,7 @@ This replaces the three current unconditional `executeCommand('claude-vscode.pri
 
 - [ ] **Step 1: Add `workspace.getConfiguration` to the vscode mock**
 
-In `src/test/SessionSwitcherViewProvider.test.ts`, extend the `vi.hoisted` block and the `vscode` mock:
+In `src/test/SessionSitterViewProvider.test.ts`, extend the `vi.hoisted` block and the `vscode` mock:
 
 ```ts
 const { mockExecuteCommand, mockShowWarningMessage, mockGetConfiguration } = vi.hoisted(() => ({
@@ -421,7 +421,7 @@ Also add `onDidChangeWindowState: vi.fn(() => ({ dispose: vi.fn() }))` under `wi
 - [ ] **Step 2: Write the failing test**
 
 ```ts
-// append to src/test/SessionSwitcherViewProvider.test.ts
+// append to src/test/SessionSitterViewProvider.test.ts
 describe('_openSessionLocal', () => {
   beforeEach(() => { mockExecuteCommand.mockClear(); });
 
@@ -443,12 +443,12 @@ describe('_openSessionLocal', () => {
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `npx vitest run src/test/SessionSwitcherViewProvider.test.ts`
+Run: `npx vitest run src/test/SessionSitterViewProvider.test.ts`
 Expected: FAIL — `_openSessionLocal` is not a function.
 
 - [ ] **Step 4: Implement `_openSessionLocal` and route existing call sites through it**
 
-In `src/SessionSwitcherViewProvider.ts`, add the method:
+In `src/SessionSitterViewProvider.ts`, add the method:
 
 ```ts
   // Reveal a session in the current window, respecting where Claude is docked.
@@ -471,13 +471,13 @@ Then replace these three call sites:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `npx vitest run src/test/SessionSwitcherViewProvider.test.ts`
+Run: `npx vitest run src/test/SessionSitterViewProvider.test.ts`
 Expected: PASS (existing `_handleFocusRequest` tests still pass — they assert `executeCommand` was called; under default `'panel'` config they now call `primaryEditor.open`, unchanged).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/test/SessionSwitcherViewProvider.test.ts
+git add src/SessionSitterViewProvider.ts src/test/SessionSitterViewProvider.test.ts
 git commit -m "feat: location-aware local open (editor vs secondary panel)"
 ```
 
@@ -486,8 +486,8 @@ git commit -m "feat: location-aware local open (editor vs secondary panel)"
 ## Task 5: Owner detection + rewired foreign focus via registry
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
-- Test: `src/test/SessionSwitcherViewProvider.test.ts`
+- Modify: `src/SessionSitterViewProvider.ts`
+- Test: `src/test/SessionSitterViewProvider.test.ts`
 
 **Interfaces:**
 - Consumes: `readLiveWindows`, `WindowEntry` (Task 3); `_openSessionLocal` (Task 4).
@@ -497,7 +497,7 @@ git commit -m "feat: location-aware local open (editor vs secondary panel)"
 
 - [ ] **Step 1: Swap the SessionManager mock for a WindowRegistry mock**
 
-In `src/test/SessionSwitcherViewProvider.test.ts`, replace the `vi.mock('../SessionManager', …)` block's focus exports and add a `WindowRegistry` mock:
+In `src/test/SessionSitterViewProvider.test.ts`, replace the `vi.mock('../SessionManager', …)` block's focus exports and add a `WindowRegistry` mock:
 
 ```ts
 vi.mock('../SessionManager', async (importOriginal) => {
@@ -591,10 +591,10 @@ describe('_tryFocusForeignWindow', () => {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `npx vitest run src/test/SessionSwitcherViewProvider.test.ts`
+Run: `npx vitest run src/test/SessionSitterViewProvider.test.ts`
 Expected: FAIL — `_findOwnerWindow` undefined / `_tryFocusForeignWindow` still uses lock files.
 
-- [ ] **Step 4: Rewrite the methods in `src/SessionSwitcherViewProvider.ts`**
+- [ ] **Step 4: Rewrite the methods in `src/SessionSitterViewProvider.ts`**
 
 Update the import line (drop `readActiveLockFiles, getIPCSocketForPid`):
 
@@ -621,7 +621,7 @@ Replace `_tryFocusForeignWindow` and add `_findOwnerWindow`:
     if (!owner) { return 'local'; }
     if (!owner.ipcSocket || !owner.ideCli) { return 'foreign-failed'; }
     try {
-      const dir = path.join(os.homedir(), '.claude', 'session-switcher');
+      const dir = path.join(os.homedir(), '.claude', 'session-sitter');
       await fs.promises.mkdir(dir, { recursive: true });
       await fs.promises.writeFile(
         path.join(dir, `focus-${owner.pid}.json`),
@@ -645,13 +645,13 @@ Replace `_tryFocusForeignWindow` and add `_findOwnerWindow`:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `npx vitest run src/test/SessionSwitcherViewProvider.test.ts`
+Run: `npx vitest run src/test/SessionSitterViewProvider.test.ts`
 Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/test/SessionSwitcherViewProvider.test.ts
+git add src/SessionSitterViewProvider.ts src/test/SessionSitterViewProvider.test.ts
 git commit -m "feat: owner detection + foreign focus via per-window registry"
 ```
 
@@ -660,7 +660,7 @@ git commit -m "feat: owner detection + foreign focus via per-window registry"
 ## Task 6: Registry lifecycle wiring + remove dead lock-file code
 
 **Files:**
-- Modify: `src/SessionSwitcherViewProvider.ts`
+- Modify: `src/SessionSitterViewProvider.ts`
 - Modify: `src/SessionManager.ts`
 - Modify: `src/test/SessionManager.test.ts` (only if it referenced removed exports)
 
@@ -669,7 +669,7 @@ git commit -m "feat: owner detection + foreign focus via per-window registry"
 
 - [ ] **Step 1: Publish + refresh the window entry on activation**
 
-In `SessionSwitcherViewProvider`, add a publisher and a timer field, call it from the constructor (the watcher is already started there), and refresh on window focus changes inside `resolveWebviewView`:
+In `SessionSitterViewProvider`, add a publisher and a timer field, call it from the constructor (the watcher is already started there), and refresh on window focus changes inside `resolveWebviewView`:
 
 ```ts
   private _registryTimer: ReturnType<typeof setInterval> | undefined;
@@ -712,7 +712,7 @@ In `dispose()`, clear the timer and remove the file:
 
 - [ ] **Step 2: Run the provider tests**
 
-Run: `npx vitest run src/test/SessionSwitcherViewProvider.test.ts`
+Run: `npx vitest run src/test/SessionSitterViewProvider.test.ts`
 Expected: PASS — the mocked `writeWindowEntry`/`onDidChangeWindowState`/`vscode.env` resolve to no-ops. If `vscode.env` is undefined in the mock, add `env: { appName: 'IBM Bob' }` to the `vscode` mock object.
 
 - [ ] **Step 3: Remove the now-unused lock-file focus exports**
@@ -732,7 +732,7 @@ Expected: all green.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/SessionSwitcherViewProvider.ts src/SessionManager.ts src/test
+git add src/SessionSitterViewProvider.ts src/SessionManager.ts src/test
 git commit -m "feat: publish window registry on activation; drop dead lock-file focus code"
 ```
 
@@ -748,7 +748,7 @@ Run: `npm run compile` (or the project's build), then reload the IBM Bob window(
 
 - [ ] **Step 2: Confirm registry files appear**
 
-Run: `ls ~/.claude/session-switcher/windows/ && cat ~/.claude/session-switcher/windows/*.json`
+Run: `ls ~/.claude/session-sitter/windows/ && cat ~/.claude/session-sitter/windows/*.json`
 Expected: one JSON per open window, each with a non-empty `ipcSocket` and `ideCli` ending in `bobide`.
 
 - [ ] **Step 3: Cross-window focus (editor)**

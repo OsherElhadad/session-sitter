@@ -77,7 +77,7 @@ Unchanged parsing logic. Role narrows:
 Remove: the watcher no longer drives what appears in the tab bar. It only refreshes
 metadata (title, status) for sessions already in the registry.
 
-### Component 3: `SessionSwitcherViewProvider` (updated wiring)
+### Component 3: `SessionSitterViewProvider` (updated wiring)
 
 Listens to both `LiveSessionRegistry.onDidChange` and `SessionManager.onDidChangeSessions`.
 On either event, pushes an `updateSessions` message to the webview containing only the
@@ -158,7 +158,7 @@ User expands History
 |---|---|
 | `src/LiveSessionRegistry.ts` | New — registry with globalState persistence |
 | `src/SessionManager.ts` | Narrow role: add `getRecentSessions(limit)`, remove auto-tab-bar logic |
-| `src/SessionSwitcherViewProvider.ts` | Wire to registry; handle new message types |
+| `src/SessionSitterViewProvider.ts` | Wire to registry; handle new message types |
 | `src/extension.ts` | Instantiate `LiveSessionRegistry`; pass to provider |
 | `src/webview/main.js` | Add history panel toggle + addFromHistory messages |
 | `src/webview/styles.css` | Style history panel |
