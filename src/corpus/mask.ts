@@ -98,6 +98,26 @@ export function makeReplacement(name: string, secret: string): string {
   }
 }
 
+/**
+ * Replace every credential-looking run in `text` with `placeholder`.
+ *
+ * Use this for text that becomes something other than file content — a filename, a slug, a log
+ * line — where the shape-preserving fakes are pointless and the value must simply not appear.
+ * File content goes through {@link applyMasking} instead, which keeps shape and length.
+ */
+export function redactSecrets(text: string, placeholder = 'redacted'): string {
+  let out = text;
+  for (const rule of RULES) {
+    rule.regex.lastIndex = 0;
+    out = out.replace(rule.regex, (match, ...groups) => {
+      if (rule.group === 0) { return placeholder; }
+      const captured = groups[rule.group - 1];
+      return typeof captured === 'string' ? match.replace(captured, placeholder) : placeholder;
+    });
+  }
+  return out;
+}
+
 /** Every file under `root`, sorted, recursively. */
 export async function iterFiles(root: string): Promise<string[]> {
   const out: string[] = [];

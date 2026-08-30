@@ -212,8 +212,11 @@ export function isEmptyRegistry(r: Registry): boolean {
  * - team missing: look it up from the user's registry row.
  * - unknown slug in any field: error (never substitute a default).
  *
- * With an EMPTY registry no validation happens: the triple is returned as given (all three
- * must then be present), which is the settings-driven default for this extension.
+ * With an EMPTY registry there is nothing to validate against and nothing to infer from, so the
+ * triple is returned as given. `user` is still required; a missing project or team resolves to
+ * the empty string and that tier is simply reported missing — which is the same graceful
+ * degradation a missing tier file already gets. This never substitutes a *wrong* slug (the rule
+ * the registry path enforces); it substitutes none.
  */
 export function resolveTriple(
   registry: Registry,
@@ -224,9 +227,7 @@ export function resolveTriple(
   if (!user) { throw new KnowledgeError('user is required to route knowledge'); }
 
   if (isEmptyRegistry(registry)) {
-    if (!project) { throw new KnowledgeError('project is required when no knowledge registry is configured'); }
-    if (!team) { throw new KnowledgeError('team is required when no knowledge registry is configured'); }
-    return [user, project, team];
+    return [user, project ?? '', team ?? ''];
   }
 
   if (!(user in registry.users)) {
@@ -348,6 +349,11 @@ export async function shallowClone(repoUrl: string, ref: string, dest: string): 
 async function readTierFile(
   root: string, tier: Tier, slugs: Record<Tier, string>,
 ): Promise<TierFile> {
+  // An unconfigured tier (empty slug) has no file to look for; report it missing without
+  // touching the filesystem, so a partially-configured routing triple still loads what it can.
+  if (!slugs[tier]) {
+    return { slug: '', path_in_repo: `(${tier} tier not configured)`, exists: false, content: null };
+  }
   const rel = tierPath(tier, slugs);
   const full = path.join(root, ...rel.split('/'));
   try {

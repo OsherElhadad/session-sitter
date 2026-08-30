@@ -301,12 +301,14 @@ export async function uploadSession(opts: UploadOptions): Promise<UploadResult> 
 
     // Strip an existing YYYYMMDD_ prefix so re-uploading a stored file doesn't double the date.
     const rawStem = path.basename(src).split('.')[0].replace(/^\d{8}_/, '');
-    const slug = slugify(opts.slug ? opts.slug : rawStem);
+    // Redacted for the same reason as makeSlug: a filename is not file content.
+    const slug = slugify(mask.redactSecrets(opts.slug ? opts.slug : rawStem));
     const dateStr = localDateStamp();
     const ext = fileExt(path.basename(src));
 
     const destDir = path.join(c.dataRoot, username, source);
-    await fs.promises.mkdir(destDir, { recursive: true });
+    // A dry run must leave the filesystem exactly as it found it — no stray directories.
+    if (!c.dryRun) { await fs.promises.mkdir(destDir, { recursive: true }); }
 
     const stem = collisionSafeStem(destDir, dateStr, slug, ext, opts.force === true);
     const storedName = `${stem}${ext}`;
@@ -509,9 +511,16 @@ function localDateStamp(now = new Date()): string {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
 }
 
-/** Slugify a title and truncate on a word boundary. */
+/**
+ * Slugify a title and truncate on a word boundary.
+ *
+ * The title comes from the session itself, so it can contain a credential the developer pasted
+ * into a prompt. Secrets are redacted BEFORE slugifying: the masking pass rewrites file
+ * *contents*, but a stored filename is not content — an unredacted slug would carry the secret
+ * (lower-cased) in the filename itself, where nothing would ever clean it up.
+ */
 export function makeSlug(title: string, maxLen = SLUG_MAX_LEN): string {
-  let slug = slugify(title || 'session');
+  let slug = slugify(mask.redactSecrets(title || 'session'));
   if (slug.length > maxLen) { slug = slug.slice(0, maxLen).replace(/-+$/, ''); }
   return slug || 'session';
 }
