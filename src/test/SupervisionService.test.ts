@@ -13,6 +13,7 @@ import * as path from 'path';
 // 'vscode' at import time; stub it.
 vi.mock('vscode', () => ({ extensions: { getExtension: vi.fn() } }));
 import { SupervisionService } from '../SupervisionService';
+import { loadConfig } from '../supervisor/config';
 import type { PendingApproval } from '../agents/BobApprover';
 
 let tmp: string;
@@ -28,14 +29,17 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 
 function service(enabled = true, onDelivered?: () => void): SupervisionService {
+  // The extension resolves this from `sessionSitter.*` settings; here we build it directly.
+  const supervisorConfig = {
+    ...loadConfig({ workspaceRoot: tmp, stateDir }),
+    knowledgeLocalRepo: tmp, // no knowledge files here: every tier is simply reported missing
+  };
   return new SupervisionService({
     enabled,
-    stateDir,
-    workspaceRoot: tmp,
+    supervisorConfig,
     user: 'alice',
     project: 'demo-project',
     team: 'platform',
-    knowledgeLocalRepo: tmp, // no knowledge files here: every tier is simply reported missing
     bobDbPath: path.join(tmp, 'no-such-bob.db'),
     pollIntervalSeconds: 1,
   }, log, onDelivered);
@@ -69,7 +73,7 @@ function writeExport(sessionId: string, pendingName = 'read_file'): void {
 }
 
 describe('configuration', () => {
-  it('layers the extension settings over the environment', () => {
+  it('uses the resolved supervisor configuration it was handed', () => {
     const cfg = service().supervisorConfig();
     expect(cfg.stateDir).toBe(stateDir);
     expect(cfg.workspaceRoot).toBe(path.resolve(tmp));

@@ -43,19 +43,23 @@ Supervision is off until you give it a state directory.
 }
 ```
 
-Then pick a classifier and a channel in `<workspaceRoot>/.env` (or the process environment):
+Then pick a classifier and a channel — settings again, no environment needed:
 
-```bash
-SUPERVISOR_ENGINE=bob          # or: claude
-BOB_API_KEY=…                  # for the bob engine
-MESSAGING_CHANNEL=telegram     # or: stub (writes to files — good for trying it out)
-TELEGRAM_BOT_TOKEN=…
-TELEGRAM_CHAT_ID=…
-ORANGE_RESPONSE_TIMEOUT_MINUTES=30
+```jsonc
+{
+  "sessionSitter.supervisor.engine": "bob",                 // or: "claude"
+  "sessionSitter.supervisor.bobApiKey": "…",                // for the bob engine
+  "sessionSitter.supervisor.messagingChannel": "telegram",  // or: "stub" (writes to files)
+  "sessionSitter.supervisor.telegramBotToken": "…",
+  "sessionSitter.supervisor.telegramChatId": "…",
+  "sessionSitter.supervisor.orangeResponseTimeoutMinutes": 30
+}
 ```
 
-Credentials stay in the environment on purpose — they never have to live in VS Code settings.
-Full list: [`CONFIGURATION.md`](CONFIGURATION.md).
+VS Code stores settings in plain text, so if you would rather keep a token out of
+`settings.json`, leave that setting empty: the matching environment variable or `.env` entry
+(`BOBSHELL_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) is still read as a fallback. Full
+list: [`CONFIGURATION.md`](CONFIGURATION.md).
 
 **You do not run anything by hand.** The extension classifies every un-handled prompt and polls
 for replies and timeouts in-process. There is no daemon to start.
@@ -69,6 +73,13 @@ the light, what you asked for, what the agent wanted to do, the notification tex
 offered, and your answer. An Orange awaiting you is highlighted with its countdown. A failed
 supervision expands to the recorded error, with buttons to open the record JSON or copy its path
 — a failure is debuggable from the panel instead of being a dead end.
+
+**Both tiers appear here.** A decision your `sessionSitter.autoRespond` rules took is tagged
+**⚙ rule**; one the supervisor took is tagged **🧠 AI**. Rule decisions also go out as one-way
+updates on your messaging channel, so nothing Session Sitter does to a session is invisible —
+whether you are looking at the panel or at your phone. They are recorded even with
+`sessionSitter.autoSupervise: false`, since no classifier is involved; silence them on the channel
+(but keep the records) with `sessionSitter.supervisor.notifyRuleDecisions: false`.
 
 ---
 
@@ -162,7 +173,8 @@ extension had produced them.
 
 ## Trying it without Telegram
 
-Set `MESSAGING_CHANNEL=stub`. Decision cards are written to `<stateDir>/notifications/<requestId>.txt`,
+Set `sessionSitter.supervisor.messagingChannel` to `stub`. Decision cards are written to
+`<stateDir>/notifications/<requestId>.txt`,
 and you reply by dropping a file:
 
 ```bash
@@ -180,7 +192,8 @@ The next poll picks it up and the full Orange lifecycle runs, offline.
 | No activity at all | no state dir | set `sessionSitter.supervisorStateDir` |
 | `supervision not started` in the log | no workspace root could be derived | set `sessionSitter.supervisorRepoPath` |
 | Decisions always time out | `getUpdates` is failing — usually a second consumer or a webhook | check the log for `getUpdates failed`; stop the other poller |
-| Records say `classify: … not found` | the classifier CLI is not on `PATH` | fix `SUPERVISOR_ENGINE`, or set `BOB_CLI_PATH` / `CLAUDE_CLI_PATH` |
+| Records say `classify: … not found` | the classifier CLI is not on `PATH` | fix `sessionSitter.supervisor.engine`, or set `sessionSitter.supervisor.bobCliPath` / `.claudeCliPath` |
+| Rule decisions show in the panel but not on Telegram | reporting is off, or the channel is `stub` | check `sessionSitter.supervisor.notifyRuleDecisions` and `.messagingChannel` |
 | `state: failed` with `knowledge:` | a slug is unknown to a **configured registry** | fix the slug, or drop `sessionSitter.knowledge.registryPath` |
 | Decisions cite no BDI | no `sessionSitter.knowledge.user`, or the tier files are absent | supervision still runs, just without knowledge; set the routing slugs and check `sessionSitter.dataRepoPath` |
 | An approval never lands | the delivery is being retried, not lost | the `outbox/` file stays until the agent confirms; check the log for `resolve … → notfound` |

@@ -237,6 +237,7 @@ export function makeConfig(stateDir: string, overrides: Partial<SupervisorConfig
     anthropicAuthToken: null,
     messagingChannel: 'stub',
     redNotify: true,
+    notifyRuleDecisions: true,
     telegramBotToken: null,
     telegramChatId: null,
     knowledgeRegistryPath: '',

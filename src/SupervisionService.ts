@@ -1,8 +1,9 @@
 import * as path from 'path';
 import { PendingApproval } from './agents/BobApprover';
 import { SessionExporter } from './SessionExporter';
-import { loadConfig, SupervisorConfig } from './supervisor/config';
+import { SupervisorConfig } from './supervisor/config';
 import { buildOrchestrator } from './supervisor/factory';
+import { MessagingChannel } from './supervisor/messaging';
 import { Orchestrator } from './supervisor/orchestrator';
 import { SupervisionRecord } from './supervisor/models';
 
@@ -30,18 +31,16 @@ import { SupervisionRecord } from './supervisor/models';
 
 export interface SupervisionServiceConfig {
   enabled: boolean;
-  /** Shared state dir: `history/`, `outbox/`, `records/`, `inbox/` live here. */
-  stateDir: string;
-  /** Workspace root used to resolve `.env` files and as the classifier's cwd. */
-  workspaceRoot: string;
-  /** Knowledge routing triple. */
+  /**
+   * The fully-resolved supervisor configuration — built from `sessionSitter.*` settings by
+   * `supervisorConfigFromSettings`. It already carries `stateDir`, the engine, the messaging
+   * channel and the knowledge routing paths, so this service reads no environment itself.
+   */
+  supervisorConfig: SupervisorConfig;
+  /** Knowledge routing triple (from `sessionSitter.knowledge.*`). */
   user: string;
   project: string;
   team: string;
-  /** Optional registry markdown that validates the triple. */
-  knowledgeRegistryPath?: string;
-  /** Local knowledge repo checkout (contains `data/knowledge/`). */
-  knowledgeLocalRepo?: string;
   bobDbPath: string;
   /** Seconds between `poll()` passes. */
   pollIntervalSeconds?: number;
@@ -60,30 +59,26 @@ export class SupervisionService {
     private readonly log: (msg: string) => void,
     /** Called after the orchestrator writes a delivery, so the applier can run at once. */
     private readonly onDelivered?: () => void,
+    /**
+     * The human messaging channel. Injected so the extension builds it ONCE and shares it with
+     * the deterministic-rule reporter — two Telegram consumers on one bot would fight over
+     * `getUpdates`.
+     */
+    private readonly channel?: MessagingChannel,
   ) {}
 
-  /** The supervisor configuration, settings layered over the environment and any `.env`. */
+  /** The supervisor configuration (built from `sessionSitter.*` settings by the caller). */
   supervisorConfig(): SupervisorConfig {
-    const base = loadConfig({
-      workspaceRoot: this.cfg.workspaceRoot,
-      stateDir: this.cfg.stateDir,
-      envFiles: [path.join(this.cfg.workspaceRoot, '.supervisor.env')],
-    });
-    // Extension settings win for knowledge routing; everything else stays env/.env driven so a
-    // token never has to live in VS Code settings.
-    return {
-      ...base,
-      knowledgeRegistryPath: this.cfg.knowledgeRegistryPath || base.knowledgeRegistryPath,
-      knowledgeLocalRepo: this.cfg.knowledgeLocalRepo || base.knowledgeLocalRepo,
-    };
+    return this.cfg.supervisorConfig;
   }
 
   /** Build the orchestrator lazily so a config error surfaces on first use, not at activation. */
   private get orch(): Orchestrator {
     if (!this.orchestrator) {
       this.orchestrator = buildOrchestrator({
-        config: this.supervisorConfig(),
+        config: this.cfg.supervisorConfig,
         onDelivered: this.onDelivered,
+        channel: this.channel,
         log: this.log,
       });
     }
@@ -95,7 +90,7 @@ export class SupervisionService {
       this.log('supervision disabled (sessionSitter.autoSupervise=false)');
       return;
     }
-    const cfg = this.supervisorConfig();
+    const cfg = this.cfg.supervisorConfig;
     this.log(
       `supervision started — engine=${cfg.supervisorEngine} channel=${cfg.messagingChannel} `
       + `stateDir=${cfg.stateDir} routing=${this.cfg.user}/${this.cfg.project}/${this.cfg.team}`,
@@ -150,7 +145,8 @@ export class SupervisionService {
 
     try {
       const exporter = new SessionExporter(this.cfg.bobDbPath);
-      const out = await exporter.exportBob(p.taskId, path.join(this.cfg.stateDir, 'history'), p);
+      const out = await exporter.exportBob(
+        p.taskId, path.join(this.cfg.supervisorConfig.stateDir, 'history'), p);
       this.log(`supervision: exported ${p.taskId} (${p.toolName} req=${p.requestId}) -> ${out}`);
     } catch (err) {
       this.triggered.delete(p.requestId); // export failed → allow a retry next sweep

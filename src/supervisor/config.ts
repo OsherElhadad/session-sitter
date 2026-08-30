@@ -46,6 +46,13 @@ export interface SupervisorConfig {
    * persists until a human explicitly unblocks. Default on; set RED_NOTIFY=0 to silence.
    */
   redNotify: boolean;
+  /**
+   * Whether a decision taken by a DETERMINISTIC auto-respond rule (not the model) is also
+   * reported to the human channel as a one-way update. Default on, so every intervention the
+   * extension makes is visible — not just the ones the supervisor AI took. Set
+   * NOTIFY_RULE_DECISIONS=0 (or `sessionSitter.supervisor.notifyRuleDecisions: false`) to silence.
+   */
+  notifyRuleDecisions: boolean;
   telegramBotToken: string | null;
   telegramChatId: string | null;
   /** Optional registry markdown validating the (user, project, team) triple. */
@@ -162,6 +169,7 @@ export function loadConfig(overrides: LoadConfigOverrides = {}): SupervisorConfi
     anthropicAuthToken: get(env, 'ANTHROPIC_AUTH_TOKEN') ?? null,
     messagingChannel: (get(env, 'MESSAGING_CHANNEL', 'stub') ?? 'stub').toLowerCase(),
     redNotify: getBool(env, 'RED_NOTIFY', true),
+    notifyRuleDecisions: getBool(env, 'NOTIFY_RULE_DECISIONS', true),
     telegramBotToken: get(env, 'TELEGRAM_BOT_TOKEN') ?? null,
     telegramChatId: get(env, 'TELEGRAM_CHAT_ID') ?? null,
     knowledgeRegistryPath: get(env, 'KNOWLEDGE_REGISTRY_PATH', '') ?? '',

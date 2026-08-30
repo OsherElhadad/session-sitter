@@ -5,6 +5,7 @@ import type { BobApprover, PendingApproval } from './agents/BobApprover';
 import { decisionToPayload } from './agents/BobApprover';
 import { claudeDecisionToPayload } from './agents/ClaudeApprover';
 import type { MessageExchange, SessionManager, ClaudeSession } from './SessionManager';
+import type { RuleDecision } from './supervisor/ruleDecisions';
 
 /** How often the approval sweep runs (ms). Approvals live in Bob's memory and
  *  may not change the DB, so they need their own tick independent of scans. */
@@ -103,6 +104,10 @@ export class AutoResponder {
     private readonly onUnhandledClaudePending?: (p: PendingApproval) => void,
     // Lets the Claude supervision trigger prune requestIds no longer pending (re-arm on a new request).
     private readonly pruneClaudeTriggered?: (stillPending: Set<string>) => void,
+    // Called for every decision a DETERMINISTIC rule took (auto-approve, auto-reject, auto-reply)
+    // so it is recorded and reported to the human channel, exactly like a supervisor decision.
+    // Fire-and-forget: reporting must never delay or block applying the decision.
+    private readonly onRuleDecision?: (d: RuleDecision) => void,
   ) {}
 
   start(): void {
@@ -164,8 +169,10 @@ export class AutoResponder {
         this.resolvedRequestIds.add(p.requestId); // mark before emitting to avoid a double-emit race
         const payload = decisionToPayload(rule.decision, p.hasCommandUse);
         this.log(`auto-approve: task ${p.taskId} tool ${p.toolName} matched glob /${rule.toolPattern}/ → ${rule.decision}`);
-        try { await this.approver.resolve(p.requestId, payload); }
-        catch (err) { this.log(`approval resolve failed for ${p.requestId}: ${String(err)}`); }
+        try {
+          await this.approver.resolve(p.requestId, payload);
+          this.reportRule(p, rule, 'bob');
+        } catch (err) { this.log(`approval resolve failed for ${p.requestId}: ${String(err)}`); }
       }
     } finally {
       this.sweeping = false;
@@ -224,8 +231,10 @@ export class AutoResponder {
         try { inputs = JSON.parse(p.argsText); } catch { /* leave {} */ }
         const payload = claudeDecisionToPayload(rule.decision, inputs);
         this.log(`claude auto-approve: tool ${p.toolName} matched glob /${rule.toolPattern}/ → ${rule.decision}`);
-        try { await this.claudeApprover.resolve(p.requestId, payload); }
-        catch (err) { this.log(`claude approval resolve failed for ${p.requestId}: ${String(err)}`); }
+        try {
+          await this.claudeApprover.resolve(p.requestId, payload);
+          this.reportRule(p, rule, 'claude');
+        } catch (err) { this.log(`claude approval resolve failed for ${p.requestId}: ${String(err)}`); }
       }
     } finally {
       this.claudeSweeping = false;
@@ -274,7 +283,42 @@ export class AutoResponder {
     this.lastFired.set(session.sessionId, key);
     this.log(`auto-respond: session ${session.sessionId} matched /${rule.matchPattern}/ → sending "${rule.response}"`);
     try { await sender.send(session.sessionId, rule.response); }
-    catch (err) { this.log(`send failed for ${session.sessionId}: ${String(err)}`); }
+    catch (err) { this.log(`send failed for ${session.sessionId}: ${String(err)}`); return; }
+    this.report({
+      sessionId: session.sessionId,
+      source: session.source,
+      kind: 'text',
+      pattern: rule.matchPattern,
+      response: rule.response,
+    });
+  }
+
+  /** Report one applied approval rule. */
+  private reportRule(p: PendingApproval, rule: ApprovalRule, source: 'bob' | 'claude'): void {
+    this.report({
+      sessionId: p.taskId,
+      source,
+      kind: 'approval',
+      pattern: rule.toolPattern,
+      argumentPattern: rule.argumentPattern,
+      decision: rule.decision,
+      toolName: p.toolName,
+      argsText: p.argsText,
+      requestId: p.requestId,
+    });
+  }
+
+  /**
+   * Hand one applied rule decision to the reporter. Never throws: the decision has already
+   * reached the agent, so a reporting problem must be logged and dropped, not surfaced as a
+   * failure to apply it.
+   */
+  private report(d: RuleDecision): void {
+    if (!this.onRuleDecision) { return; }
+    try { this.onRuleDecision(d); }
+    catch (err) {
+      this.log(`rule decision report failed for ${d.requestId ?? d.sessionId}: ${String(err)}`);
+    }
   }
 
   dispose(): void {

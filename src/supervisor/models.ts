@@ -38,6 +38,8 @@ export const SupervisionState = {
   ORANGE_TRANSITIONED_TO_YELLOW: 'orange_transitioned_to_yellow',
   ORANGE_AWAITING_QUESTION: 'orange_awaiting_question',
   RED_BLOCKED: 'red_blocked',
+  /** A deterministic auto-respond rule decided this action — no model was consulted. */
+  RULE_APPLIED: 'rule_applied',
   FAILED: 'failed',
 } as const;
 export type SupervisionState = (typeof SupervisionState)[keyof typeof SupervisionState];
@@ -49,8 +51,32 @@ export const TERMINAL_STATES: ReadonlySet<string> = new Set<string>([
   SupervisionState.ORANGE_RESOLVED_BY_USER,
   SupervisionState.ORANGE_TRANSITIONED_TO_YELLOW,
   SupervisionState.RED_BLOCKED,
+  SupervisionState.RULE_APPLIED,
   SupervisionState.FAILED,
 ]);
+
+/** Who decided: the deterministic rule tier, or the supervisor (model + BDI). */
+export const DecidedBy = {
+  SUPERVISOR: 'supervisor',
+  RULE: 'rule',
+} as const;
+export type DecidedBy = (typeof DecidedBy)[keyof typeof DecidedBy];
+
+/** What a deterministic auto-respond rule did, recorded so the UI/Telegram can show it. */
+export interface RuleTrace {
+  /** 'approval' resolved a pending tool prompt; 'text' sent a canned reply. */
+  kind: string;
+  /** The rule pattern that matched (toolPattern glob or matchPattern regex). */
+  pattern: string;
+  /** Optional narrowing regex over the pending arguments JSON. */
+  argument_pattern?: string | null;
+  /** approveOnce | approveForTask | reject (approval rules only). */
+  decision?: string | null;
+  /** The text sent into the session (text rules only). */
+  response?: string | null;
+  /** The pending tool name, when known. */
+  tool_name?: string | null;
+}
 
 export interface EvidenceRef {
   /** Stable session-history reference (e.g. turn index / message id). */
@@ -174,6 +200,10 @@ export interface SupervisionRecord {
   session_id: string;
   source: string;
   state: string;
+  /** 'supervisor' (default) or 'rule' — which tier produced this decision. */
+  decided_by: string;
+  /** Present only when `decided_by === 'rule'`: which rule fired and what it did. */
+  rule: RuleTrace | null;
   created_at: string; // ISO 8601, UTC
   updated_at: string; // ISO 8601, UTC
   // Resolved knowledge routing triple.
@@ -224,6 +254,8 @@ export function newRecord(fields: {
   updated_at: string;
 } & Partial<SupervisionRecord>): SupervisionRecord {
   return {
+    decided_by: DecidedBy.SUPERVISOR,
+    rule: null,
     user: null,
     project: null,
     team: null,
@@ -264,5 +296,6 @@ export function recordFrom(d: Record<string, unknown>): SupervisionRecord {
     state: String(d.state ?? SupervisionState.ANALYSIS_PENDING),
     created_at: String(d.created_at ?? ''),
     updated_at: String(d.updated_at ?? ''),
+    decided_by: String(d.decided_by ?? DecidedBy.SUPERVISOR),
   });
 }

@@ -137,9 +137,10 @@ there: it classifies each action an agent pauses on and acts.
 | 🟠 **Orange** | your call | block, send a decision card with a countdown; on timeout deny and offer alternatives |
 | 🔴 **Red** | policy | block outright; the block stands on timeout |
 
-**Turning it on takes one setting plus a classifier.**
+**Everything is a setting.** No environment variables, no `.env` to maintain — open
+**☰ → All settings…** in the panel, or search `sessionSitter` in the Settings UI.
 
-**1.** In your user `settings.json`:
+**1.** State dir, corpus, and knowledge routing:
 
 ```jsonc
 {
@@ -151,15 +152,24 @@ there: it classifies each action an agent pauses on and acts.
 }
 ```
 
-**2.** Pick a classifier and a channel in your workspace's `.env`:
+**2.** Pick a classifier and a channel:
 
-```bash
-SUPERVISOR_ENGINE=bob          # or: claude
-BOB_API_KEY=…
-MESSAGING_CHANNEL=stub         # writes decision cards to files — try it with no account
-# MESSAGING_CHANNEL=telegram   # …then switch to real cards on your phone
-# TELEGRAM_BOT_TOKEN=…  TELEGRAM_CHAT_ID=…
+```jsonc
+{
+  "sessionSitter.supervisor.engine": "bob",              // or: "claude"
+  "sessionSitter.supervisor.bobApiKey": "…",
+  "sessionSitter.supervisor.messagingChannel": "stub",   // cards to files — try it with no account
+  // then switch to real cards on your phone:
+  // "sessionSitter.supervisor.messagingChannel": "telegram",
+  // "sessionSitter.supervisor.telegramBotToken": "…",
+  // "sessionSitter.supervisor.telegramChatId": "…"
+}
 ```
+
+Tokens are the one place you may prefer not to use settings, since VS Code stores them in plain
+text. Leave a token setting empty and the matching environment variable or `.env` entry
+(`BOBSHELL_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, …) is still honored as a fallback.
+A setting you do fill in always wins.
 
 **3.** Write your first rule. Copy
 [`knowledge/bottom-line.template.md`](knowledge/bottom-line.template.md) to
@@ -170,6 +180,7 @@ no background script. Watch decisions land in the **Supervision activity** panel
 `sessionSitter.autoSupervise: false`.
 
 → [`docs/SUPERVISION.md`](docs/SUPERVISION.md) for the lifecycle, the CLI, and troubleshooting.
+→ [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) for every setting.
 
 ### Rules that skip the supervisor entirely
 
@@ -184,6 +195,13 @@ Prompts you never want to see again are resolved by rule, before any model call:
 
 First match wins. Anything unmatched goes to the supervisor, or stays for you. A user-facing
 question is never auto-answered.
+
+**Rule decisions are visible too.** A rule that auto-approves, auto-rejects, or auto-replies is a
+real intervention, so it is recorded like any supervisor decision: it appears in the **Supervision
+activity** panel tagged **⚙ rule** (the supervisor's own decisions are tagged **🧠 AI**) and goes
+out as a one-way update on your messaging channel. Nothing Session Sitter does to your sessions is
+invisible. Keep rule decisions out of Telegram — while still recording them — with
+`sessionSitter.supervisor.notifyRuleDecisions: false`.
 
 ---
 
