@@ -39,7 +39,9 @@ from the client machine.
 | `reckon.knowledge.registryPath` | `""` | Optional registry markdown. When set the triple is validated against it and the documented fallbacks apply; when empty the three slugs are used as given. See [`KNOWLEDGE.md`](KNOWLEDGE.md#routing-which-files-apply-to-this-session). |
 
 A slug left empty means that tier is not configured: its file is reported missing and the others
-still load. Nothing is guessed.
+still load. With **no** user configured at all, supervision still runs — the classifier judges the
+pending action without BDI to weigh it against. A missing setting never fails a decision, because
+the agent is blocked on it. Nothing is ever guessed.
 
 ### Deprecated
 

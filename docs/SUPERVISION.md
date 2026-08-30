@@ -181,7 +181,8 @@ The next poll picks it up and the full Orange lifecycle runs, offline.
 | `supervision not started` in the log | no workspace root could be derived | set `reckon.supervisorRepoPath` |
 | Decisions always time out | `getUpdates` is failing — usually a second consumer or a webhook | check the log for `getUpdates failed`; stop the other poller |
 | Records say `classify: … not found` | the classifier CLI is not on `PATH` | fix `SUPERVISOR_ENGINE`, or set `BOB_CLI_PATH` / `CLAUDE_CLI_PATH` |
-| `state: failed` with `knowledge:` | a slug is unknown to a configured registry | fix the slug, or drop `reckon.knowledge.registryPath` |
+| `state: failed` with `knowledge:` | a slug is unknown to a **configured registry** | fix the slug, or drop `reckon.knowledge.registryPath` |
+| Decisions cite no BDI | no `reckon.knowledge.user`, or the tier files are absent | supervision still runs, just without knowledge; set the routing slugs and check `reckon.dataRepoPath` |
 | An approval never lands | the delivery is being retried, not lost | the `outbox/` file stays until the agent confirms; check the log for `resolve … → notfound` |
 
 Everything is logged to the **AI Sessions** output channel and mirrored to

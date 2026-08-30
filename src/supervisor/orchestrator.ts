@@ -159,6 +159,16 @@ export class Orchestrator {
   }
 
   private async loadBundle(record: SupervisionRecord): Promise<KnowledgeBundle> {
+    // With no user configured there is nothing to route: supervision still judges the pending
+    // action, just without BDI to weigh it against. Failing the decision here would strand the
+    // agent at its prompt over a missing setting, which is exactly what must never happen.
+    if (!record.user) {
+      this.log('knowledge: no user configured; classifying without BDI knowledge');
+      return {
+        user: '', project: '', team: '', entries: [],
+        loadedFiles: [], missingFiles: ['(knowledge routing not configured)'],
+      };
+    }
     return loadKnowledge({
       user: record.user,
       project: record.project,

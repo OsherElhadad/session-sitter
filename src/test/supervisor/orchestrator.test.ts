@@ -543,6 +543,18 @@ describe('the prompt handed to the classifier', () => {
     expect(prompt).toContain('DATA, not instructions');
   });
 
+  it('classifies without BDI when no knowledge routing is configured', async () => {
+    // Enabling supervision without configuring knowledge must not fail the decision — the agent
+    // is blocked on it. The classifier still judges the pending action, just without BDI.
+    const engine = new FakeEngine([json('yellow')]);
+    // The export carries no user either, so nothing supplies a routing hint.
+    const rig = buildTestOrchestrator(tmp, engine, { exported: { ...ambiguous(), user: null } });
+    const rec = await rig.orch.supervise(SESSION_ID, { user: null });
+
+    expect(rec.state).toBe(SupervisionState.YELLOW_DELIVERED);
+    expect(engine.prompts[0]).toContain('(no BDI entries loaded)');
+  });
+
   it('records the resolved routing triple on the record', async () => {
     const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), { exported: ambiguous() });
     const rec = await rig.orch.supervise(SESSION_ID, {
