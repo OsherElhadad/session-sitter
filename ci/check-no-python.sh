@@ -59,7 +59,7 @@ echo "--- checking the packaged extension carries no Python"
 # The VSIX is what users actually install, so assert on its manifest rather than the
 # working tree. `vsce ls` prints one path per line.
 if command -v node >/dev/null 2>&1 && [ -d out ]; then
-  packaged_py="$(npx --yes @vscode/vsce@3.9.2 ls 2>/dev/null | grep -E '\.py$' || true)"
+  packaged_py="$(npx --yes @vscode/vsce@3.9.2 ls --no-dependencies 2>/dev/null | grep -E '\.py$' || true)"
   if [ -n "$packaged_py" ]; then
     echo "::error::the .vsix would ship Python files:"
     echo "$packaged_py" | sed 's/^/    /'
@@ -71,8 +71,26 @@ else
   echo "    skipped (compile first to check the package manifest)"
 fi
 
+echo "--- checking the packaged extension carries no repo tooling"
+# CI scripts, the Makefile and the workflows are for developing this extension, not for
+# running it. Shipping them to users is harmless but sloppy, and it is easy to reintroduce
+# by adding a directory without touching .vscodeignore.
+if command -v node >/dev/null 2>&1 && [ -d out ]; then
+  packaged_tooling="$(npx --yes @vscode/vsce@3.9.2 ls --no-dependencies 2>/dev/null \
+    | grep -E '^(ci/|Makefile|\.github/)' || true)"
+  if [ -n "$packaged_tooling" ]; then
+    echo "::error::the .vsix would ship repo tooling — add it to .vscodeignore:"
+    echo "$packaged_tooling" | sed 's/^/    /'
+    fail=1
+  else
+    echo "    none"
+  fi
+else
+  echo "    skipped (compile first to check the package manifest)"
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo
-  echo "✓ TypeScript only, no internal names"
+  echo "✓ TypeScript only, no internal names, no tooling shipped"
 fi
 exit "$fail"

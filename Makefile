@@ -135,7 +135,9 @@ uninstall: ## Remove the installed extension
 
 .PHONY: ls-package
 ls-package: compile ## List exactly what would ship inside the .vsix
-	$(VSCE) ls
+	# Same --no-dependencies as `package`, or this lists the dependency tree instead of
+	# the real VSIX contents (and fails outright when node_modules is not a full install).
+	$(VSCE) ls --no-dependencies
 
 # ---------------------------------------------------------------------------
 # The bundled CLIs — the same code the extension runs, driven by hand

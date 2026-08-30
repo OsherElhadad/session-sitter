@@ -10,3 +10,4 @@ out/test/
 node_modules/
 Makefile
 .github/
+ci/
