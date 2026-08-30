@@ -8,6 +8,11 @@ export interface WindowEntry {
   ideCli: string;
   ipcSocket: string;
   updatedAt: number;
+  // Task ids Bob currently has open in this window (from its live TaskManager).
+  // Optional for backward compatibility with entries written by older builds.
+  openBobTaskIds?: string[];
+  // Claude session ids open in this window (from Claude's live manager).
+  openClaudeSessionIds?: string[];
 }
 
 const HELPER_NAMES = new Set(['helpers']);

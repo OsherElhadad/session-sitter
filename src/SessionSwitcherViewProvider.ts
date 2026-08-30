@@ -6,12 +6,22 @@ import { execFile } from 'child_process';
 import { randomBytes } from 'crypto';
 import { SessionManager, ClaudeSession, MessageExchange } from './SessionManager';
 import { readLiveWindows, writeWindowEntry, removeWindowEntry, discoverOwnIpcSocket, detectIdeCli, type WindowEntry } from './WindowRegistry';
+import { getOpenBobTaskIds } from './agents/BobInspector';
+import { getOpenClaudeSessionIds } from './agents/ClaudeInspector';
 import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
+import { SupervisionActivity, type ActivityItem } from './SupervisionActivity';
+import { uploadSession } from './corpus/upload';
 
-// Sessions view shows the N most recently updated sessions across all sources.
-// The remainder go to History (capped separately below).
+// The Sessions view is a live worklist: only sessions the user can currently act on.
+// Everything else goes to History. Both partitions stay sorted by recency and capped.
 const SESSIONS_LIMIT = 20;
 const HISTORY_LIMIT = 50;
+
+// Sources that expose no live-process signal at all (no extension host to ask). For those,
+// recency is the only available proxy for "you are working in this right now" — see
+// `_partitionSessions`. Named and configurable rather than hidden.
+const PROBELESS_SOURCES: ReadonlySet<string> = new Set(['codex', 'chat']);
+const DEFAULT_PROBELESS_ACTIVE_WINDOW_MINUTES = 120;
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -25,14 +35,40 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   private _historyOpen = false;
   private _focusWatcher: vscode.Disposable | undefined;
   private _registryTimer: ReturnType<typeof setInterval> | undefined;
+  private _activity: SupervisionActivity | undefined;
+  private _lastActivity: ActivityItem[] = [];
+  private readonly _recordsDir: string;
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
     private readonly _sessionManager: SessionManager,
+    private readonly _log: (msg: string) => void = () => { /* no-op */ },
+    stateDir = '',
   ) {
+    this._recordsDir = stateDir ? path.join(stateDir, 'records') : '';
     this._focusWatcher = this._startFocusRequestWatcher();
     void this._publishWindowEntry();
     this._registryTimer = setInterval(() => { void this._publishWindowEntry(); }, 60_000);
+
+    // Observability feed: mirror the supervisor's decisions (records/) into the panel.
+    if (stateDir) {
+      this._activity = new SupervisionActivity(stateDir, items => {
+        this._lastActivity = items;
+        void this._view?.webview.postMessage({ type: 'updateActivity', items });
+      });
+      this._activity.start();
+    }
+  }
+
+  /**
+   * Resolve a supervision record's JSON path from its requestId (records live at
+   * `<stateDir>/records/<requestId>.json`). Returns '' when no state dir is configured or the id
+   * is malformed — the requestId must match the store's `req-<hex>` shape, so a value coming
+   * from the webview can never escape the records directory.
+   */
+  private _supervisionRecordPath(requestId: string | undefined): string {
+    if (!this._recordsDir || !requestId || !/^req-[A-Za-z0-9]+$/.test(requestId)) { return ''; }
+    return path.join(this._recordsDir, `${requestId}.json`);
   }
 
   // Publish this window's identity + IPC socket so other windows can focus it.
@@ -43,6 +79,8 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       workspaceFolders: folders,
       ideCli: detectIdeCli(undefined, vscode.env.appName),
       ipcSocket: discoverOwnIpcSocket() ?? process.env.VSCODE_IPC_HOOK_CLI ?? '',
+      openBobTaskIds: await getOpenBobTaskIds(this._log),
+      openClaudeSessionIds: (await getOpenClaudeSessionIds(this._log)).open,
       updatedAt: Date.now(),
     });
   }
@@ -140,6 +178,12 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
           }
           case 'ready': {
             void this._pushSessions();
+            if (this._lastActivity.length) {
+              void this._view?.webview.postMessage({
+                type: 'updateActivity', items: this._lastActivity,
+              });
+            }
+            this._activity?.pushNow();
             break;
           }
           case 'getSessionPreview': {
@@ -153,6 +197,30 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
               projectPath: session?.projectPath ?? '',
               exchanges,
             });
+            break;
+          }
+          case 'openSettings': {
+            void vscode.commands.executeCommand(
+              'workbench.action.openSettings', 'claudeSessionSwitcher.autoRespond');
+            break;
+          }
+          case 'loadActivity': {
+            this._activity?.pushNow();
+            break;
+          }
+          case 'openSupervisionRecord': {
+            const recordPath = this._supervisionRecordPath(message.requestId as string | undefined);
+            if (!recordPath) { break; }
+            void vscode.workspace.openTextDocument(vscode.Uri.file(recordPath)).then(
+              doc => vscode.window.showTextDocument(doc),
+              () => vscode.window.showWarningMessage(`Supervision record not found: ${recordPath}`),
+            );
+            break;
+          }
+          case 'copySupervisionRecordPath': {
+            const recordPath = this._supervisionRecordPath(message.requestId as string | undefined);
+            if (!recordPath) { break; }
+            void vscode.env.clipboard.writeText(recordPath);
             break;
           }
           case 'uploadToReckon': {
@@ -241,6 +309,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     this._viewDisposables = [];
     this._focusWatcher?.dispose();
     if (this._registryTimer) { clearInterval(this._registryTimer); }
+    this._activity?.dispose();
     void removeWindowEntry(process.pid);
   }
 
@@ -275,12 +344,11 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       return;
     }
 
-    // Claude: prefer revealing in editor tab, fall back to sidebar
-    if (this._openClaudeTabLabels().has(session.title)) {
-      void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
-    } else {
-      void vscode.commands.executeCommand('claude-vscode.sidebar.open');
-    }
+    // Claude: open the session BY ID whether or not a tab is currently open.
+    // `primaryEditor.open` with a sessionId reopens a closed/old conversation; the old
+    // `sidebar.open` fallback did NOT target a specific session, so switching to a closed
+    // session appeared to "not find it".
+    void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
   }
 
   // Returns labels of all currently open Claude Code or Bob editor tabs.
@@ -309,16 +377,73 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
+  /** How long a probeless session (Codex / VS Code Chat) counts as active. */
+  private _probelessWindowMs(): number {
+    const minutes = vscode.workspace.getConfiguration('claudeSessionSwitcher')
+      .get<number>('probelessActiveWindowMinutes', DEFAULT_PROBELESS_ACTIVE_WINDOW_MINUTES);
+    const safe = typeof minutes === 'number' && minutes >= 0
+      ? minutes : DEFAULT_PROBELESS_ACTIVE_WINDOW_MINUTES;
+    return safe * 60_000;
+  }
+
+  /**
+   * Split sessions into the active worklist vs everything else (History).
+   *
+   * Active means a session the user can act on right now. How that is decided depends on what
+   * the source can actually tell us:
+   *
+   *  - **Bob / Claude** — their extension hosts hold the truth. Bob reports its open task ids
+   *    from the live `TaskManager`; Claude reports its open session ids from its manager. We
+   *    read this window fresh and union it with what other live windows published to the
+   *    registry, so the answer is cross-window. A session is also treated as active when its
+   *    status is not idle, so one you are actively in still shows up if the probe is
+   *    momentarily silent (a WSL2 / inspector hiccup).
+   *  - **Codex / VS Code Chat** — no extension host to ask, no liveness signal of any kind.
+   *    Recency is the only honest proxy, so they count as active while updated within
+   *    `claudeSessionSwitcher.probelessActiveWindowMinutes`.
+   *
+   * Both partitions stay sorted by recency.
+   */
+  private async _partitionSessions(): Promise<{ active: ClaudeSession[]; history: ClaudeSession[] }> {
+    const localClaude = await getOpenClaudeSessionIds(this._log);
+    const localBobIds = await getOpenBobTaskIds(this._log);
+    const windows = await readLiveWindows();
+    const claudeOpenIds = new Set<string>([
+      ...localClaude.open,
+      ...windows.flatMap(w => w.openClaudeSessionIds ?? []),
+    ]);
+    const bobOpenIds = new Set<string>([
+      ...localBobIds,
+      ...windows.flatMap(w => w.openBobTaskIds ?? []),
+    ]);
+    const cutoff = Date.now() - this._probelessWindowMs();
+
+    const isActive = (s: ClaudeSession): boolean => {
+      if (PROBELESS_SOURCES.has(s.source)) { return s.updatedAt.getTime() >= cutoff; }
+      const reportedOpen = s.source === 'bob'
+        ? bobOpenIds.has(s.sessionId)
+        : claudeOpenIds.has(s.sessionId);
+      return reportedOpen || s.status !== 'idle';
+    };
+
+    const all = this._sortedByRecency();
+    return { active: all.filter(isActive), history: all.filter(s => !isActive(s)) };
+  }
+
   private async _pushSessions(): Promise<void> {
     if (!this._view) { return; }
-    const sessions = this._sortedByRecency().slice(0, SESSIONS_LIMIT);
-    void this._view.webview.postMessage({ type: 'updateSessions', sessions });
+    const { active } = await this._partitionSessions();
+    void this._view.webview.postMessage({
+      type: 'updateSessions', sessions: active.slice(0, SESSIONS_LIMIT),
+    });
   }
 
   private async _pushHistory(): Promise<void> {
     if (!this._view) { return; }
-    const sessions = this._sortedByRecency().slice(SESSIONS_LIMIT, SESSIONS_LIMIT + HISTORY_LIMIT);
-    void this._view.webview.postMessage({ type: 'updateHistory', sessions });
+    const { history } = await this._partitionSessions();
+    void this._view.webview.postMessage({
+      type: 'updateHistory', sessions: history.slice(0, HISTORY_LIMIT),
+    });
   }
 
   // Close the Claude Code editor tab whose label matches the session's title.
@@ -409,18 +534,41 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     }
   }
 
-  private async _uploadSessionToReckon(sessionId: string): Promise<void> {
+  /**
+   * Resolve the corpus repo root for the uploader.
+   *
+   * Preferred: `reckon.dataRepoPath`. For backwards compatibility with the Python-era setup, an
+   * existing `reckon.uploadScriptPath` (which pointed at `<root>/scripts/upload_session.py`) is
+   * accepted and its repo root derived, so upgrading needs no reconfiguration.
+   */
+  private _corpusRepoRoot(): string {
     const config = vscode.workspace.getConfiguration('reckon');
-    const scriptPath: string = config.get('uploadScriptPath') ?? '';
-    if (!scriptPath || !fs.existsSync(scriptPath)) {
-      // Script not configured or not found — fail silently.
-      console.log('[reckon] upload_session.py not found (reckon.uploadScriptPath:', scriptPath || '(unset)', ')');
+    const explicit = (config.get<string>('dataRepoPath') ?? '').trim();
+    if (explicit) { return explicit; }
+    const legacyScript = (config.get<string>('uploadScriptPath') ?? '').trim();
+    if (legacyScript) {
+      // <root>/scripts/upload_session.py -> <root>
+      return path.dirname(path.dirname(legacyScript));
+    }
+    return '';
+  }
+
+  /**
+   * Upload one session to the corpus repository, in-process. This used to shell out to
+   * `upload_session.py`; the uploader is TypeScript now, so there is no subprocess and no
+   * Python involved.
+   */
+  private async _uploadSessionToReckon(sessionId: string): Promise<void> {
+    const repoRoot = this._corpusRepoRoot();
+    if (!repoRoot || !fs.existsSync(repoRoot)) {
+      void vscode.window.showErrorMessage(
+        'Set `reckon.dataRepoPath` to your corpus repository before uploading sessions.');
       return;
     }
 
     const exported = await this._sessionManager.exportSessionAsJson(sessionId);
     if (!exported) {
-      void vscode.window.showErrorMessage('reckon: could not resolve session file.');
+      void vscode.window.showErrorMessage('corpus: could not resolve session file.');
       return;
     }
 
@@ -428,37 +576,32 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     const source = session?.source ?? 'other';
     const slug = this._slugify(session?.title ?? sessionId);
 
-    void vscode.window.withProgress(
+    await vscode.window.withProgress(
       {
         location: vscode.ProgressLocation.Notification,
-        title: 'reckon: uploading session…',
+        title: 'Uploading session to the corpus…',
         cancellable: false,
       },
-      () =>
-        new Promise<void>(resolve => {
-          execFile(
-            'python3',
-            [scriptPath, exported.filePath, '--source', source, '--slug', slug],
-            { timeout: 60_000 },
-            (err, stdout, stderr) => {
-              exported.cleanup();
-              if (err) {
-                void vscode.window.showErrorMessage(
-                  `reckon: upload failed — ${(stderr || String(err)).trim()}`,
-                );
-              } else {
-                void vscode.window.showInformationMessage('reckon: session uploaded ✓');
-                if (stdout.trim()) {
-                  console.log('[reckon upload]', stdout.trim());
-                }
-              }
-              resolve();
-            },
-          );
-        }),
+      async () => {
+        try {
+          const result = await uploadSession({
+            repoRoot,
+            sessionFile: exported.filePath,
+            source,
+            slug,
+            log: msg => this._log(`[corpus upload] ${msg}`),
+          });
+          void vscode.window.showInformationMessage(
+            `Session uploaded ✓ — ${result.storedName}`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          void vscode.window.showErrorMessage(`Upload failed — ${message}`);
+        } finally {
+          exported.cleanup();
+        }
+      },
     );
   }
-
   private _slugify(text: string): string {
     return (
       text
@@ -472,6 +615,9 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
   private _getHtmlForWebview(webview: vscode.Webview): string {
     const mainScriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'main.js')
+    );
+    const menuScriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'toolbarMenu.js')
     );
     const stylesUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'styles.css')
@@ -493,13 +639,15 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
 <body>
   <div id="tab-bar">
     <div id="toolbar">
-      <button id="about-btn" title="About Claude Session Switcher">&#x24D8;</button>
+      <button id="menu-btn" title="Menu">&#x2630;</button>
       <button id="new-session-btn" title="New Claude Session">+</button>
       <button id="new-bob-session-btn" title="New Bob Session">+B</button>
     </div>
     <div id="tab-strip" role="tablist" aria-label="Claude Sessions"></div>
     <button id="history-toggle" aria-expanded="false">History &#x25B6;</button>
     <div id="history-panel" hidden></div>
+    <button id="activity-toggle" aria-expanded="true">Supervision activity &#x25BC;</button>
+    <div id="activity-panel"></div>
   </div>
   <div id="about-box" hidden>
     <div class="about-name">Claude Session Switcher</div>
@@ -508,6 +656,7 @@ export class SessionSwitcherViewProvider implements vscode.WebviewViewProvider, 
     <button id="about-close">Close</button>
   </div>
   <div id="session-preview" hidden></div>
+  <script nonce="${nonce}" src="${menuScriptUri}"></script>
   <script nonce="${nonce}" src="${mainScriptUri}"></script>
 </body>
 </html>`;

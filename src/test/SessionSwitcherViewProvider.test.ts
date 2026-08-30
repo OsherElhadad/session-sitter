@@ -18,7 +18,7 @@ const {
 } = vi.hoisted(() => ({
   mockExecuteCommand: vi.fn(),
   mockShowWarningMessage: vi.fn(),
-  mockGetConfiguration: vi.fn((): { get: (key?: string) => string | undefined } => ({ get: () => 'panel' })),
+  mockGetConfiguration: vi.fn((): { get: (key?: string, fallback?: unknown) => unknown } => ({ get: () => 'panel' })),
   mockOpenTextDocument: vi.fn().mockResolvedValue({ uri: 'doc://untitled' }),
   mockShowTextDocument: vi.fn().mockResolvedValue(undefined),
   mockSetStatusBarMessage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
@@ -59,6 +59,9 @@ vi.mock('vscode', () => {
       clipboard: { writeText: mockClipboardWriteText },
     },
     commands: { executeCommand: mockExecuteCommand },
+    // The open-session probes reach the agents' extension hosts through vscode.extensions.
+    // With none present they report nothing open, which is what these tests want.
+    extensions: { getExtension: vi.fn(() => undefined), all: [] },
     Uri: {
       file: (p: string) => ({ fsPath: p, toString: () => p }),
       joinPath: (base: { fsPath: string }, ...parts: string[]) => ({
@@ -161,8 +164,9 @@ describe('_handleFocusRequest', () => {
     await (provider as unknown as { _handleFocusRequest(u: { fsPath: string }): Promise<void> })
       ._handleFocusRequest({ fsPath: focusFile });
 
-    // Routes through _openSessionLocal; no matching tab → focuses the side panel.
-    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.sidebar.open');
+    // Routes through _openSessionLocal, which opens the session by id.
+    expect(mockExecuteCommand).toHaveBeenCalledWith(
+      'claude-vscode.primaryEditor.open', 'abc-123');
   });
 
   it('deletes the file after handling', async () => {
@@ -317,11 +321,14 @@ describe('_openSessionLocal', () => {
     expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
   });
 
-  it('focuses the side panel when the session is not an open editor tab', () => {
+  it('opens a Claude session by id even when no editor tab is open for it', () => {
     setOpenClaudeTabs([]);
     const p = makeProvider([session]) as unknown as { _openSessionLocal(id: string): void };
     p._openSessionLocal('sess-1');
-    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.sidebar.open');
+    // `primaryEditor.open` with a sessionId reopens a closed conversation; the old
+    // `sidebar.open` fallback did not target a specific session, so a closed session
+    // appeared to "not be found".
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
   });
 });
 
@@ -463,7 +470,11 @@ describe('webview message: addFromHistory (Bob)', () => {
 });
 
 // ── Tests: latest-sessions-by-activity view (_pushSessions / _pushHistory) ────
-describe('Sessions view: top-N-by-recency slice', () => {
+// The Sessions view is a live worklist, not a recency slice: only sessions the user can act on
+// right now. Bob/Claude are judged by what their extension hosts report as open (unioned across
+// windows) plus a not-idle status; Codex and VS Code Chat have no such signal, so they fall back
+// to a recency window. Everything else is History.
+describe('Sessions view: active-vs-history partition', () => {
   function resolveWebviewCapturing(provider: import('../SessionSwitcherViewProvider').SessionSwitcherViewProvider) {
     const postMessage = vi.fn();
     const webview = {
@@ -490,7 +501,7 @@ describe('Sessions view: top-N-by-recency slice', () => {
   function makeSession(
     sessionId: string,
     minutesAgo: number,
-    source: 'claude' | 'bob' = 'claude',
+    source: 'claude' | 'bob' | 'codex' | 'chat' = 'claude',
     status: 'active' | 'idle' = 'idle',
   ): import('../SessionManager').ClaudeSession {
     return {
@@ -510,77 +521,128 @@ describe('Sessions view: top-N-by-recency slice', () => {
       .find(m => m.type === type);
   }
 
-  it('Sessions returns top 20 across sources, sorted by updatedAt desc', async () => {
-    // 25 sessions, oldest first in the getSessions() return, monotonically newer with each entry.
-    const all = Array.from({ length: 25 }, (_, i) => makeSession(`s${i}`, 25 - i, i % 2 === 0 ? 'claude' : 'bob'));
+  beforeEach(() => {
+    // Each push partitions independently, so the registry is read more than once per test.
+    mockReadLiveWindows.mockResolvedValue([]);
+  });
+
+  it('keeps a Bob task the IDE reports open, and files the rest under History', async () => {
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: 42, workspaceFolders: [], ideCli: 'bobide', ipcSocket: '', updatedAt: Date.now(),
+        openBobTaskIds: ['b-open'] },
+    ]);
+    const all = [
+      makeSession('b-open', 90, 'bob'),
+      makeSession('b-closed', 1, 'bob'),
+    ];
     const provider = makeProvider(all);
     const postMessage = resolveWebviewCapturing(provider);
     await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
-
-    const msg = capture(postMessage, 'updateSessions');
-    expect(msg?.sessions).toHaveLength(20);
-    // Newest 20 are s24..s5 (s24 is 1 min ago, s5 is 20 min ago).
-    const expectedIds = Array.from({ length: 20 }, (_, i) => `s${24 - i}`);
-    expect(msg?.sessions.map(s => s.sessionId)).toEqual(expectedIds);
-  });
-
-  it('History skips the first 20 and caps at 50', async () => {
-    // 75 sessions. History should get positions 20..69 (50 items), dropping the last 5.
-    const all = Array.from({ length: 75 }, (_, i) => makeSession(`s${i}`, 75 - i));
-    const provider = makeProvider(all);
-    const postMessage = resolveWebviewCapturing(provider);
     await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
 
-    const msg = capture(postMessage, 'updateHistory');
-    expect(msg?.sessions).toHaveLength(50);
-    // Newest is s74 (1 min ago). Sessions covers s74..s55 (top 20).
-    // History covers s54..s5 (next 50).
-    const expectedIds = Array.from({ length: 50 }, (_, i) => `s${54 - i}`);
-    expect(msg?.sessions.map(s => s.sessionId)).toEqual(expectedIds);
+    // Recency does NOT decide membership: the older-but-open task is the active one.
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(['b-open']);
+    expect(capture(postMessage, 'updateHistory')?.sessions.map(s => s.sessionId)).toEqual(['b-closed']);
   });
 
-  it('with fewer than 20 total sessions, all go to Sessions and History is empty', async () => {
-    const all = Array.from({ length: 5 }, (_, i) => makeSession(`s${i}`, 5 - i));
-    const provider = makeProvider(all);
+  it('unions open ids across windows so another window\'s session still counts', async () => {
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: 1, workspaceFolders: [], ideCli: 'code', ipcSocket: '', updatedAt: Date.now(),
+        openClaudeSessionIds: ['c-elsewhere'] },
+    ]);
+    const provider = makeProvider([makeSession('c-elsewhere', 30, 'claude')]);
     const postMessage = resolveWebviewCapturing(provider);
-    await (provider as unknown as {
-      _pushSessions(): Promise<void>;
-      _pushHistory(): Promise<void>;
-    })._pushSessions();
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['c-elsewhere']);
+  });
+
+  it('treats a non-idle session as active even when no probe reports it open', async () => {
+    // Fallback for a WSL2 / inspector hiccup: a task that is running or waiting on you must not
+    // vanish into History just because the live probe was momentarily silent.
+    const provider = makeProvider([
+      makeSession('b-running', 60, 'bob', 'active'),
+      makeSession('b-idle', 5, 'bob', 'idle'),
+    ]);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
     await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
 
-    expect(capture(postMessage, 'updateSessions')?.sessions).toHaveLength(5);
-    expect(capture(postMessage, 'updateHistory')?.sessions).toHaveLength(0);
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['b-running']);
+    expect(capture(postMessage, 'updateHistory')?.sessions.map(s => s.sessionId))
+      .toEqual(['b-idle']);
   });
 
-  it('Sessions mixes Claude and Bob interleaved by updatedAt', async () => {
-    // Alternating sources with strictly descending timestamps.
-    const all: import('../SessionManager').ClaudeSession[] = [
-      makeSession('b1', 1, 'bob'),
-      makeSession('c1', 2, 'claude'),
-      makeSession('b2', 3, 'bob'),
-      makeSession('c2', 4, 'claude'),
+  it('keeps recent Codex/Chat sessions active and ages older ones into History', async () => {
+    // Neither source exposes a liveness signal, so the recency window is the rule.
+    const provider = makeProvider([
+      makeSession('codex-fresh', 10, 'codex'),
+      makeSession('chat-fresh', 20, 'chat'),
+      makeSession('codex-stale', 60 * 5, 'codex'),
+      makeSession('chat-stale', 60 * 9, 'chat'),
+    ]);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['codex-fresh', 'chat-fresh']);
+    expect(capture(postMessage, 'updateHistory')?.sessions.map(s => s.sessionId))
+      .toEqual(['codex-stale', 'chat-stale']);
+  });
+
+  it('honors probelessActiveWindowMinutes = 0 by parking Codex/Chat in History', async () => {
+    mockGetConfiguration.mockImplementation(() => ({ get: () => 0 }));
+    try {
+      const provider = makeProvider([makeSession('codex-fresh', 1, 'codex')]);
+      const postMessage = resolveWebviewCapturing(provider);
+      await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+      await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
+
+      expect(capture(postMessage, 'updateSessions')?.sessions).toHaveLength(0);
+      expect(capture(postMessage, 'updateHistory')?.sessions.map(s => s.sessionId))
+        .toEqual(['codex-fresh']);
+    } finally {
+      mockGetConfiguration.mockImplementation(() => ({ get: () => 'panel' }));
+    }
+  });
+
+  it('sorts each partition by recency and caps them', async () => {
+    // 30 open Bob tasks + 60 closed ones: Sessions caps at 20, History at 50, both newest first.
+    const openIds = Array.from({ length: 30 }, (_, i) => `open-${i}`);
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: 7, workspaceFolders: [], ideCli: 'bobide', ipcSocket: '', updatedAt: Date.now(),
+        openBobTaskIds: openIds },
+    ]);
+    const all = [
+      ...openIds.map((id, i) => makeSession(id, 30 - i, 'bob')),
+      ...Array.from({ length: 60 }, (_, i) => makeSession(`closed-${i}`, 1000 - i, 'bob')),
     ];
     const provider = makeProvider(all);
     const postMessage = resolveWebviewCapturing(provider);
     await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
 
-    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(
-      ['b1', 'c1', 'b2', 'c2'],
-    );
+    const sessions = capture(postMessage, 'updateSessions')?.sessions ?? [];
+    expect(sessions).toHaveLength(20);
+    expect(sessions.map(s => s.sessionId)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `open-${29 - i}`));
+    for (let i = 1; i < sessions.length; i++) {
+      expect(sessions[i - 1].updatedAt.getTime()).toBeGreaterThanOrEqual(
+        sessions[i].updatedAt.getTime());
+    }
   });
 
-  it("Bob status='active' does not force position; only updatedAt determines order", async () => {
-    // Older Bob marked 'active' vs newer Claude 'idle' — Claude comes first.
-    const olderBobRunning = makeSession('bob-running', 60, 'bob', 'active');
-    const newerClaudeIdle = makeSession('claude-fresh', 5, 'claude', 'idle');
-    const provider = makeProvider([olderBobRunning, newerClaudeIdle]);
+  it('caps History at 50 newest', async () => {
+    const all = Array.from({ length: 75 }, (_, i) => makeSession(`s${i}`, 1000 - i, 'bob'));
+    const provider = makeProvider(all);
     const postMessage = resolveWebviewCapturing(provider);
-    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
 
-    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId)).toEqual(
-      ['claude-fresh', 'bob-running'],
-    );
+    const sessions = capture(postMessage, 'updateHistory')?.sessions ?? [];
+    expect(sessions).toHaveLength(50);
+    expect(sessions[0].sessionId).toBe('s74'); // newest of the inactive set
   });
 });
 

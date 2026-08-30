@@ -2,9 +2,26 @@
 
 ## Overview
 
-Claude Code supports multiple concurrent sessions — each with `retainContextWhenHidden: true`, meaning background sessions keep running even when their panel is hidden. What it lacks is a panel that shows which sessions are alive and lets you switch between them. This extension fills that gap.
+The extension does two things.
 
-The design goal: **no reimplementation of Claude Code internals, no fragile API hacks — only read what Claude Code already writes to disk**.
+**It shows you your agent sessions.** Claude Code, IBM Bob, Codex and VS Code Chat each keep
+their own session store, and none of them shows you a list of what is alive across windows. The
+panel does: one worklist of the sessions you can act on right now, everything else under History,
+one click to switch.
+
+**It supervises what those agents pause on.** When an agent stops for approval, the extension
+classifies that specific pending action into a traffic light — green, yellow, orange, red —
+against knowledge learned from your team's past sessions, and applies the outcome back into the
+agent. Orange reaches a human asynchronously with a countdown, and silence is never treated as
+approval.
+
+Two design rules shape everything below:
+
+1. **For reading sessions: read what the agents already write to disk.** No reimplementation of
+   their internals.
+2. **For acting on a blocked session: use the agent's own join point.** A task blocked at a
+   permission prompt cannot be reached by a chat message; the only channel that works is the
+   agent's own approval emitter, reached in-process through the V8 inspector.
 
 ---
 
@@ -13,18 +30,40 @@ The design goal: **no reimplementation of Claude Code internals, no fragile API 
 ```
 claude-session-switcher/
 ├── src/
-│   ├── extension.ts                   # activate() — wires everything together
-│   ├── SessionManager.ts              # Reads ~/.claude/, detects live sessions, polls
-│   ├── SessionSwitcherViewProvider.ts # WebviewViewProvider — drives the sidebar UI
+│   ├── extension.ts                    # activate() — wires everything together
+│   ├── SessionManager.ts               # the four session stores; scanning + transcripts
+│   ├── SessionSwitcherViewProvider.ts  # the sidebar webview + the activity feed
+│   ├── WindowRegistry.ts               # cross-window focus + published open-session ids
+│   ├── BobDatabase.ts                  # the one read-only SQLite shim (see below)
+│   ├── AutoResponder.ts                # text rules, approval rules, supervisor handoff
+│   ├── SessionExporter.ts              # the full-transcript export contract
+│   ├── SupervisionService.ts           # drives the supervisor in-process
+│   ├── SupervisorOutbox.ts             # applies supervisor decisions into the agent
+│   ├── SupervisionActivity.ts          # records/ -> the panel's activity feed
+│   ├── agents/                         # per-IDE live-process bridges (V8 inspector)
+│   │   ├── BobInspector.ts    BobSender.ts     BobApprover.ts
+│   │   ├── ClaudeInspector.ts ClaudeSender.ts  ClaudeApprover.ts
+│   │   └── QuestionProbe.ts            # read-only probes for debugging the bridges
+│   ├── supervisor/                     # the runtime supervisor — pure TypeScript
+│   │   ├── models.ts      timeutil.ts   schema.ts     questions.ts
+│   │   ├── transcript.ts  knowledge.ts  tiers.ts      prompt.ts
+│   │   ├── engine.ts      store.ts      messaging.ts  telegram.ts
+│   │   ├── agentControl.ts orchestrator.ts config.ts  factory.ts
+│   │   └── cli.ts                      # node out/supervisor/cli.js run|poll
+│   ├── corpus/                         # session corpus tooling
+│   │   ├── upload.ts  mask.ts  cli.ts
 │   └── webview/
-│       ├── main.js                    # Tab strip + history panel (vanilla JS)
-│       └── styles.css                 # Theme-aware styles
-├── src/test/
-│   ├── LiveSessionRegistry.test.ts    # Unit tests for registry logic
-│   └── SessionManager.test.ts         # Unit tests for JSONL parsing + status
-└── resources/
-    └── icon.svg
+│       ├── main.js                     # tab strip, history, activity feed
+│       ├── toolbarMenu.js              # the ☰ menu (About + Settings…)
+│       └── styles.css                  # theme-aware styles
+├── src/test/                           # vitest; 600+ tests, no network, no real agent
+├── knowledge/                          # BDI tier template + registry example
+├── skills/kb-sitter/                   # the knowledge-loader skill
+└── docs/
 ```
+
+Everything in this repository is TypeScript. See
+[Why one `python3` call remains](#why-one-python3-call-remains).
 
 ---
 
@@ -204,7 +243,7 @@ Plain HTML/CSS/JS — no framework, no build step. Communicates exclusively via 
 [ + ]                           ← new session button
 [ Fix auth bug  claude-proj  × ]  ← session row (title + project badge + close)
 [ Count to 20   claude-proj  × ]
-[ Implement X   skillberry   × ]
+[ Implement X   demo-project   × ]
 [ History ▼ ]                   ← collapsible
   [ Past session 1              ]
   [ Past session 2              ]
@@ -248,3 +287,173 @@ VS Code process trees can survive for days in WSL without a full restart. Sessio
 
 **Why not `vscode.window.tabGroups`?**
 This API only works from the local (Windows) extension host. Our extension runs in the remote (WSL) extension host to access the WSL filesystem. The two can't run in the same host simultaneously without a significant refactor to use `vscode.workspace.fs` for all file I/O.
+
+---
+
+## The Supervision Layer
+
+### The loop
+
+```
+agent pauses at a prompt
+  → AutoResponder's approval sweep sees it (every 5 s, per IDE)
+      ├─ an auto-approve rule matches      → resolve it, done
+      ├─ it is a user-facing question       → never auto-answered; goes to the relay
+      └─ nothing handled it                → hand to SupervisionService
+                                                 │
+SessionExporter writes  <stateDir>/history/<id>.json   (the export contract)
+                                                 │
+Orchestrator: deterministic tier → load BDI → build prompt → classify → validate → act
+                                                 │
+                       ┌─────────────────────────┼──────────────────────┐
+                    GREEN                     YELLOW              ORANGE / RED
+              approve the prompt        inject labeled          post a decision card
+              + one-way update           guidance                + start the countdown
+                                                                        │
+                                                          reply ──┐  ┌── timeout
+                                                                  ▼  ▼
+                                                    approve / deny + relay the instruction
+                                                 │
+Orchestrator writes a delivery → <stateDir>/outbox/<deliveryId>.json
+                                                 │
+SupervisorOutbox applies it: approval channel (blocked prompt) or message channel (idle task)
+```
+
+### Why the supervisor runs in-process
+
+The supervisor used to be a Python package driven by a spawned interpreter — one process per
+blocked prompt, plus a long-lived poll loop. Now that it is TypeScript there is no reason for a
+process boundary: `SupervisionService` owns an `Orchestrator` directly, so a decision costs no
+process spawn and no interpreter startup.
+
+What did **not** change is the on-disk state, because each directory earns its place:
+
+| Directory | Why it exists |
+|---|---|
+| `history/` | the export contract — one JSON file per exported session, replayable offline |
+| `records/` | one durable record per decision: the audit trail, and what the activity panel reads |
+| `outbox/` | the delivery queue. A delivery is archived only on a **confirmed** apply, so a failed or `notfound` resolve is retried instead of silently lost |
+| `inbox/` | simulated replies for the stub messaging channel |
+| `notifications/` | what the stub channel would have sent |
+| `locks/` | one lock per session, so two live Orange cards can never exist for one decision |
+
+Losing the process boundary did not mean losing durability: a crash mid-decision is still
+recoverable, and a restarted extension host resumes pending Orange records and applies their
+timeouts.
+
+The outbox indirection also stays, but it is now **kicked**: the orchestrator calls the applier
+the instant it writes a delivery, so an approval reaches the blocked agent in milliseconds. The
+1500 ms timer and the `fs.watch` remain as the safety net.
+
+### The deterministic tier
+
+Before any model call, `supervisor/tiers.ts` decides the obvious cases:
+
+- **read-only or plainly safe** (`read_file`, `grep`, `git status`, `ls`) → GREEN, auto-approved.
+- **unambiguously destructive** (`--force` push, deleting a remote ref, `rm -rf`, `DROP TABLE`,
+  `chmod 777`, touching `.env` / `id_rsa` / `credentials`) → RED, blocked.
+- **anything else** → ambiguous, so the classifier runs.
+
+A plain `git push origin main` is deliberately *not* deterministic-red: whether that is safe
+depends on branch protection, and the deterministic tier must not pre-empt that judgment.
+
+### Recovery, and why it never fails closed
+
+The classifier is a coding-agent CLI, and it sometimes narrates a decision as prose instead of
+emitting JSON. The recovery chain exists because a hard failure would strand the agent at a
+blocked prompt forever:
+
+1. `extractJsonObject` scans every balanced top-level object and takes the first one carrying a
+   `traffic_light` — this is what survives markdown fences, surrounding prose, and the stats
+   object Bob's `--output-format json` appends.
+2. Failing that, `salvageAssessmentFromText` reads the light out of the prose and builds a
+   minimal valid assessment. It deliberately refuses to salvage *structured* output: a
+   structured-but-invalid assessment must fail loudly rather than be silently patched.
+3. Failing that, the action is escalated to the human as Orange. Unparseable is not approval.
+
+### Identity and safety rules
+
+These are contracts, not preferences:
+
+- **Never impersonate the user.** Every message to the agent carries the
+  `[Session Supervisor]` label. The one exception is a question answer, which *is* the user's
+  own choice and so carries no label.
+- **A question is never resolved through the approval channel.** Approving
+  `ask_followup_question` / `AskUserQuestion` consumes the request, and the agent then reports
+  that the user gave no answer. Questions go to the relay, where a human picks a real option.
+- **Silence is never approval.** An Orange timeout denies the action and hands the agent safe
+  alternatives; a Red timeout blocks. Neither writes an approval.
+- **The prompt is always sent on stdin.** A supervision prompt embeds a transcript plus the BDI
+  knowledge and routinely exceeds the OS single-argument limit, which makes `execve` fail with
+  `E2BIG`.
+- **Untrusted content is delimited and declared as data.** The transcript and the knowledge are
+  wrapped in explicit markers, and the prompt tells the model to ignore instructions found there.
+
+---
+
+## The Agent Bridges
+
+Reading a session from disk is enough to *show* it. Acting on one is not: a task blocked at a
+permission prompt is waiting on an in-memory resolver, and nothing on disk reaches it.
+
+`agents/` therefore reaches each agent's live objects in the same extension host, through the
+in-process V8 inspector:
+
+| Agent | How it is reached | What it gives us |
+|---|---|---|
+| **IBM Bob** | walk `api.startTask`'s `[[Scopes]]` to the module-local `TaskManager` | open task ids, pending approvals, resolve an approval, inject a message |
+| **Claude Code** | take `activate` from our own `require.cache` and walk its scopes to the manager | open session ids, pending permission requests, resolve one, answer a question, inject a message |
+
+Two properties matter:
+
+- **All inspector access is serialized.** There is one inspector surface per extension host, and
+  the Bob path stashes a global that it deletes in its `finally`. Several features drive it on
+  independent 5 s timers, so overlapping calls could let one call's cleanup pull the global out
+  from under another — an intermittent silent no-op. `runExclusive` chains every call.
+- **Every bridge degrades to nothing.** A missing extension, a closure that moved, a call that
+  threw: each returns an empty result and logs. A scan loop must never throw.
+
+Claude carries no tool metadata on its permission deferred, so `ClaudeApprover` idempotently
+wraps each comm's `send` to record `requestId → {toolName, inputs}` before the prompt reaches the
+webview. A request with **no** captured metadata is never auto-approved — we know neither what it
+is nor whether it is a question, so it is handed to the supervisor instead.
+
+---
+
+## The Active Worklist
+
+The Sessions list answers "what can I act on right now", not "what changed most recently". How
+that is decided depends on what each source can actually tell us:
+
+| Source | Signal |
+|---|---|
+| **Bob** | its live `TaskManager` reports the open task ids |
+| **Claude** | its live manager reports the open session ids |
+| **Codex** | *nothing* — no extension host to ask |
+| **VS Code Chat** | *nothing* |
+
+For Bob and Claude the answer is read fresh from this window and unioned with what other live
+windows published to `~/.claude/session-switcher/windows/` — so the answer is cross-window. A
+session is also treated as active when its status is not idle, so a session you are working in
+does not vanish because the probe was momentarily silent.
+
+Codex and Chat have no liveness signal at all, so recency is the only honest proxy: they count as
+active while updated within `claudeSessionSwitcher.probelessActiveWindowMinutes` (default 120,
+`0` to keep them in History always). The rule is named and configurable rather than hidden.
+
+---
+
+## Why one `python3` call remains
+
+Every line of this extension is TypeScript. There is exactly one place it shells out, and it is
+worth being explicit about: `BobDatabase.ts` reads IBM Bob's SQLite store through
+`python3 -c` with the standard library's `sqlite3` module.
+
+A VS Code extension has no SQLite driver available. A native module (`sqlite3`,
+`better-sqlite3`) breaks VSIX portability across the platforms and Electron ABIs this runs on,
+and `node:sqlite` is too new to rely on in the VS Code and Bob IDE hosts targeted here. The
+`python3` shim needs no dependency, is read-only (`mode=ro`), and every value is bound as a
+parameter — the SQL is a constant at each call site.
+
+It is confined to that one file, it only affects Bob sessions, and swapping in a WASM SQLite
+build later means replacing one function.

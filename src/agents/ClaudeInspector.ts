@@ -1,0 +1,276 @@
+import * as vscode from 'vscode';
+import * as inspector from 'inspector';
+import { runExclusive } from './BobInspector';
+
+export interface ClaudeOpenState {
+  open: string[];        // session ids with an open panel (sessionPanels keys)
+  active: string | null; // the focused session id (activeSessionId)
+  diag?: string;         // how the probe resolved (for debugging reachability)
+}
+
+// Injected with `this` = Claude's manager instance (module-global `gB`, class Xq).
+// The open sessions in this window are the union of:
+//   - sessionStates: Map<sessionId, state> — every session the manager holds,
+//     including the one shown in the sidebar view (verified against a live
+//     instance: size matches the sidebar session the user has open).
+//   - sessionPanels: Map<sessionId, panel> — sessions opened as editor panels.
+const READ_OPEN_FN = `function(){
+  try {
+    var ids = new Set();
+    if (this.sessionStates && typeof this.sessionStates.keys === 'function') {
+      for (var a of this.sessionStates.keys()) ids.add(a);
+    }
+    if (this.sessionPanels && typeof this.sessionPanels.keys === 'function') {
+      for (var b of this.sessionPanels.keys()) ids.add(b);
+    }
+    return JSON.stringify({ open: Array.from(ids), active: this.activeSessionId || null });
+  } catch (e) { return JSON.stringify({ open: [], active: null, err: String(e) }); }
+}`;
+
+// Probe a closure variable: is it Claude's manager? (has the sessionPanels Map and createPanel)
+const MANAGER_PROBE =
+  `function(){ return !!(this && this.sessionPanels instanceof Map && typeof this.createPanel === 'function'); }`;
+
+// Global slot used to hand Claude's `activate` function to the inspector eval
+// context (the eval context has no `require`, but our CommonJS module does).
+const GLOBAL_SLOT = '__csw_claudeActivate';
+
+/**
+ * Find Claude Code's exported `activate` function (minified `wdt`) from the
+ * process-global CommonJS module cache. `activate` closes over the module-local
+ * `gB` (the manager instance), so walking its [[Scopes]] reaches the live manager.
+ * Claude's activate returns no API, so — unlike Bob — `getExtension().exports` is
+ * empty; the module cache is how we get a function object from Claude's module.
+ * Returns the function, or a `DIAG:*` string describing why it wasn't found.
+ */
+function findClaudeActivate(): ((...args: unknown[]) => unknown) | string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cache = (require as any)?.cache as Record<string, { exports?: { activate?: unknown } }> | undefined;
+  if (!cache) { return 'DIAG:no-require.cache'; }
+  const keys = Object.keys(cache);
+  const matches = keys.filter(k => k.toLowerCase().includes('anthropic.claude-code') && /extension\.js$/.test(k));
+  if (!matches.length) { return `DIAG:no-claude-module (cacheTotal=${keys.length})`; }
+  for (const k of matches) {
+    const a = cache[k]?.exports?.activate;
+    if (typeof a === 'function') { return a as (...args: unknown[]) => unknown; }
+  }
+  return `DIAG:activate-not-fn (claudeModules=${matches.length})`;
+}
+
+/** Parse the JSON payload READ_OPEN_FN returns into a ClaudeOpenState.
+ *  Returns an empty state for any malformed input. Pure — unit-tested. */
+export function parseClaudeOpenState(raw: unknown): ClaudeOpenState {
+  if (typeof raw !== 'string') { return { open: [], active: null }; }
+  try {
+    const p = JSON.parse(raw) as { open?: unknown; active?: unknown };
+    const open = Array.isArray(p.open)
+      ? [...new Set(p.open.filter((x): x is string => typeof x === 'string' && x.length > 0))]
+      : [];
+    const active = typeof p.active === 'string' && p.active.length > 0 ? p.active : null;
+    return { open, active };
+  } catch {
+    return { open: [], active: null };
+  }
+}
+
+// Dumps the manager's own shape so we can discover which field holds open
+// sessions. Reports own property names, and for Map/Set/string/null fields their
+// size/keys/value — enough to locate where the open session id lives.
+const DUMP_FN = `function(){
+  try {
+    var out = { props: [], detail: {}, active: this.activeSessionId || null };
+    var names = Object.getOwnPropertyNames(this);
+    out.props = names;
+    for (var i=0;i<names.length;i++){
+      var k=names[i], v;
+      try { v=this[k]; } catch(e){ continue; }
+      if (v instanceof Map) out.detail[k]={t:'Map',size:v.size,keys:Array.from(v.keys()).slice(0,20)};
+      else if (v instanceof Set) out.detail[k]={t:'Set',size:v.size};
+      else if (typeof v==='string') out.detail[k]={t:'string',v:v.slice(0,80)};
+      else if (v===null||v===undefined) out.detail[k]={t:String(v)};
+      else if (typeof v==='object') out.detail[k]={t:'object',ctor:(v.constructor&&v.constructor.name)||'?'};
+    }
+    return JSON.stringify(out);
+  } catch (e) { return JSON.stringify({ err: String(e) }); }
+}`;
+
+// Read-only v5 capture: for the comm in allComms, report per channel — the
+// channel map key (channelId); the scalar own-props of the channel and of
+// query.initConfig (to spot the sessionId↔channel correlation); a bounded
+// stringify of the first queued input item (channel.in.queue /
+// query.inputStream.queue / query.transport.pendingWrites — the real send
+// envelope); and any pending/permission/control array or map on query (the
+// approval metadata source). Plus the ids in comm.outstandingRequests. Mutates
+// nothing. Resolves the three unknowns blocking ClaudeSender/ClaudeApprover:
+// send envelope, session↔channel correlation, approval metadata source.
+const SEND_APPROVAL_PROBE_FN = `function(){
+  try {
+    var cut = function(x){ try { var s = JSON.stringify(x); return s ? s.slice(0,800) : ('' + x); } catch(e){ return 'unstringifiable:' + (typeof x); } };
+    var firstOf = function(arr){ return (arr && arr.length) ? arr[0] : undefined; };
+    var comm;
+    if (this.allComms && this.allComms.forEach) this.allComms.forEach(function(c){ if (comm===undefined) comm=c; });
+    if (!comm) return JSON.stringify({ err: 'no comm' });
+    var out = { channels: [], outstandingRequestIds: [] };
+    if (comm.outstandingRequests && comm.outstandingRequests.forEach) {
+      comm.outstandingRequests.forEach(function(_v,k){ out.outstandingRequestIds.push(k); });
+    }
+    if (comm.channels && comm.channels.forEach) {
+      comm.channels.forEach(function(ch, id){
+        var e = { channelId: id, scalarProps: {}, initConfig: {}, inputSample: null, permissionish: {} };
+        try {
+          var names = Object.getOwnPropertyNames(ch);
+          for (var i=0;i<names.length;i++){ var v; try{v=ch[names[i]];}catch(x){continue;} if (v===null||['string','number','boolean'].indexOf(typeof v)>=0) e.scalarProps[names[i]] = v; }
+        } catch(x){}
+        try {
+          var ic = ch.query && ch.query.initConfig;
+          if (ic) { var ik = Object.getOwnPropertyNames(ic); for (var j=0;j<ik.length;j++){ var iv; try{iv=ic[ik[j]];}catch(x){continue;} if (iv===null||['string','number','boolean'].indexOf(typeof iv)>=0) e.initConfig[ik[j]] = iv; } }
+        } catch(x){}
+        try {
+          var q = ch.query || {};
+          var cand = [ ch['in'] && ch['in'].queue, q.inputStream && q.inputStream.queue, q.transport && q.transport.pendingWrites ];
+          for (var c=0;c<cand.length;c++){ var f = firstOf(cand[c]); if (f !== undefined) { e.inputSample = cut(f); break; } }
+          var qn = Object.getOwnPropertyNames(q);
+          for (var p=0;p<qn.length;p++){ if (/pending|permission|request|unmatched|control/i.test(qn[p])) { var qv; try{qv=q[qn[p]];}catch(x){continue;} if (qv instanceof Map) e.permissionish[qn[p]] = 'Map('+qv.size+')'; else if (Array.isArray(qv)) e.permissionish[qn[p]] = cut(qv); } }
+        } catch(x){}
+        out.channels.push(e);
+      });
+    }
+    return JSON.stringify(out);
+  } catch (e) { return JSON.stringify({ err: String(e) }); }
+}`;
+
+/**
+ * Reach Claude Code's live manager instance (`gB`) via the V8 inspector and run
+ * `functionDeclaration` on it (with `this` = the manager). Returns the call's
+ * string result plus a diag describing how the reach resolved. Never throws.
+ *
+ * Claude's `activate` returns no API, so — unlike Bob — `getExtension().exports`
+ * is empty. We instead take Claude's `activate` (which closes over `gB`) from our
+ * own CommonJS `require.cache`, stash it on `globalThis`, and walk its [[Scopes]].
+ */
+export function callOnClaudeManager(
+  functionDeclaration: string,
+  log: (msg: string) => void,
+): Promise<{ raw: string | undefined; diag: string }> {
+  // Serialize with all other inspector access (Bob + Claude) — one shared V8
+  // inspector surface; overlapping sessions/globals cause intermittent no-ops.
+  return runExclusive(() => callOnClaudeManagerUnsafe(functionDeclaration, log));
+}
+
+async function callOnClaudeManagerUnsafe(
+  functionDeclaration: string,
+  log: (msg: string) => void,
+): Promise<{ raw: string | undefined; diag: string }> {
+  const claudeIds = vscode.extensions.all.map(e => e.id).filter(id => id.toLowerCase().includes('claude'));
+  const ext = vscode.extensions.getExtension('anthropic.claude-code');
+  if (!ext) {
+    const diag = `ext-not-found (claude exts: ${claudeIds.join(', ') || 'none'})`;
+    log('claude inspector: ' + diag);
+    return { raw: undefined, diag };
+  }
+  const activeNote = ext.isActive ? 'active' : 'INACTIVE';
+
+  const activateFn = findClaudeActivate();
+  if (typeof activateFn === 'string') {
+    const diag = `reach-fail (${activeNote}): ${activateFn}`;
+    log('claude inspector: ' + diag);
+    return { raw: undefined, diag };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any)[GLOBAL_SLOT] = activateFn;
+
+  const session = new inspector.Session();
+  session.connect();
+  // Bound each round-trip so a stuck call surfaces as an error, not a hang.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const post = (method: string, params?: any): Promise<any> =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    new Promise((res, rej) => {
+      const timer = setTimeout(() => rej(new Error('timeout ' + method)), 3000);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      session.post(method as any, params, (e: any, r: any) => { clearTimeout(timer); e ? rej(e) : res(r); });
+    });
+
+  try {
+    await post('Runtime.enable');
+    const fn = await post('Runtime.evaluate', { expression: `globalThis.${GLOBAL_SLOT}`, returnByValue: false });
+    if (fn.result?.type !== 'function' || !fn.result?.objectId) {
+      const diag = `eval-no-fn (${activeNote}): ${fn.result?.value ?? fn.result?.type}`;
+      log('claude inspector: ' + diag);
+      return { raw: undefined, diag };
+    }
+    const fnProps = await post('Runtime.getProperties', { objectId: fn.result.objectId, ownProperties: false, generatePreview: false });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const scopesEntry = (fnProps.internalProperties || []).find((p: any) => p.name === '[[Scopes]]');
+    if (!scopesEntry?.value?.objectId) { return { raw: undefined, diag: 'no-scopes' }; }
+
+    const scopes = await post('Runtime.getProperties', { objectId: scopesEntry.value.objectId, ownProperties: false });
+    let scopeCount = 0, varCount = 0;
+    for (const scope of scopes.result || []) {
+      if (!scope.value?.objectId) { continue; }
+      scopeCount++;
+      const vars = await post('Runtime.getProperties', { objectId: scope.value.objectId, ownProperties: true });
+      for (const v of vars.result || []) {
+        if (!v.value?.objectId) { continue; }
+        varCount++;
+        const probe = await post('Runtime.callFunctionOn', {
+          objectId: v.value.objectId, functionDeclaration: MANAGER_PROBE, returnByValue: true,
+        });
+        if (probe.result?.value === true) {
+          const res = await post('Runtime.callFunctionOn', {
+            objectId: v.value.objectId, functionDeclaration, returnByValue: true,
+          });
+          return { raw: res.result?.value, diag: 'ok' };
+        }
+      }
+    }
+    const diag = `gB-not-found (scopes=${scopeCount}, vars=${varCount})`;
+    log('claude inspector: ' + diag);
+    return { raw: undefined, diag };
+  } catch (err) {
+    const diag = 'error ' + String(err);
+    log('claude inspector: ' + diag);
+    return { raw: undefined, diag };
+  } finally {
+    session.disconnect();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (globalThis as any)[GLOBAL_SLOT];
+  }
+}
+
+/**
+ * Ask Claude Code's live extension which session panels are open in this window
+ * (its own truth, not a heuristic). Returns an empty state on any failure.
+ */
+export async function getOpenClaudeSessionIds(log: (msg: string) => void): Promise<ClaudeOpenState> {
+  const { raw, diag } = await callOnClaudeManager(READ_OPEN_FN, log);
+  const state = parseClaudeOpenState(raw);
+  state.diag = diag === 'ok' ? `ok (open=${state.open.length})` : diag;
+  if (diag === 'ok') {
+    log(`claude inspector: open=${state.open.length} [${state.open.join(', ')}] active=${state.active}`);
+  }
+  return state;
+}
+
+/** Debug: dump the Claude manager's own field shape as pretty JSON (or a diag). */
+export async function dumpClaudeManagerShape(log: (msg: string) => void): Promise<string> {
+  const { raw, diag } = await callOnClaudeManager(DUMP_FN, log);
+  if (typeof raw !== 'string') { return `// could not reach Claude manager: ${diag}`; }
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+/** Debug: dump the send + approval shape of every Claude session state as pretty
+ *  JSON (or a diag). Read-only — reveals the inject method and approval fields. */
+export async function dumpClaudeSendApprovalShape(log: (msg: string) => void): Promise<string> {
+  const { raw, diag } = await callOnClaudeManager(SEND_APPROVAL_PROBE_FN, log);
+  if (typeof raw !== 'string') { return `// could not reach Claude manager: ${diag}`; }
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
