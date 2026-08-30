@@ -3,6 +3,71 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.6.0
+
+**Every intervention is visible, and everything is configured from settings.**
+
+### Deterministic rule decisions are now recorded and reported
+
+Until now only the supervisor's decisions reached you. A `sessionSitter.autoRespond` rule that
+auto-approved a tool prompt, auto-rejected one, or sent a canned reply changed what your agent did
+and left no trace outside the log.
+
+Every applied rule now writes a supervision record under `<stateDir>/records/` — the same file
+shape the supervisor writes, with `decided_by: "rule"` and a `rule` trace naming the pattern that
+fired — and posts a **one-way update** to your messaging channel.
+
+- The **Supervision activity** panel tags each card **⚙ rule** or **🧠 AI**, and shows the rule
+  pattern that fired.
+- The light follows the outcome: approve → 🟢, reject → 🔴, canned text reply → 🟡.
+- A rule decision is never an interactive card. The decision is already made; there is nothing to
+  ask.
+- This needs only `sessionSitter.supervisorStateDir`. Rule decisions are recorded and reported even
+  with `sessionSitter.autoSupervise: false`, because no classifier is involved.
+- New `sessionSitter.supervisor.notifyRuleDecisions` (default `true`) keeps them out of Telegram
+  while still recording them.
+
+A decision is reported only once it actually reached the agent: a failed resolve or a failed send
+reports nothing. Reporting can never delay or break applying a decision — a broken record write or
+a dead channel is logged and dropped.
+
+### Supervisor configuration moved into settings.json
+
+The supervisor used to read its engine, credentials, channel and timeouts from the environment or a
+`.env` file. All of it is now a `sessionSitter.supervisor.*` setting, editable in the Settings UI:
+
+| Was | Now |
+|---|---|
+| `SUPERVISOR_ENGINE` | `sessionSitter.supervisor.engine` |
+| `BOB_CLI_PATH` | `sessionSitter.supervisor.bobCliPath` |
+| `CLAUDE_CLI_PATH` | `sessionSitter.supervisor.claudeCliPath` |
+| `BOB_API_KEY` / `BOBSHELL_API_KEY` | `sessionSitter.supervisor.bobApiKey` |
+| `ANTHROPIC_BASE_URL` | `sessionSitter.supervisor.anthropicBaseUrl` |
+| `ANTHROPIC_AUTH_TOKEN` | `sessionSitter.supervisor.anthropicAuthToken` |
+| `CLAUDE_TIMEOUT_SECONDS` | `sessionSitter.supervisor.classifierTimeoutSeconds` |
+| `ORANGE_RESPONSE_TIMEOUT_MINUTES` | `sessionSitter.supervisor.orangeResponseTimeoutMinutes` |
+| `MESSAGING_CHANNEL` | `sessionSitter.supervisor.messagingChannel` |
+| `TELEGRAM_BOT_TOKEN` | `sessionSitter.supervisor.telegramBotToken` |
+| `TELEGRAM_CHAT_ID` | `sessionSitter.supervisor.telegramChatId` |
+| `RED_NOTIFY` | `sessionSitter.supervisor.redNotify` |
+| `KNOWLEDGE_REPO` | `sessionSitter.supervisor.knowledgeRepo` |
+| `KNOWLEDGE_REF` | `sessionSitter.supervisor.knowledgeRef` |
+
+**Not breaking.** The environment and `.env` are still read as a fallback for any setting you have
+not set, so an existing install keeps working untouched. Precedence is: an explicitly-set setting >
+process environment > `.env` files > built-in default. VS Code stores settings in plain text, so
+leaving a credential setting empty and keeping the environment variable is a supported choice.
+
+The standalone supervisor CLI (`node out/supervisor/cli.js`) has no settings to read and is
+unchanged — environment plus flags.
+
+### Also
+
+- New command **Session Sitter: Open Settings**, and the panel's **☰** menu now offers
+  **All settings…**, **Auto-respond rules…** and **Supervisor settings…** separately.
+- One messaging channel per window, shared by the supervisor and the rule reporter — two Telegram
+  consumers on one bot would fight over `getUpdates`.
+
 ## 0.5.0
 
 **The project is now Session Sitter.** Same extension, one name, and one settings namespace.

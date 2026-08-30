@@ -1,7 +1,12 @@
 # Configuration
 
-Three places, by design: **VS Code settings** for what is per-user and harmless, the
-**environment** for credentials and runtime choices, and **CLI flags** for one-off runs.
+**VS Code settings are the source of truth.** Every knob lives under `sessionSitter.*` and is
+editable in the Settings UI — open **☰ → All settings…** in the panel, or run **Session Sitter:
+Open Settings**. CLI flags cover one-off runs of the standalone supervisor.
+
+Environment variables and `.env` files are a **legacy fallback**, kept so an existing env-based
+install keeps working: they apply only to a setting you have not set. Nothing requires an
+environment variable any more.
 
 Nothing here is required to use the session switcher. Supervision needs
 `sessionSitter.supervisorStateDir`; everything else has a default.
@@ -24,6 +29,34 @@ deadlines intact.
 
 ---
 
+## Upgrading to 0.6.0
+
+Supervisor configuration moved from the environment into settings. Your `.env` still works — it is
+now only a fallback — but the supervisor is configurable from the UI:
+
+| Was | Now |
+|---|---|
+| `SUPERVISOR_ENGINE` | `sessionSitter.supervisor.engine` |
+| `BOB_CLI_PATH` | `sessionSitter.supervisor.bobCliPath` |
+| `CLAUDE_CLI_PATH` | `sessionSitter.supervisor.claudeCliPath` |
+| `BOB_API_KEY` / `BOBSHELL_API_KEY` | `sessionSitter.supervisor.bobApiKey` |
+| `ANTHROPIC_BASE_URL` | `sessionSitter.supervisor.anthropicBaseUrl` |
+| `ANTHROPIC_AUTH_TOKEN` | `sessionSitter.supervisor.anthropicAuthToken` |
+| `CLAUDE_TIMEOUT_SECONDS` | `sessionSitter.supervisor.classifierTimeoutSeconds` |
+| `ORANGE_RESPONSE_TIMEOUT_MINUTES` | `sessionSitter.supervisor.orangeResponseTimeoutMinutes` |
+| `MESSAGING_CHANNEL` | `sessionSitter.supervisor.messagingChannel` |
+| `TELEGRAM_BOT_TOKEN` | `sessionSitter.supervisor.telegramBotToken` |
+| `TELEGRAM_CHAT_ID` | `sessionSitter.supervisor.telegramChatId` |
+| `RED_NOTIFY` | `sessionSitter.supervisor.redNotify` |
+| `KNOWLEDGE_REPO` | `sessionSitter.supervisor.knowledgeRepo` |
+| `KNOWLEDGE_REF` | `sessionSitter.supervisor.knowledgeRef` |
+
+VS Code stores settings in plain text, so for the three credential settings you may prefer to
+leave the setting empty and keep using the environment variable. That is a supported choice, not a
+deprecation.
+
+---
+
 ## VS Code settings
 
 ### The session panel
@@ -39,7 +72,33 @@ deadlines intact.
 |---|---|---|
 | `sessionSitter.supervisorStateDir` | `""` | **Required to enable supervision.** Holds `history/`, `records/`, `outbox/`, `inbox/`, `notifications/`, `locks/`. |
 | `sessionSitter.autoSupervise` | `true` | Hand every prompt no rule handled to the supervisor, and poll for replies and timeouts. |
-| `sessionSitter.supervisorRepoPath` | `""` | Workspace root: where `.env` is read from and the classifier's working directory. Derived from the state dir's parent when empty. |
+| `sessionSitter.supervisorRepoPath` | `""` | Workspace root: the classifier's working directory, and where a legacy `.env` is read from. Derived from the state dir's parent when empty. |
+
+### The classifier
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `sessionSitter.supervisor.engine` | `bob` | Which agent CLI classifies an ambiguous action: `bob` (IBM Bob Shell) or `claude` (Claude Code). |
+| `sessionSitter.supervisor.bobCliPath` | `bob` | Path to `bob` when it is not on `PATH`. |
+| `sessionSitter.supervisor.claudeCliPath` | `claude` | Path to `claude` when it is not on `PATH`. |
+| `sessionSitter.supervisor.bobApiKey` | `""` | Bob headless auth. Empty falls back to `BOBSHELL_API_KEY` / `BOB_API_KEY`. |
+| `sessionSitter.supervisor.anthropicBaseUrl` | `""` | Gateway passed into the `claude` subprocess. Empty falls back to `ANTHROPIC_BASE_URL`. |
+| `sessionSitter.supervisor.anthropicAuthToken` | `""` | Token passed into the `claude` subprocess. Empty falls back to `ANTHROPIC_AUTH_TOKEN`. |
+| `sessionSitter.supervisor.classifierTimeoutSeconds` | `300` | Per-invocation classifier timeout (both engines). |
+
+### Messaging
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `sessionSitter.supervisor.messagingChannel` | `stub` | `stub` writes cards to `<stateDir>/notifications/` and reads replies from `<stateDir>/inbox/`; `telegram` sends real decision cards. |
+| `sessionSitter.supervisor.telegramBotToken` | `""` | From BotFather. Required for `telegram`. Empty falls back to `TELEGRAM_BOT_TOKEN`. |
+| `sessionSitter.supervisor.telegramChatId` | `""` | Required for `telegram`. Empty falls back to `TELEGRAM_CHAT_ID`. |
+| `sessionSitter.supervisor.orangeResponseTimeoutMinutes` | `30` | How long a decision card waits before it denies and falls back. |
+| `sessionSitter.supervisor.redNotify` | `true` | Whether a Red also posts a one-way alert. The block stands regardless. |
+| `sessionSitter.supervisor.notifyRuleDecisions` | `true` | Whether **deterministic rule** decisions are also reported to the channel. See [below](#rule-decisions-are-recorded-too). |
+
+With `messagingChannel: "telegram"` but the token or chat id missing, the stub is used and a
+warning is logged — supervision degrades rather than failing silently.
 
 ### Knowledge
 
@@ -50,6 +109,8 @@ deadlines intact.
 | `sessionSitter.knowledge.project` | `""` | Routes to `data/knowledge/projects/<project>/bottom-line.md`. |
 | `sessionSitter.knowledge.team` | `""` | Routes to `data/knowledge/teams/<team>/bottom-line.md` — lowest precedence. |
 | `sessionSitter.knowledge.registryPath` | `""` | Optional registry markdown. When set the triple is validated against it and the documented fallbacks apply; when empty the three slugs are used as given. See [`KNOWLEDGE.md`](KNOWLEDGE.md#routing-which-files-apply-to-this-session). |
+| `sessionSitter.supervisor.knowledgeRepo` | `""` | Git URL of the knowledge repo. Used only when no local checkout is configured. |
+| `sessionSitter.supervisor.knowledgeRef` | `main` | Ref to read the knowledge repo at, when fetching by URL. |
 
 A slug left empty means that tier is not configured: its file is reported missing and the others
 still load. With **no** user configured at all, supervision still runs — the classifier judges the
@@ -65,14 +126,21 @@ the agent is blocked on it. Nothing is ever guessed.
 
 ---
 
-## Environment
+## Environment (legacy fallback)
 
-Read from the process environment, then `<workspaceRoot>/.env`, then
-`<workspaceRoot>/.supervisor.env`, then the parent directory's `.env`. **The process environment
-wins**, and later files win over earlier ones.
+Every variable below has a `sessionSitter.*` setting now. A variable applies only when the
+matching setting is unset — most usefully for the three credentials, which VS Code would otherwise
+store as plain text in a synced `settings.json`.
 
-Credentials live here rather than in settings so a token never ends up in a synced
-`settings.json`.
+Precedence, highest first:
+
+1. an explicitly-set `sessionSitter.*` setting (workspace folder > workspace > user)
+2. the process environment
+3. `<workspaceRoot>/.env`, then `<workspaceRoot>/.supervisor.env`, then the parent's `.env`
+4. the built-in default
+
+The standalone supervisor CLI has no settings to read, so for it the environment is still the only
+input.
 
 ### Classifier
 
@@ -95,9 +163,7 @@ Credentials live here rather than in settings so a token never ends up in a sync
 | `TELEGRAM_CHAT_ID` | — | Required for `telegram`. |
 | `ORANGE_RESPONSE_TIMEOUT_MINUTES` | `30` | How long an Orange waits before it denies and falls back. |
 | `RED_NOTIFY` | `true` | Whether a Red also posts an informational alert. `0` silences it; the block stands regardless. |
-
-With `MESSAGING_CHANNEL=telegram` but the token or chat id missing, the stub is used and a warning
-is logged — supervision degrades rather than failing silently.
+| `NOTIFY_RULE_DECISIONS` | `true` | Whether deterministic rule decisions are also reported to the channel. `0` silences them; they are still recorded. |
 
 ### State and knowledge
 
@@ -150,6 +216,29 @@ Two guards no rule can override:
 
 An invalid regex or glob skips that rule; it never throws.
 
+### Rule decisions are recorded too
+
+A rule that auto-approves, auto-rejects, or auto-replies changes what your agent does, so it is
+not silent. Every applied rule is written as a supervision record under `<stateDir>/records/` —
+the same files the supervisor writes, with `decided_by: "rule"` and a `rule` trace naming the
+pattern that fired — and posted to your messaging channel as a **one-way update** (never a
+decision card; the decision is already made).
+
+In the **Supervision activity** panel the two tiers are tagged so you can tell them apart:
+
+| Tag | Meaning |
+|---|---|
+| **⚙ rule** | a deterministic `sessionSitter.autoRespond` rule decided it — no model was consulted |
+| **🧠 AI** | the supervisor decided it (classifier + your knowledge tiers) |
+
+The traffic light follows the outcome: an approve is 🟢 green, a reject is 🔴 red, and a canned
+text reply is 🟡 yellow.
+
+This needs `sessionSitter.supervisorStateDir` — that is where records live. It does **not** need
+`sessionSitter.autoSupervise`: rule decisions are recorded and reported even with the supervisor
+turned off. Set `sessionSitter.supervisor.notifyRuleDecisions: false` to keep them out of Telegram
+while still recording them.
+
 ---
 
 ## CLI flags
@@ -188,6 +277,7 @@ All under the **Session Sitter** category:
 
 | Command | What it does |
 |---|---|
+| Open Settings | Opens every Session Sitter setting in the Settings UI. |
 | Refresh Sessions | Sessions update automatically; this just says so. |
 | New Claude Session | Opens a fresh Claude conversation in the active editor column. |
 | Upload Session to Corpus | Uploads the selected session (also on the row's right-click menu). |

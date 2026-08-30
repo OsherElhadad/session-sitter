@@ -29,7 +29,22 @@
 
       const items = [
         { label: 'About', run: function () { if (aboutBox) { aboutBox.hidden = false; } } },
-        { label: 'Settings…', run: function () { deps.postMessage({ type: 'openSettings' }); } },
+        {
+          label: 'All settings…',
+          run: function () { deps.postMessage({ type: 'openSettings' }); },
+        },
+        {
+          label: 'Auto-respond rules…',
+          run: function () {
+            deps.postMessage({ type: 'openSettings', query: 'sessionSitter.autoRespond' });
+          },
+        },
+        {
+          label: 'Supervisor settings…',
+          run: function () {
+            deps.postMessage({ type: 'openSettings', query: 'sessionSitter.supervisor' });
+          },
+        },
       ];
       items.forEach(function (item) {
         const btn = document.createElement('button');

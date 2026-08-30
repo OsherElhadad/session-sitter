@@ -16,6 +16,27 @@ export interface ActivityItem {
   userResponse: string | null;
   error: string | null; // failure reason (state === 'failed'); powers the debuggable card
   at: string;           // ISO timestamp (last event / file mtime)
+  /** 'rule' when a deterministic auto-respond rule decided this, else 'supervisor'. */
+  decidedBy: string;
+  /** For a rule decision: a one-line "what fired and what it did" label for the card. */
+  ruleLabel: string;
+}
+
+/**
+ * A one-line description of the deterministic rule that produced a decision: the pattern that
+ * matched and what it did. Empty when the record was not decided by a rule.
+ */
+export function ruleLabelFor(rule: Record<string, unknown> | null | undefined): string {
+  if (!rule || typeof rule !== 'object') { return ''; }
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  const pattern = str(rule.pattern);
+  if (!pattern) { return ''; }
+  const kind = str(rule.kind);
+  const args = str(rule.argument_pattern);
+  const scope = kind === 'text' ? `/${pattern}/` : `'${pattern}'`;
+  const narrowed = args ? ` + args /${args}/` : '';
+  const did = kind === 'text' ? 'auto-reply' : (str(rule.decision) || 'auto-approve');
+  return `${scope}${narrowed} → ${did}`;
 }
 
 /** Map a supervision record JSON (STATE_DIR/records/<id>.json) to a compact feed item. */
@@ -45,6 +66,8 @@ export function recordToItem(raw: string, mtimeMs: number): ActivityItem | null 
     userResponse: typeof r.user_response === 'string' ? r.user_response : null,
     error,
     at: lastAt || new Date(mtimeMs).toISOString(),
+    decidedBy: str(r.decided_by) || 'supervisor',
+    ruleLabel: ruleLabelFor(r.rule as Record<string, unknown> | null),
   };
 }
 
@@ -86,18 +109,28 @@ export class SupervisionActivity {
       if (force) { this._onChange([]); }
       return; // dir not created yet
     }
-    const items: ActivityItem[] = [];
+
+    // Records accumulate for the life of the state dir, and every applied auto-respond rule adds
+    // one — so this directory gets large. Stat everything (cheap), then parse only the newest
+    // `_limit` files: the feed shows that many anyway, and the parse is what costs.
+    const stats: Array<{ file: string; mtimeMs: number }> = [];
     for (const file of files) {
       try {
-        const full = path.join(this._recordsDir, file);
-        const [raw, stat] = await Promise.all([
-          fs.promises.readFile(full, 'utf8'),
-          fs.promises.stat(full),
-        ]);
-        const item = recordToItem(raw, stat.mtimeMs);
+        const stat = await fs.promises.stat(path.join(this._recordsDir, file));
+        stats.push({ file, mtimeMs: stat.mtimeMs });
+      } catch { /* vanished between readdir and stat */ }
+    }
+    stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    const items: ActivityItem[] = [];
+    for (const { file, mtimeMs } of stats.slice(0, this._limit)) {
+      try {
+        const raw = await fs.promises.readFile(path.join(this._recordsDir, file), 'utf8');
+        const item = recordToItem(raw, mtimeMs);
         if (item) { items.push(item); }
       } catch { /* skip unreadable/half-written */ }
     }
+    // A record's own last-event timestamp is the display order; mtime only chose the candidates.
     items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
     const trimmed = items.slice(0, this._limit);
     const fp = trimmed.map(i => `${i.requestId}:${i.state}:${i.at}`).join('|');

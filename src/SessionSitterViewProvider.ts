@@ -200,8 +200,14 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
             break;
           }
           case 'openSettings': {
-            void vscode.commands.executeCommand(
-              'workbench.action.openSettings', 'sessionSitter.autoRespond');
+            // `query` jumps straight to one group of settings. With none, defer to the
+            // `sessionSitter.openSettings` command, which owns the "all of them" filter.
+            const query = message.query as string | undefined;
+            if (query) {
+              void vscode.commands.executeCommand('workbench.action.openSettings', query);
+            } else {
+              void vscode.commands.executeCommand('sessionSitter.openSettings');
+            }
             break;
           }
           case 'loadActivity': {

@@ -59,8 +59,17 @@ for (const file of sourceFiles('src')) {
     }
   }
 
-  // `.get<T>('key', default)` / `.get('key')` — the key is relative to the namespace above it.
-  for (const [, key] of text.matchAll(/\.get(?:<[^>]*>)?\(\s*'([^']+)'/g)) {
+  // `.get<T>('key', default)` / `.get('key')` / `.inspect<T>('key')` — the key is relative to
+  // the namespace above it. `inspect` counts as a read: it is how the supervisor settings are
+  // read, because it distinguishes "the user set this" from "this is the package.json default".
+  for (const [, key] of text.matchAll(/\.(?:get|inspect)(?:<[^>]*>)?\(\s*'([^']+)'/g)) {
+    for (const ns of usedNamespaces) { readKeys.add(`${ns}.${key}`); }
+  }
+
+  // The same read through the two `supervisorSettings.ts` helpers, which wrap `inspect()` so an
+  // unset setting can fall back to the environment: `userValue<T>(cfg, 'key')` / `userText(cfg,
+  // 'key')`. Without this the whole `sessionSitter.supervisor.*` group looks unread.
+  for (const [, key] of text.matchAll(/\buser(?:Value|Text)(?:<[^>]*>)?\(\s*\w+\s*,\s*'([^']+)'/g)) {
     for (const ns of usedNamespaces) { readKeys.add(`${ns}.${key}`); }
   }
 }

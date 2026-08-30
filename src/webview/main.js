@@ -514,9 +514,20 @@
       case 'orange_resolved_by_user': return 'resolved by you';
       case 'orange_transitioned_to_yellow': return 'denied → alternatives';
       case 'red_blocked': return 'blocked';
+      case 'rule_applied': return ruleStateLabel(item);
       case 'failed': return 'failed';
       default: return item.state || '';
     }
+  }
+
+  /**
+   * What a deterministic rule did, for the state badge. Derived from the traffic light the
+   * recorder assigned: green = approved, red = rejected, yellow = a canned reply was sent.
+   */
+  function ruleStateLabel(item) {
+    if (item.light === 'red') { return 'rule auto-rejected'; }
+    if (item.light === 'yellow') { return 'rule auto-replied'; }
+    return 'rule auto-approved';
   }
 
   /** Small labeled line: "label value" with the label muted. */
@@ -556,6 +567,16 @@
     badge.className = 'activity-state';
     badge.textContent = activityStateLabel(item);
     head.appendChild(badge);
+    // Who decided: a deterministic rule, or the supervisor (model + knowledge). Both are real
+    // interventions, so both are shown — the badge is what tells them apart at a glance.
+    const by = document.createElement('span');
+    const isRule = item.decidedBy === 'rule';
+    by.className = 'activity-by ' + (isRule ? 'activity-by-rule' : 'activity-by-ai');
+    by.textContent = isRule ? '⚙ rule' : '🧠 AI';
+    by.title = isRule
+      ? 'Decided by a deterministic sessionSitter.autoRespond rule — no model was consulted'
+      : 'Decided by the supervisor (classifier + your knowledge tiers)';
+    head.appendChild(by);
     const time = document.createElement('span');
     time.className = 'activity-timeago';
     time.textContent = formatRelativeTime(item.at);
@@ -570,6 +591,9 @@
       summary.className = 'activity-summary';
       summary.textContent = item.summary;
       body.appendChild(summary);
+    }
+    if (item.ruleLabel) {
+      body.appendChild(activityLine('activity-rule', '⚙ rule:', item.ruleLabel));
     }
     if (item.userIntent) { body.appendChild(activityLine('activity-req', '🧑', item.userIntent)); }
     if (item.agentIntent) { body.appendChild(activityLine('activity-act', '🤖', item.agentIntent)); }

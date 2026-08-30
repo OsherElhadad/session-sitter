@@ -26,6 +26,12 @@ import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
 import { SessionExporter } from './SessionExporter';
 import { SupervisorOutbox } from './SupervisorOutbox';
 import { SupervisionService } from './SupervisionService';
+import { supervisorConfigFromSettings } from './supervisorSettings';
+import { ensureDirs, recordsDir, type SupervisorConfig } from './supervisor/config';
+import { buildChannel } from './supervisor/factory';
+import type { MessagingChannel } from './supervisor/messaging';
+import { RuleDecisionRecorder, type RuleDecision } from './supervisor/ruleDecisions';
+import { StateStore } from './supervisor/store';
 
 export function activate(context: vscode.ExtensionContext) {
   const sessionManager = new SessionManager(context);
@@ -71,6 +77,13 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('sessionSitter.refresh', () => {
       void vscode.window.showInformationMessage('Sessions update automatically.');
+    }),
+    vscode.commands.registerCommand('sessionSitter.openSettings', () => {
+      // Everything Session Sitter needs is a setting now, so this is the single entry point.
+      // `@ext:<id>` filters the Settings UI to this extension; the id comes from the manifest so
+      // it cannot drift from the published one.
+      void vscode.commands.executeCommand(
+        'workbench.action.openSettings', `@ext:${context.extension.id}`);
     }),
     vscode.commands.registerCommand('sessionSitter.newSession', () => {
       // Open a fresh conversation in the current window's editor. We avoid
@@ -199,6 +212,41 @@ export function activate(context: vscode.ExtensionContext) {
     || (stateDir ? path.dirname(stateDir) : '')
     || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '');
 
+  // Everything the supervisor needs now comes from `sessionSitter.*` settings (editable in the
+  // Settings UI). `.env` / process env remain a legacy fallback for values left unset, so an
+  // existing env-based install keeps working — but no env var is required any more.
+  const supervisorConfig: SupervisorConfig = (() => {
+    const base = supervisorConfigFromSettings({
+      workspaceRoot: workspaceRoot || undefined,
+      stateDir: stateDir || undefined,
+      envFiles: workspaceRoot ? [path.join(workspaceRoot, '.supervisor.env')] : [],
+    });
+    // The corpus repo is the default knowledge source; fall back to the workspace itself.
+    return { ...base, knowledgeLocalRepo: base.knowledgeLocalRepo || workspaceRoot };
+  })();
+
+  // ONE messaging channel per window, shared by the supervisor and the deterministic-rule
+  // reporter: two Telegram consumers on the same bot would fight over `getUpdates`.
+  let channel: MessagingChannel | undefined;
+  let ruleRecorder: RuleDecisionRecorder | undefined;
+  if (stateDir) {
+    ensureDirs(supervisorConfig);
+    channel = buildChannel(supervisorConfig, log);
+    ruleRecorder = new RuleDecisionRecorder({
+      store: new StateStore(recordsDir(supervisorConfig)),
+      channel,
+      config: supervisorConfig,
+      log,
+    });
+    log(
+      `rule decisions: recording to ${recordsDir(supervisorConfig)}`
+      + ` — notify=${supervisorConfig.notifyRuleDecisions} via ${supervisorConfig.messagingChannel}`,
+    );
+  } else {
+    log('rule decisions: not recorded — set sessionSitter.supervisorStateDir to see them '
+      + 'in the panel and on Telegram.');
+  }
+
   // The outbox applies supervisor decisions: an approval-channel delivery goes through the
   // agent's approval emitter (the only channel that reaches a prompt-blocked task); a
   // message-channel delivery is injected as a labeled chat message into an idle task.
@@ -218,15 +266,12 @@ export function activate(context: vscode.ExtensionContext) {
   if (autoSupervise && stateDir && workspaceRoot) {
     supervision = new SupervisionService({
       enabled: true,
-      stateDir,
-      workspaceRoot,
+      supervisorConfig,
       user: cfg.get<string>('knowledge.user', ''),
       project: cfg.get<string>('knowledge.project', ''),
       team: cfg.get<string>('knowledge.team', ''),
-      knowledgeRegistryPath: cfg.get<string>('knowledge.registryPath', ''),
-      knowledgeLocalRepo: cfg.get<string>('dataRepoPath', '') || workspaceRoot,
       bobDbPath: sessionManager.getBobDbPath(),
-    }, log, () => { void outbox?.poll(); });
+    }, log, () => { void outbox?.poll(); }, channel);
     supervision.start();
     context.subscriptions.push({ dispose: () => supervision?.dispose() });
   } else if (autoSupervise) {
@@ -269,6 +314,19 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.getConfiguration('sessionSitter')
       .get<AutoRespondRule[]>('autoRespond', []);
 
+  // Every deterministic rule decision is recorded and reported, so the panel and Telegram show
+  // ALL of Session Sitter's interventions — not only the ones the supervisor AI took.
+  // A Claude pending approval carries a channelId as its `taskId`, so relabel it with the
+  // session the decision actually landed in (same single-session correlation the export uses).
+  const onRuleDecision = ruleRecorder
+    ? (d: RuleDecision): void => {
+      const sessionId = d.source === 'claude'
+        ? (mostRecent(sessionManager, 'claude')?.sessionId ?? d.sessionId)
+        : d.sessionId;
+      void ruleRecorder!.report({ ...d, sessionId });
+    }
+    : undefined;
+
   const autoResponder = new AutoResponder(
     sessionManager, sender, getRules, log, approver,
     supervision ? (p) => { void supervision!.maybeTrigger(p); } : undefined,
@@ -279,6 +337,7 @@ export function activate(context: vscode.ExtensionContext) {
       ? (p) => { void supervision!.maybeTriggerClaude(p, exportClaudeForSupervision); }
       : undefined,
     supervision ? (ids) => supervision!.pruneClaude(ids) : undefined,
+    onRuleDecision,
   );
   autoResponder.start();
   context.subscriptions.push({ dispose: () => autoResponder.dispose() });
