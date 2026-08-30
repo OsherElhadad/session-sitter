@@ -8,3 +8,5 @@ docs/
 out/**/*.js.map
 out/test/
 node_modules/
+Makefile
+.github/

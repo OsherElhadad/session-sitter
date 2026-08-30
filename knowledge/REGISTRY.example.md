@@ -29,23 +29,23 @@ An unknown slug is never replaced by a default.
 
 | Team slug | File |
 |---|---|
-| `platform` | [`data/knowledge/teams/platform/bottom-line.md`](data/knowledge/teams/platform/bottom-line.md) |
-| `data-eng` | [`data/knowledge/teams/data-eng/bottom-line.md`](data/knowledge/teams/data-eng/bottom-line.md) |
+| `platform` | `data/knowledge/teams/platform/bottom-line.md` |
+| `data-eng` | `data/knowledge/teams/data-eng/bottom-line.md` |
 
 ## Projects
 
 | Project slug | File | Team | Users on this project |
 |---|---|---|---|
-| `demo-project` | [`data/knowledge/projects/demo-project/bottom-line.md`](data/knowledge/projects/demo-project/bottom-line.md) | `platform` | alice, bob |
-| `warehouse` | [`data/knowledge/projects/warehouse/bottom-line.md`](data/knowledge/projects/warehouse/bottom-line.md) | `data-eng` | bob, carol |
+| `demo-project` | `data/knowledge/projects/demo-project/bottom-line.md` | `platform` | alice, bob |
+| `warehouse` | `data/knowledge/projects/warehouse/bottom-line.md` | `data-eng` | bob, carol |
 
 ## Users
 
 | User slug | File | Team | Projects |
 |---|---|---|---|
-| `alice` | [`data/knowledge/users/alice/bottom-line.md`](data/knowledge/users/alice/bottom-line.md) | `platform` | demo-project |
-| `bob` | [`data/knowledge/users/bob/bottom-line.md`](data/knowledge/users/bob/bottom-line.md) | `platform` | demo-project, warehouse |
-| `carol` | [`data/knowledge/users/carol/bottom-line.md`](data/knowledge/users/carol/bottom-line.md) | `data-eng` | warehouse |
+| `alice` | `data/knowledge/users/alice/bottom-line.md` | `platform` | demo-project |
+| `bob` | `data/knowledge/users/bob/bottom-line.md` | `platform` | demo-project, warehouse |
+| `carol` | `data/knowledge/users/carol/bottom-line.md` | `data-eng` | warehouse |
 
 ---
 

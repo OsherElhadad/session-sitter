@@ -1,0 +1,100 @@
+# ============================================================================
+# Release — publish an installable .vsix when a version tag is pushed
+# ============================================================================
+#
+# The README tells users to download a `.vsix` from the Releases page, so something
+# has to put one there. Pushing a `v*` tag does:
+#
+#   1. asserts the tag matches package.json's version (a mismatch means the built
+#      artifact is named differently from the release, which is how people end up
+#      installing the wrong build)
+#   2. runs the full gate — a release must never be less verified than a PR
+#   3. builds the .vsix and attaches it to a GitHub Release with generated notes
+#
+#   git tag v0.1.1 && git push origin v0.1.1
+#
+# Re-runnable: `gh release create` fails on an existing tag, so delete the release
+# first if you need to redo one.
+# ============================================================================
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Lets a failed release be retried without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to release (e.g. v0.1.1)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish the .vsix
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # Full history so the generated release notes can diff against the last tag.
+          fetch-depth: 0
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # The tests build SQLite fixtures with it (see ci.yml).
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A tag that disagrees with package.json produces a .vsix whose filename does not
+      # match the release — the fastest way to hand someone the wrong build.
+      - name: Check the tag matches package.json
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          pkg="v$(node -p "require('./package.json').version")"
+          echo "tag=$tag  package.json=$pkg"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $tag does not match package.json ($pkg). Bump the version, or fix the tag."
+            exit 1
+          fi
+
+      # A release must never be less verified than a pull request.
+      - name: Type-check, lint and test
+        run: make check
+
+      - name: No Python source, no internal names
+        run: bash ci/check-no-python.sh
+
+      - name: Build the .vsix
+        run: make package
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          args=(--title "$tag" --generate-notes --verify-tag)
+          # Notes from the previous tag onward. Absent for the first release, and
+          # passing an empty --notes-start-tag is an error, so only add it when found.
+          prev="$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            echo "generating notes since $prev"
+            args+=(--notes-start-tag "$prev")
+          fi
+          gh release create "$tag" ./*.vsix "${args[@]}"

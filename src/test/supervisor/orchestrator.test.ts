@@ -495,7 +495,7 @@ describe('failure handling', () => {
     expect(rec.events.some(e => e.type === 'salvaged_from_prose')).toBe(true);
   });
 
-  it('escalates unparseable output to the human rather than stranding the agent', async () => {
+  it('escalates unparsable output to the human rather than stranding the agent', async () => {
     const rig = buildTestOrchestrator(tmp, new FakeEngine(['@@@ not json and no light @@@']), {
       exported: ambiguous(),
     });

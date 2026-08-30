@@ -1,0 +1,166 @@
+# ============================================================================
+# CI — every push to main and every pull request
+# ============================================================================
+#
+# Five parallel jobs, each answering one question:
+#
+#   1. test        — does it compile, lint, and pass on the Node versions we support?
+#   2. package     — does a real installable .vsix build, and what is in it?
+#   3. links       — does every relative link in the docs resolve?
+#   4. spellcheck  — are the docs free of typos?
+#   5. guards      — is it still TypeScript only, with no internal names?
+#
+# Every job runs the SAME commands a developer runs locally, through the Makefile or
+# `ci/`. Nothing here is CI-only, so a green pipeline means `make check` was honest.
+#
+# `python3` matters: the extension reads IBM Bob's SQLite store through a read-only
+# `python3 -c` shim (src/BobDatabase.ts), and the SessionManager / SessionExporter
+# tests build real SQLite fixtures with it. It is pinned with setup-python rather than
+# trusted from the runner image, so a change to that image cannot quietly break the
+# suite.
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to a PR makes the previous run's answer irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # One failing version should still tell us about the other.
+      fail-fast: false
+      matrix:
+        # 20 is the floor VS Code 1.9x ships; 22 is what current builds run.
+        node: ['20', '22']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Required by the Bob SQLite shim and by the tests that build SQLite fixtures.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check, lint and test
+        run: make check
+
+  package:
+    name: Package (.vsix)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the .vsix
+        run: make package
+
+      # Printed into the log so a reviewer can see what a user would install, without
+      # downloading anything. A file appearing here that should not ship is a review
+      # finding.
+      - name: List what ships inside it
+        run: make ls-package
+
+      # So a reviewer can install the exact build under review, from the PR page.
+      - name: Upload the .vsix
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-session-switcher-vsix
+          path: '*.vsix'
+          if-no-files-found: error
+          retention-days: 14
+
+  links:
+    name: Docs links
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Offline by design: an external-URL checker is flaky by construction, and a
+      # flaky required check trains people to ignore CI. Needs no dependencies.
+      - name: Check relative links resolve
+        run: node ci/check-links.mjs
+
+  spellcheck:
+    name: Spellcheck (docs)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: codespell
+        uses: codespell-project/actions-codespell@v2
+        with:
+          path: README.md docs knowledge skills
+          # Dated design records, kept as written — rewriting one to satisfy a linter
+          # would falsify the record.
+          skip: docs/superpowers
+          # `pre-empt` is deliberate, correct hyphenation.
+          ignore_words_list: pre-empt
+
+  guards:
+    name: TypeScript-only guards
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Compiled first so the guard can also assert on the .vsix manifest — what users
+      # actually install — and not just on the working tree.
+      - name: Compile
+        run: make compile
+
+      - name: No Python source, no internal names
+        run: bash ci/check-no-python.sh
