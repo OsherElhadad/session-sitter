@@ -8,8 +8,9 @@ Environment variables and `.env` files are a **legacy fallback**, kept so an exi
 install keeps working: they apply only to a setting you have not set. Nothing requires an
 environment variable any more.
 
-Nothing here is required to use the session switcher. Supervision needs
-`sessionSitter.supervisorStateDir`; everything else has a default.
+Nothing here is required to use the session switcher, and nothing is required to see your
+`sessionSitter.autoRespond` decisions in the **Supervision activity** panel. The AI supervisor needs
+`sessionSitter.supervisorStateDir`, and Telegram needs a bot token; everything else has a default.
 
 On a remote setup (WSL, SSH, Bob IDE) put the settings in your **user** settings — they are read
 from the client machine.
@@ -70,7 +71,7 @@ deprecation.
 
 | Setting | Default | Purpose |
 |---|---|---|
-| `sessionSitter.supervisorStateDir` | `""` | **Required to enable supervision.** Holds `history/`, `records/`, `outbox/`, `inbox/`, `notifications/`, `locks/`. |
+| `sessionSitter.supervisorStateDir` | `""` | **Required to enable the AI supervisor.** Holds `history/`, `records/`, `outbox/`, `inbox/`, `notifications/`, `locks/`. Left unset, the extension still records deterministic rule decisions under its own global storage, so the activity panel works without it — only the supervisor stays off. |
 | `sessionSitter.autoSupervise` | `true` | Hand every prompt no rule handled to the supervisor, and poll for replies and timeouts. |
 | `sessionSitter.supervisorRepoPath` | `""` | Workspace root: the classifier's working directory, and where a legacy `.env` is read from. Derived from the state dir's parent when empty. |
 
@@ -234,10 +235,14 @@ In the **Supervision activity** panel the two tiers are tagged so you can tell t
 The traffic light follows the outcome: an approve is 🟢 green, a reject is 🔴 red, and a canned
 text reply is 🟡 yellow.
 
-This needs `sessionSitter.supervisorStateDir` — that is where records live. It does **not** need
-`sessionSitter.autoSupervise`: rule decisions are recorded and reported even with the supervisor
-turned off. Set `sessionSitter.supervisor.notifyRuleDecisions: false` to keep them out of Telegram
-while still recording them.
+Rule decisions need **no configuration at all**. They do not need
+`sessionSitter.supervisorStateDir` (with it unset, records go to the extension's own global storage
+— the log line `state dir: …` on activation says where) and they do not need
+`sessionSitter.autoSupervise`: they are recorded and shown in the panel even with the supervisor
+turned off. Telegram is the one part that must be configured — until you set
+`sessionSitter.supervisor.messagingChannel: "telegram"` plus a bot token and chat id, rule
+decisions appear in the panel only. Set `sessionSitter.supervisor.notifyRuleDecisions: false` to
+keep them out of Telegram while still recording them.
 
 ---
 

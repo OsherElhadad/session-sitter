@@ -1,8 +1,8 @@
 {
   "name": "session-sitter",
   "displayName": "Session Sitter",
-  "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat \u2014 with traffic-light supervision of the actions your agents pause on",
-  "version": "0.6.2",
+  "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
+  "version": "0.6.3",
   "publisher": "eranra",
   "repository": {
     "type": "git",
@@ -93,22 +93,22 @@
       },
       {
         "command": "sessionSitter.probeClaudeInternals",
-        "title": "Probe Claude Internals \u2014 send + approval (debug)",
+        "title": "Probe Claude Internals — send + approval (debug)",
         "category": "Session Sitter"
       },
       {
         "command": "sessionSitter.probeBobQuestion",
-        "title": "Probe Bob Question \u2014 ask_followup_question (debug)",
+        "title": "Probe Bob Question — ask_followup_question (debug)",
         "category": "Session Sitter"
       },
       {
         "command": "sessionSitter.probeBobQuestionFull",
-        "title": "Probe Bob Question \u2014 full approval state (debug)",
+        "title": "Probe Bob Question — full approval state (debug)",
         "category": "Session Sitter"
       },
       {
         "command": "sessionSitter.probeClaudeQuestion",
-        "title": "Probe Claude Question \u2014 AskUserQuestion (debug)",
+        "title": "Probe Claude Question — AskUserQuestion (debug)",
         "category": "Session Sitter"
       },
       {
@@ -138,7 +138,7 @@
         "sessionSitter.autoRespond": {
           "type": "array",
           "default": [],
-          "markdownDescription": "Auto-respond rules for **Bob** and **Claude** sessions, evaluated in order (first match wins). Each rule is either a **text rule** `{ matchPattern, response }` (sends `response` when the latest assistant message matches the `matchPattern` regex) or an **approval rule** `{ toolPattern, decision }` (resolves a pending tool-approval prompt when `toolPattern` \u2014 a glob, `*` = any run of characters, `|` = alternatives \u2014 matches the tool name, optionally narrowed by an `argumentPattern` regex over the arguments JSON). Set `source` to `bob` (default) or `claude`. Add an optional `sessionPattern` (regex) to scope a rule to sessions whose project path matches.\n\nA pending prompt that no rule handles is left for you \u2014 or handed to the supervisor when `sessionSitter.autoSupervise` is on. A user-facing question (`ask_followup_question` / `AskUserQuestion`) is never auto-approved.",
+          "markdownDescription": "Auto-respond rules for **Bob** and **Claude** sessions, evaluated in order (first match wins). Each rule is either a **text rule** `{ matchPattern, response }` (sends `response` when the latest assistant message matches the `matchPattern` regex) or an **approval rule** `{ toolPattern, decision }` (resolves a pending tool-approval prompt when `toolPattern` — a glob, `*` = any run of characters, `|` = alternatives — matches the tool name, optionally narrowed by an `argumentPattern` regex over the arguments JSON). Set `source` to `bob` (default) or `claude`. Add an optional `sessionPattern` (regex) to scope a rule to sessions whose project path matches.\n\nA pending prompt that no rule handles is left for you — or handed to the supervisor when `sessionSitter.autoSupervise` is on. A user-facing question (`ask_followup_question` / `AskUserQuestion`) is never auto-approved.",
           "items": {
             "type": "object",
             "properties": {
@@ -160,7 +160,7 @@
               },
               "argumentPattern": {
                 "type": "string",
-                "description": "Approval rule (optional): JavaScript regex matched against the pending tool arguments as JSON. Unanchored \u2014 matches anywhere in the JSON."
+                "description": "Approval rule (optional): JavaScript regex matched against the pending tool arguments as JSON. Unanchored — matches anywhere in the JSON."
               },
               "decision": {
                 "type": "string",
@@ -202,27 +202,27 @@
         "sessionSitter.supervisorRepoPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Workspace root the supervisor runs against \u2014 used to locate `.env` files and as the classifier's working directory. Derived from `sessionSitter.supervisorStateDir` (its parent) when empty."
+          "markdownDescription": "Workspace root the supervisor runs against — used to locate `.env` files and as the classifier's working directory. Derived from `sessionSitter.supervisorStateDir` (its parent) when empty."
         },
         "sessionSitter.dataRepoPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Absolute path to your corpus repository \u2014 the one containing `data/sessions/` (uploaded sessions) and `data/knowledge/` (the BDI tier files). Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source for supervision."
+          "markdownDescription": "Absolute path to your corpus repository — the one containing `data/sessions/` (uploaded sessions) and `data/knowledge/` (the BDI tier files). Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source for supervision."
         },
         "sessionSitter.knowledge.user": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Knowledge-routing `user` slug \u2192 `data/knowledge/users/<user>/bottom-line.md` (highest precedence tier)."
+          "markdownDescription": "Knowledge-routing `user` slug → `data/knowledge/users/<user>/bottom-line.md` (highest precedence tier)."
         },
         "sessionSitter.knowledge.project": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Knowledge-routing `project` slug \u2192 `data/knowledge/projects/<project>/bottom-line.md`."
+          "markdownDescription": "Knowledge-routing `project` slug → `data/knowledge/projects/<project>/bottom-line.md`."
         },
         "sessionSitter.knowledge.team": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Knowledge-routing `team` slug \u2192 `data/knowledge/teams/<team>/bottom-line.md` (broadest, lowest precedence tier)."
+          "markdownDescription": "Knowledge-routing `team` slug → `data/knowledge/teams/<team>/bottom-line.md` (broadest, lowest precedence tier)."
         },
         "sessionSitter.knowledge.registryPath": {
           "type": "string",
@@ -302,12 +302,12 @@
         "sessionSitter.supervisor.notifyRuleDecisions": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Whether decisions taken by your **deterministic** `sessionSitter.autoRespond` rules are also reported to the messaging channel as one-way updates. They are always recorded and shown in the panel's Supervision activity feed; turn this off to keep them out of Telegram.\n\nWith this on, every intervention Session Sitter makes is visible \u2014 not just the ones the supervisor AI decided."
+          "markdownDescription": "Whether decisions taken by your **deterministic** `sessionSitter.autoRespond` rules are also reported to the messaging channel as one-way updates. They are always recorded and shown in the panel's Supervision activity feed; turn this off to keep them out of Telegram.\n\nWith this on, every intervention Session Sitter makes is visible — not just the ones the supervisor AI decided."
         },
         "sessionSitter.supervisor.knowledgeRepo": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Git URL of the knowledge (BDI) repository. Used only when no local checkout is configured \u2014 see `sessionSitter.dataRepoPath`."
+          "markdownDescription": "Git URL of the knowledge (BDI) repository. Used only when no local checkout is configured — see `sessionSitter.dataRepoPath`."
         },
         "sessionSitter.supervisor.knowledgeRef": {
           "type": "string",

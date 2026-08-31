@@ -3,6 +3,33 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.6.3
+
+### Deterministic decisions are reported without any configuration
+
+Ask a Bob session to run `date`, watch Session Sitter click **Allow once** for you, then look at
+the **Supervision activity** panel and at Telegram: nothing. The decision happened and left no
+trace anywhere.
+
+The cause was one setting standing in for two unrelated things. `sessionSitter.supervisorStateDir`
+gated the AI supervisor — correctly, since it shells out to a classifier CLI and must stay opt-in —
+but it also gated every *reporting* destination, because records live under that directory. A
+`sessionSitter.autoRespond` rule needs no supervisor and no settings at all, so on a default
+install the rules fired and the reporter was never built: `onRuleDecision` was `undefined`,
+`AutoResponder.report()` returned immediately, and the panel had no feed to read. The only hint was
+one line in an Output channel nobody had open — and the on-disk log that would have said so also
+lived under the state dir that did not exist.
+
+The two are now separate. The state dir always resolves, falling back to the extension's own global
+storage, so a rule decision is always recorded and always shows up in the activity feed. What still
+gates the supervisor (and the outbox that serves it) is whether you *set* the setting, not whether a
+path happens to resolve — defaulting a path must never start a classifier nobody asked for. The
+activation log now names the state dir in use, which also makes the multi-window case diagnosable:
+on a remote setup the panel and the deciding window must read the same settings.
+
+Telegram is the one part that genuinely needs configuring. When rule notifications are on but no
+channel is set up, the log now says so explicitly instead of leaving the silence unexplained.
+
 ## 0.6.2
 
 ### A session you interrupted no longer sits in the active list forever

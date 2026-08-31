@@ -26,6 +26,7 @@ import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
 import { SessionExporter } from './SessionExporter';
 import { SupervisorOutbox } from './SupervisorOutbox';
 import { SupervisionService } from './SupervisionService';
+import { resolveStateDir, resolveWorkspaceRoot } from './supervisionPaths';
 import { supervisorConfigFromSettings } from './supervisorSettings';
 import { ensureDirs, recordsDir, type SupervisorConfig } from './supervisor/config';
 import { buildChannel } from './supervisor/factory';
@@ -36,9 +37,18 @@ import { StateStore } from './supervisor/store';
 export function activate(context: vscode.ExtensionContext) {
   const sessionManager = new SessionManager(context);
 
-  // The supervisor's state directory also feeds the panel's activity feed.
+  // The state directory holds every supervision record, and it is what the panel's activity feed
+  // reads. It ALWAYS resolves — falling back to this extension's own global storage — because
+  // deterministic `autoRespond` decisions are recorded there and they must never be invisible.
+  // `state.explicit` (the user actually set `supervisorStateDir`) is what still gates the AI
+  // supervisor, which shells out to a classifier CLI and therefore stays opt-in.
   const supervisionCfg = () => vscode.workspace.getConfiguration('sessionSitter');
-  const stateDir = supervisionCfg().get<string>('supervisorStateDir', '');
+  const state = resolveStateDir(
+    supervisionCfg().get<string>('supervisorStateDir', ''), context.globalStorageUri.fsPath);
+  const stateDir = state.dir;
+  // Create it up front: the file log and the activity feed both point inside it, and a defaulted
+  // global-storage path does not exist on a fresh install.
+  try { fs.mkdirSync(stateDir, { recursive: true }); } catch { /* best-effort */ }
 
   // Shared output channel for logging. Also mirror to a durable file under the state dir: in a
   // multi-window (or WSL) setup the in-memory Output channel is per-extension-host and easy to
@@ -46,15 +56,14 @@ export function activate(context: vscode.ExtensionContext) {
   // window's sweep/handoff actually did. Best-effort — a failed append must never break logging.
   const output = vscode.window.createOutputChannel('Session Sitter');
   context.subscriptions.push(output);
-  const logFile = stateDir ? path.join(stateDir, 'session-sitter.log') : undefined;
+  const logFile = path.join(stateDir, 'session-sitter.log');
   const log = (msg: string) => {
     const line = `[${new Date().toISOString()}] [pid:${process.pid}] ${msg}`;
     output.appendLine(line);
-    if (logFile) {
-      try { fs.appendFileSync(logFile, `${line}\n`); } catch { /* best-effort */ }
-    }
+    try { fs.appendFileSync(logFile, `${line}\n`); } catch { /* best-effort */ }
   };
   log(`Session Sitter activated — build v${BUILD_VERSION} @ ${BUILD_TIME}`);
+  log(`state dir: ${stateDir}${state.explicit ? '' : ' (default — set sessionSitter.supervisorStateDir to move it)'}`);
 
   const provider = new SessionSitterViewProvider(
     context.extensionUri, sessionManager, log, stateDir);
@@ -206,11 +215,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   const cfg = supervisionCfg();
   const autoSupervise = cfg.get<boolean>('autoSupervise', true);
-  // Workspace root: an explicit setting, else derived from the state dir (<root>/.state or
-  // <root>/supervisor/.state), else the first workspace folder.
-  const workspaceRoot = cfg.get<string>('supervisorRepoPath', '')
-    || (stateDir ? path.dirname(stateDir) : '')
-    || (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '');
+  // Workspace root: an explicit setting, else derived from an EXPLICIT state dir (<root>/.state or
+  // <root>/supervisor/.state), else the first workspace folder. A defaulted state dir is never
+  // used — its parent is global storage, not a repo.
+  const workspaceRoot = resolveWorkspaceRoot(
+    cfg.get<string>('supervisorRepoPath', ''), state, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
 
   // Everything the supervisor needs now comes from `sessionSitter.*` settings (editable in the
   // Settings UI). `.env` / process env remain a legacy fallback for values left unset, so an
@@ -227,31 +236,34 @@ export function activate(context: vscode.ExtensionContext) {
 
   // ONE messaging channel per window, shared by the supervisor and the deterministic-rule
   // reporter: two Telegram consumers on the same bot would fight over `getUpdates`.
-  let channel: MessagingChannel | undefined;
-  let ruleRecorder: RuleDecisionRecorder | undefined;
-  if (stateDir) {
-    ensureDirs(supervisorConfig);
-    channel = buildChannel(supervisorConfig, log);
-    ruleRecorder = new RuleDecisionRecorder({
-      store: new StateStore(recordsDir(supervisorConfig)),
-      channel,
-      config: supervisorConfig,
-      log,
-    });
-    log(
-      `rule decisions: recording to ${recordsDir(supervisorConfig)}`
-      + ` — notify=${supervisorConfig.notifyRuleDecisions} via ${supervisorConfig.messagingChannel}`,
-    );
-  } else {
-    log('rule decisions: not recorded — set sessionSitter.supervisorStateDir to see them '
-      + 'in the panel and on Telegram.');
+  // Built unconditionally: `autoRespond` rules act on the user's session with no supervisor and no
+  // configuration at all, so their record and their notification can never be conditional on a
+  // setting. The state dir always resolves, so there is always somewhere to write them.
+  ensureDirs(supervisorConfig);
+  const channel: MessagingChannel = buildChannel(supervisorConfig, log);
+  const ruleRecorder = new RuleDecisionRecorder({
+    store: new StateStore(recordsDir(supervisorConfig)),
+    channel,
+    config: supervisorConfig,
+    log,
+  });
+  log(
+    `rule decisions: recording to ${recordsDir(supervisorConfig)}`
+    + ` — notify=${supervisorConfig.notifyRuleDecisions} via ${supervisorConfig.messagingChannel}`,
+  );
+  if (supervisorConfig.notifyRuleDecisions && supervisorConfig.messagingChannel !== 'telegram') {
+    log('rule decisions: no human channel configured, so they appear in the panel only. Set '
+      + 'sessionSitter.supervisor.messagingChannel to "telegram" plus '
+      + 'sessionSitter.supervisor.telegramBotToken and .telegramChatId to also get them on Telegram.');
   }
 
   // The outbox applies supervisor decisions: an approval-channel delivery goes through the
   // agent's approval emitter (the only channel that reaches a prompt-blocked task); a
   // message-channel delivery is injected as a labeled chat message into an idle task.
+  // Gated on the EXPLICIT setting, like the supervisor it serves: a defaulted state dir turns on
+  // reporting, never the AI supervision loop.
   let outbox: SupervisorOutbox | undefined;
-  if (stateDir) {
+  if (state.explicit) {
     const resolveActiveSession = (): string | undefined => mostRecent(sessionManager, 'bob')?.sessionId;
     outbox = new SupervisorOutbox(
       path.join(stateDir, 'outbox'), sender, log, approver, resolveActiveSession,
@@ -263,7 +275,7 @@ export function activate(context: vscode.ExtensionContext) {
   // The supervisor itself runs in-process (no interpreter, no child process). Deliveries kick
   // the outbox immediately so an approval reaches a blocked agent in milliseconds.
   let supervision: SupervisionService | undefined;
-  if (autoSupervise && stateDir && workspaceRoot) {
+  if (autoSupervise && state.explicit && workspaceRoot) {
     supervision = new SupervisionService({
       enabled: true,
       supervisorConfig,
@@ -284,7 +296,7 @@ export function activate(context: vscode.ExtensionContext) {
   // (v1: single-session correlation, because a Claude approval carries a channelId, not a
   // session id).
   const exportClaudeForSupervision = async (p: PendingApproval): Promise<string | undefined> => {
-    if (!stateDir) { log('supervision(claude): no stateDir configured'); return undefined; }
+    if (!state.explicit) { log('supervision(claude): no stateDir configured'); return undefined; }
     const recent = mostRecent(sessionManager, 'claude');
     if (!recent) {
       log(`supervision(claude): 0 claude sessions (total=${sessionManager.getSessions().length})`);
@@ -318,14 +330,12 @@ export function activate(context: vscode.ExtensionContext) {
   // ALL of Session Sitter's interventions — not only the ones the supervisor AI took.
   // A Claude pending approval carries a channelId as its `taskId`, so relabel it with the
   // session the decision actually landed in (same single-session correlation the export uses).
-  const onRuleDecision = ruleRecorder
-    ? (d: RuleDecision): void => {
-      const sessionId = d.source === 'claude'
-        ? (mostRecent(sessionManager, 'claude')?.sessionId ?? d.sessionId)
-        : d.sessionId;
-      void ruleRecorder!.report({ ...d, sessionId });
-    }
-    : undefined;
+  const onRuleDecision = (d: RuleDecision): void => {
+    const sessionId = d.source === 'claude'
+      ? (mostRecent(sessionManager, 'claude')?.sessionId ?? d.sessionId)
+      : d.sessionId;
+    void ruleRecorder.report({ ...d, sessionId });
+  };
 
   const autoResponder = new AutoResponder(
     sessionManager, sender, getRules, log, approver,
@@ -345,7 +355,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Manual export of a Bob session's full transcript, for classifying it by hand.
   context.subscriptions.push(
     vscode.commands.registerCommand('sessionSitter.exportSessionForSupervision', async () => {
-      if (!stateDir) {
+      if (!state.explicit) {
         void vscode.window.showErrorMessage('Set sessionSitter.supervisorStateDir first.');
         return;
       }

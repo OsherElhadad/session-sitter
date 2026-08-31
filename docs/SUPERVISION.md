@@ -189,7 +189,8 @@ The next poll picks it up and the full Orange lifecycle runs, offline.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| No activity at all | no state dir | set `sessionSitter.supervisorStateDir` |
+| No activity at all | the panel is reading a different state dir than the window that made the decisions | the `state dir: …` line the log prints on activation is the one in use; on a remote setup (WSL, SSH, Bob IDE) `sessionSitter.supervisorStateDir` must be in the settings that window actually reads |
+| No **🧠 AI** activity, only **⚙ rule** | the AI supervisor is off | set `sessionSitter.supervisorStateDir` — rule decisions need no state dir, the supervisor does |
 | `supervision not started` in the log | no workspace root could be derived | set `sessionSitter.supervisorRepoPath` |
 | Decisions always time out | `getUpdates` is failing — usually a second consumer or a webhook | check the log for `getUpdates failed`; stop the other poller |
 | Records say `classify: … not found` | the classifier CLI is not on `PATH` | fix `sessionSitter.supervisor.engine`, or set `sessionSitter.supervisor.bobCliPath` / `.claudeCliPath` |
