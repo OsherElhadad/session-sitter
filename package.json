@@ -2,7 +2,7 @@
   "name": "session-sitter",
   "displayName": "Session Sitter",
   "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
-  "version": "0.6.3",
+  "version": "0.7.0",
   "publisher": "eranra",
   "repository": {
     "type": "git",
@@ -208,6 +208,15 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Absolute path to your corpus repository — the one containing `data/sessions/` (uploaded sessions) and `data/knowledge/` (the BDI tier files). Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source for supervision."
+        },
+        "sessionSitter.remotePeers": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "off"
+          ],
+          "default": "auto",
+          "markdownDescription": "Whether to show sessions from other machines. `auto` (default) finds peer machines from the remote windows this IDE has already opened — no configuration needed — and pulls their live sessions over SSH, reusing one connection per peer. Clicking such a session focuses the window on **its own** machine. Set to `off` to disable this entirely: no peer discovery, no polling, and no SSH connection of any kind.\n\nOnly peers reachable from this machine appear. SSH runs with `BatchMode=yes`, so a host that would prompt for a password is reported unreachable rather than blocking."
         },
         "sessionSitter.knowledge.user": {
           "type": "string",

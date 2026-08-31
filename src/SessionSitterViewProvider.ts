@@ -504,7 +504,12 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     if (!this._view) { return; }
     const { active } = await this._partitionSessions();
     void this._view.webview.postMessage({
-      type: 'updateSessions', sessions: active.slice(0, SESSIONS_LIMIT),
+      type: 'updateSessions',
+      sessions: active.slice(0, SESSIONS_LIMIT),
+      // Sent with the sessions so the panel can name peers it could not reach, rather than
+      // letting an unreachable machine look like a machine with nothing running.
+      // Optional call: peer support is additive, and a session manager without it is still valid.
+      peers: this._sessionManager.getPeerStatuses?.() ?? [],
     });
   }
 
@@ -576,6 +581,13 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
   }
 
   private async _tryFocusForeignWindow(sessionId: string): Promise<'focused' | 'foreign-failed' | 'local'> {
+    // A session tagged with a peer lives on another machine, so the same two-step handshake has
+    // to run over there. Checked first: no local window can own it.
+    const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
+    if (session?.peer) {
+      return await this._sessionManager.focusRemoteSession(sessionId) ? 'focused' : 'foreign-failed';
+    }
+
     const owner = await this._findOwnerWindow(sessionId);
     if (!owner) { return 'local'; }
     if (!owner.ipcSocket || !owner.ideCli) { return 'foreign-failed'; }

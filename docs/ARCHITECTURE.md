@@ -290,6 +290,57 @@ This API only works from the local (Windows) extension host. Our extension runs 
 
 ---
 
+## Cross-machine sessions
+
+Running in the remote extension host is what lets this extension read the remote filesystem — and
+it is also why one window cannot see another machine's sessions. Every source is rooted at
+`os.homedir()`, so one extension host per machine means one `$HOME` per machine.
+
+Peer machines are therefore pulled explicitly. `sessionSitter.remotePeers` (`auto` by default,
+`off` to disable everything below) gates it, and the gate **fails closed**: if the setting cannot be
+read at all, no SSH happens.
+
+| Unit | Job |
+| --- | --- |
+| `remote/PeerDiscovery.ts` | find peers with **no** SSH traffic, by mining `ssh-remote+user@host` out of each IDE's `globalStorage/state.vscdb` |
+| `remote/SshRunner.ts` | the one place SSH runs: `BatchMode`, `ControlMaster`, and the per-peer backoff |
+| `remote/remoteProbe.ts` | the python3 script a peer runs to report its live windows, Bob rows, and transcript bytes |
+| `remote/RemoteSessionSource.ts` | probe output to sessions, plus per-peer reachability and owner lookup |
+| `remote/remoteFocus.ts` | the existing focus handshake, executed on the peer |
+
+**Why discovery reads the IDE's store.** The IDE already records every remote window you have
+opened, which yields the exact `user@host` it connects with — for free, from a local file. The one
+subtle rule is stripping a trailing window id without corrupting an IPv4 authority, since both end
+in `.<digits>`; a window id is negative or long, an octet is not.
+
+**Why the probe is python3 on stdin.** A peer has no guaranteed `node` and no checkout of this
+extension, and `python3` is already the SQLite dependency `BobDatabase.ts` relies on. It travels on
+stdin because `ssh host cmd a b` does *not* preserve argv — ssh hands its words to a shell on the
+far side, which would tear a multi-line script apart. Its one argument is base64 for the same
+reason.
+
+**Why the probe ships raw material, not sessions.** Titles and statuses are derived by
+`sessionRows.ts` and `SessionManager._parseSessionFile`. Reimplementing those rules in Python would
+create a second, drifting implementation, so Bob rows come back verbatim and a Claude transcript's
+head and tail are written to a temp file (with the peer's mtime) and handed to the real parser.
+
+**Why a cache rather than a fifth scanner.** `_scanSessions` awaits its sources in sequence, so an
+SSH call on that path would stall the local session list behind the network. A slower timer
+refreshes a cache; the merge reads it synchronously.
+
+**Why liveness is decided on the peer.** `process.kill` and `/proc` describe the local machine
+only, so the probe filters windows with `kill -0` there and returns only live ones.
+
+**Why visibility is one-way.** Reachability usually is: a laptop or WSL box behind NAT runs no
+reachable sshd. Each window shows what it can reach and names what it cannot, because an
+unreachable machine and a machine with nothing running must not look the same.
+
+**Why supervision stays local.** It drives agent CLIs and writes state directories on the machine
+that owns the session. Peer sessions are excluded from `mostRecent` and from `AutoResponder`, and
+remote ids are deliberately left out of the `filePaths`/`sources` maps that drive the export.
+
+---
+
 ## The Supervision Layer
 
 ### The loop
@@ -436,6 +487,10 @@ For Bob and Claude the answer is read fresh from this window and unioned with wh
 windows published to `~/.claude/session-sitter/windows/` — so the answer is cross-window. A
 session is also treated as active when its status is not idle, so a session you are working in
 does not vanish because the probe was momentarily silent.
+
+That registry is per-machine, because `os.homedir()` is. Sessions on *other* machines arrive
+through a separate path — see **Cross-machine sessions** below — and each carries a `peer` tag so
+every local code path can tell the difference.
 
 Codex and Chat have no liveness signal at all, so recency is the only honest proxy: they count as
 active while updated within `sessionSitter.probelessActiveWindowMinutes` (default 120,

@@ -25,7 +25,8 @@ A VS Code extension that does two things for your coding agents.
 **It shows you your sessions.** One live panel across
 [Claude Code](https://marketplace.visualstudio.com/items?itemName=Anthropic.claude-code),
 [IBM Bob IDE](https://marketplace.visualstudio.com/items?itemName=ibm.bob-code), Codex and
-VS Code Chat — which are alive right now, one click to switch, across windows.
+VS Code Chat — which are alive right now, one click to switch, across windows *and across
+machines*, including the sessions on whatever remote hosts your other windows are attached to.
 
 **It supervises what they pause on.** When an agent stops for approval, it classifies that action
 into a traffic light against your team's own practices and acts: approve it, correct it, or reach

@@ -3,6 +3,37 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.7.0
+
+### Sessions from your other machines, with no configuration
+
+Two IDE windows attached to two different machines showed two different session lists, and there
+was no way to see one from the other. Nothing was broken: every session source is rooted at
+`os.homedir()`, and this extension runs in the *remote* extension host on purpose so it can reach
+the remote filesystem. One extension host per machine means one `$HOME` per machine, so "across
+windows" had always quietly meant "across windows on this machine".
+
+The panel now also shows sessions from peer machines, tagged with the machine they live on, and
+clicking one focuses the window on **its own** machine.
+
+There is nothing to configure. The IDE already records every remote window you have opened as an
+`ssh-remote+user@host` entry in its own state store, so peers are read from there — a local file
+read, no SSH traffic, and it yields the exact address the IDE itself connects with. Peers are then
+probed over SSH with one connection each, reused via `ControlMaster` and refreshed on a slower timer
+than the local scan, so a peer on a slow link can never stall the local session list.
+
+Reachability is one-way in practice: this machine may reach a server that cannot reach back through
+NAT. So each window shows what it can reach and names what it cannot, rather than letting an
+unreachable machine look like a machine with nothing running. SSH runs with `BatchMode=yes`
+throughout — a host that would prompt for a password is reported unreachable instead of wedging a
+background timer on a prompt nobody can see — and a failing peer backs off exponentially.
+
+Supervision stays local to the machine that owns the session, which is also the machine that can
+act on it.
+
+Set `sessionSitter.remotePeers` to `off` to disable all of it: no discovery, no polling, and no SSH
+connection of any kind.
+
 ## 0.6.3
 
 ### Deterministic decisions are reported without any configuration

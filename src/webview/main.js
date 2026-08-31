@@ -16,6 +16,9 @@
 
   let historyOpen = false;
 
+  /** @type {Array<{peer: string, reachable: boolean, error?: string, sessionCount?: number}>} */
+  let peerStatuses = [];
+
   /** @type {Array<object>} — supervision activity feed (newest first) */
   let activityItems = [];
   let activityOpen = true;
@@ -337,6 +340,18 @@
       textEl.appendChild(sourceBadge);
     }
 
+    // A session on another machine gets the machine's name, because "which box is this on" is
+    // the first thing you need to know about it. Local sessions carry no such badge, so an
+    // unbadged row still means "here".
+    if (session.peer) {
+      const peerBadge = document.createElement('span');
+      peerBadge.className = 'tab-badge tab-badge--peer';
+      // Show the host, not user@host: the username is noise once you know the machine.
+      peerBadge.textContent = String(session.peer).split('@').pop().split('.')[0];
+      peerBadge.title = 'on ' + session.peer;
+      textEl.appendChild(peerBadge);
+    }
+
     const workspaceBadge = document.createElement('span');
     workspaceBadge.className = 'tab-badge tab-badge--workspace';
     workspaceBadge.textContent = session.projectName || '(no workspace)';
@@ -482,9 +497,29 @@
       placeholder.className = 'tab-placeholder';
       placeholder.textContent = 'No active sessions — click + to start one';
       tabStrip.appendChild(placeholder);
+      // Still say which machines are unreachable: "no sessions" and "could not ask" are very
+      // different things, and this is exactly the case where confusing them misleads.
+      appendPeerWarning();
       return;
     }
     sessions.forEach(session => tabStrip.appendChild(buildTab(session)));
+    appendPeerWarning();
+  }
+
+  // Name the peers that could not be reached this pass.
+  //
+  // Reachability is one-way in practice: this machine may reach a server while the server cannot
+  // reach back through NAT. Silently omitting an unreachable machine would look identical to that
+  // machine having no sessions, so an unreachable peer is stated rather than hidden.
+  function appendPeerWarning() {
+    if (!tabStrip) { return; }
+    const down = peerStatuses.filter(p => p && p.reachable === false);
+    if (down.length === 0) { return; }
+    const el = document.createElement('div');
+    el.className = 'peer-warning';
+    el.textContent = 'Not reachable: ' + down.map(p => String(p.peer).split('@').pop()).join(', ');
+    el.title = down.map(p => String(p.peer) + ' — ' + (p.error || 'unreachable')).join('\n');
+    tabStrip.appendChild(el);
   }
 
   function renderHistory() {
@@ -733,6 +768,7 @@
     switch (message.type) {
       case 'updateSessions':
         sessions = Array.isArray(message.sessions) ? message.sessions : [];
+        peerStatuses = Array.isArray(message.peers) ? message.peers : [];
         renderTabs();
         break;
       case 'updateHistory':

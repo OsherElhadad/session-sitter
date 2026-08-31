@@ -265,6 +265,24 @@ button:focus-visible {
   color: #fff;
 }
 
+/* Machine pill, present only on a session that lives on another host. Outlined rather than
+   filled so it reads as a qualifier on the row, not as another agent-source badge. */
+.tab-badge--peer {
+  background: transparent;
+  border: 1px solid var(--vscode-badge-background, rgba(128, 128, 128, 0.5));
+  color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  opacity: 1;
+}
+
+/* Peers that could not be reached this pass. Reachability here is one-way — a laptop behind NAT
+   runs no reachable sshd — so this line has to be visible rather than a silent omission. */
+.peer-warning {
+  font-size: 10px;
+  padding: 2px 8px 4px;
+  color: var(--vscode-descriptionForeground, var(--vscode-editor-foreground));
+  opacity: 0.8;
+}
+
 /* Workspace pill on its own row — italic + slightly dimmed when the session
    has no associated workspace, to distinguish it visually from a real folder. */
 .tab-badge--empty {

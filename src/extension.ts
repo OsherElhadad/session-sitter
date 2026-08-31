@@ -423,10 +423,17 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(provider);
 }
 
-/** Most recently updated session for one source, or undefined. */
+/**
+ * Most recently updated **local** session for one source, or undefined.
+ *
+ * Peer sessions are excluded deliberately. Supervision drives agent CLIs and writes state
+ * directories on the machine that owns the session, so it stays local-only — and without this
+ * filter a busy peer session could be picked here in place of the local one that actually needs
+ * supervising.
+ */
 function mostRecent(sessionManager: SessionManager, source: 'bob' | 'claude') {
   return sessionManager.getSessions()
-    .filter(s => s.source === source)
+    .filter(s => s.source === source && !s.peer)
     .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0];
 }
 

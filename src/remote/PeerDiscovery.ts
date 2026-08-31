@@ -1,0 +1,200 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { queryBobDb } from '../BobDatabase';
+
+/**
+ * Finding peer machines without asking the user to configure anything.
+ *
+ * ## Why the IDE's own store
+ *
+ * A window can only read its own machine's `$HOME`, so it cannot see another machine's sessions
+ * (see `docs/superpowers/specs/2026-08-31-cross-machine-sessions-design.md`). To pull them we
+ * need an SSH address, and the user should not have to type one.
+ *
+ * The IDE already knows: every remote window ever opened leaves an `ssh-remote+<authority>`
+ * record in its `globalStorage/state.vscdb`. Mining that costs **no SSH traffic at all** — it is
+ * a local file read — and it yields the exact `user@host` the IDE itself connects with, which is
+ * the address most likely to work.
+ *
+ * Two record shapes carry the authority, and both are mined because neither is guaranteed:
+ *
+ * - **keys**   `remote.tunnels.toRestore.ssh-remote+vpcuser@host.76044865` — only written when a
+ *              port was forwarded
+ * - **values** `vscode-remote://ssh-remote%2Bvpcuser%40host/home/vpcuser/p` — folder URIs, always
+ *              recorded, but percent-encoded
+ */
+
+export interface PeerAddress {
+  user: string;
+  host: string;
+  /** `user@host`, exactly what gets handed to `ssh`. */
+  raw: string;
+}
+
+/**
+ * Remove a trailing IDE window-id segment from an authority.
+ *
+ * This is the one step here that can silently corrupt an address, because an IPv4 authority also
+ * ends in `.<digits>`: stripping blindly turns `eranra@192.168.50.16` into `eranra@192.168.50`.
+ *
+ * The two are separable by shape. A window id is a signed 32-bit-ish integer — negative, or long.
+ * A final IPv4 octet is at most 3 digits, and a hostname's last label is never all digits (no
+ * numeric TLDs). So strip only when the last segment is negative or has 5+ digits, which no
+ * octet and no TLD can be.
+ */
+export function stripWindowId(authority: string): string {
+  return authority.replace(/\.(-\d+|\d{5,})$/, '');
+}
+
+/**
+ * Split an authority into its parts, or return null when it is not usable.
+ *
+ * A bare host is rejected on purpose. Without a username we would have to guess one, and every
+ * wrong guess is a speculative SSH connection — exactly the traffic this feature must not create.
+ */
+export function parseAuthority(authority: string): PeerAddress | null {
+  const parts = authority.split('@');
+  if (parts.length !== 2) { return null; }
+  const [user, host] = parts;
+  if (!user || !host) { return null; }
+  return { user, host, raw: `${user}@${host}` };
+}
+
+// Matches both encodings of the marker (`+` and `%2B`) and both encodings of the separator
+// (`@` and `%40`), so one pattern covers the key form and the URI form.
+const AUTHORITY_RE = /ssh-remote(?:\+|%2B)([A-Za-z0-9_.%@-]*)/g;
+
+/**
+ * Pull every distinct, usable peer authority out of raw ItemTable keys and values.
+ *
+ * Returned sorted so the peer list — and therefore the panel — is stable between passes.
+ */
+export function extractAuthorities(keys: string[], values: string[]): string[] {
+  const found = new Set<string>();
+  for (const text of [...keys, ...values]) {
+    for (const m of text.matchAll(AUTHORITY_RE)) {
+      let auth: string;
+      try { auth = decodeURIComponent(m[1]); } catch { auth = m[1]; }
+      // A URI's authority ends at the path separator.
+      auth = auth.split('/')[0];
+      if (auth) { found.add(auth); }
+    }
+  }
+
+  const stripped = new Set<string>();
+  for (const auth of found) { stripped.add(stripWindowId(auth)); }
+
+  // Belt and braces for stripWindowId: if a suffixed form somehow survives alongside its clean
+  // form, keep only the clean one. Cheap, and it fails safe if the id heuristic ever misses.
+  const out: string[] = [];
+  for (const auth of stripped) {
+    const shadowed = [...stripped].some(
+      other => other !== auth && auth.startsWith(other + '.') && /^-?\d+$/.test(auth.slice(other.length + 1)),
+    );
+    if (shadowed) { continue; }
+    if (parseAuthority(auth)) { out.push(auth); }
+  }
+  return out.sort();
+}
+
+/** Read the `key`/`value` columns of an IDE state db. */
+async function readItemTableViaSqlite(dbPath: string): Promise<{ keys: string[]; values: string[] }> {
+  // Copy before reading. The IDE holds this file open, and reading it in place — especially over
+  // a /mnt/c DrvFs mount — can fail on a lock or a WAL the reader cannot follow.
+  const tmp = path.join(os.tmpdir(), `ss-state-${process.pid}-${Date.now()}.vscdb`);
+  await fs.promises.copyFile(dbPath, tmp);
+  try {
+    const rows = await queryBobDb<{ key: string; value: string }>(
+      tmp, 'SELECT key, value FROM ItemTable');
+    return {
+      keys: rows.map(r => String(r.key ?? '')),
+      values: rows.map(r => String(r.value ?? '')),
+    };
+  } finally {
+    try { await fs.promises.unlink(tmp); } catch { /* best effort */ }
+  }
+}
+
+/** Every directory an IDE might keep its user profile in, on this platform. */
+function ideProfileRoots(homedir: string): string[] {
+  const roots: string[] = [];
+  if (process.platform === 'darwin') {
+    roots.push(path.join(homedir, 'Library', 'Application Support'));
+  } else if (process.platform === 'win32') {
+    roots.push(process.env.APPDATA ?? path.join(homedir, 'AppData', 'Roaming'));
+  } else {
+    roots.push(path.join(homedir, '.config'));
+    // A WSL extension host can reach the Windows hub that launched it, and that is where the
+    // authorities for *other* remotes live — the Linux side never sees them.
+    for (const win of listWindowsUserProfiles()) {
+      roots.push(path.join(win, 'AppData', 'Roaming'));
+    }
+  }
+  return roots;
+}
+
+function listWindowsUserProfiles(): string[] {
+  const skip = new Set(['Public', 'Default', 'Default User', 'All Users']);
+  try {
+    return fs.readdirSync('/mnt/c/Users')
+      .filter(name => !skip.has(name))
+      .map(name => path.join('/mnt/c/Users', name))
+      .filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+  } catch {
+    return []; // not WSL, or no Windows drive mounted
+  }
+}
+
+/** Locate each IDE's `User/globalStorage/state.vscdb` under every profile root. */
+async function findStateDbsOnDisk(homedir: string = os.homedir()): Promise<string[]> {
+  const out: string[] = [];
+  for (const root of ideProfileRoots(homedir)) {
+    let apps: string[];
+    try { apps = await fs.promises.readdir(root); } catch { continue; }
+    for (const app of apps) {
+      const db = path.join(root, app, 'User', 'globalStorage', 'state.vscdb');
+      try {
+        if ((await fs.promises.stat(db)).isFile()) { out.push(db); }
+      } catch { /* not an IDE profile */ }
+    }
+  }
+  return out;
+}
+
+export interface DiscoverPeersOptions {
+  findStateDbs?: () => Promise<string[]>;
+  readItemTable?: (dbPath: string) => Promise<{ keys: string[]; values: string[] }>;
+  /** Drop a peer that is really this machine, so we never SSH to ourselves. */
+  isSelf?: (peer: PeerAddress) => boolean;
+  homedir?: string;
+}
+
+/**
+ * Discover peer machines to pull sessions from. Local file reads only — no SSH.
+ *
+ * A state db that cannot be read is skipped rather than fatal: the IDE keeps these files open, so
+ * one locked db must not hide the peers recorded in the others.
+ */
+export async function discoverPeers(opts: DiscoverPeersOptions = {}): Promise<PeerAddress[]> {
+  const findStateDbs = opts.findStateDbs ?? (() => findStateDbsOnDisk(opts.homedir));
+  const readItemTable = opts.readItemTable ?? readItemTableViaSqlite;
+  const isSelf = opts.isSelf ?? (() => false);
+
+  let dbs: string[];
+  try { dbs = await findStateDbs(); } catch { return []; }
+
+  const keys: string[] = [];
+  const values: string[] = [];
+  for (const db of dbs) {
+    try {
+      const table = await readItemTable(db);
+      keys.push(...table.keys);
+      values.push(...table.values);
+    } catch { /* locked or not a state db — other dbs may still have peers */ }
+  }
+
+  return extractAuthorities(keys, values)
+    .map(parseAuthority)
+    .filter((p): p is PeerAddress => p !== null && !isSelf(p));
+}
