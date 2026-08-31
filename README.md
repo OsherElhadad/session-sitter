@@ -144,7 +144,7 @@ there: it classifies each action an agent pauses on and acts.
 
 ```jsonc
 {
-  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",   // required
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",   // required for the AI supervisor
   "sessionSitter.dataRepoPath": "/home/you/work/team-corpus",           // where your rules live
   "sessionSitter.knowledge.user": "your-slug",
   "sessionSitter.knowledge.project": "your-project",
