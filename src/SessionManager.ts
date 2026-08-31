@@ -3,7 +3,41 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { queryBobDb } from './BobDatabase';
+import { bobRowToSession } from './sessionRows';
+import { discoverPeers } from './remote/PeerDiscovery';
+import { SshRunner } from './remote/SshRunner';
+import {
+  RemoteSessionSource,
+  type PeerStatus,
+  type RemoteOwner,
+} from './remote/RemoteSessionSource';
+import { REMOTE_FOCUS_PY } from './remote/remoteFocus';
 import { FullTranscript, readBobTranscript } from './SessionExporter';
+
+/**
+ * How often peer machines are re-probed. Slower than the 5 s local poll on purpose: each pass is
+ * network work, and with ControlMaster keeping the connection warm this is still responsive.
+ */
+const REMOTE_POLL_MS = 20_000;
+
+/**
+ * Whether to pull sessions from peer machines (`sessionSitter.remotePeers`).
+ *
+ * **Fails closed.** If the setting cannot be read — an unexpected host, a configuration API that
+ * is absent or throws — the answer is no. The alternative would be opening SSH connections from a
+ * host we could not even query for consent, which is precisely where the extension should do the
+ * least. Only an explicit, readable `auto` turns it on.
+ */
+export function remotePeersEnabled(
+  readSetting: () => string | undefined = () =>
+    vscode.workspace.getConfiguration('sessionSitter').get<string>('remotePeers'),
+): boolean {
+  try {
+    return (readSetting() ?? 'auto') !== 'off';
+  } catch {
+    return false;
+  }
+}
 
 /** Which session sources this extension knows about. */
 export type SessionSourceId = 'claude' | 'bob' | 'codex' | 'chat';
@@ -58,6 +92,9 @@ export interface ClaudeSession {
   updatedAt: Date;      // file mtime (last write time)
   status: 'idle' | 'waiting' | 'active'; // idle=done, waiting=user sent/no reply yet, active=tools running
   source: 'claude' | 'bob' | 'codex' | 'chat'; // which AI IDE this session belongs to
+  // Set only when this session lives on another machine, to the peer that owns it
+  // ("user@host"). Absent means local — so every existing local code path is unaffected.
+  peer?: string;
 }
 
 interface ContentBlock {
@@ -199,6 +236,10 @@ export class SessionManager implements vscode.Disposable {
   private readonly _vscodeUserDir: string;
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly _pollTimer: ReturnType<typeof setInterval>;
+  // Present only when peer pulling is enabled; see `_startRemotePolling`.
+  private _remote: RemoteSessionSource | undefined;
+  private _remoteRunner: SshRunner | undefined;
+  private _remoteTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(context: vscode.ExtensionContext) {
     this._projectsDir = path.join(os.homedir(), '.claude', 'projects');
@@ -270,7 +311,80 @@ export class SessionManager implements vscode.Disposable {
     // stay current even when the FileSystemWatcher is silent (common in WSL2).
     this._pollTimer = setInterval(() => { void this._runScan(); }, 5_000);
 
+    this._startRemotePolling();
+
     context.subscriptions.push(this);
+  }
+
+  /**
+   * Start pulling sessions from peer machines, unless the user has turned it off.
+   *
+   * Deliberately on its own timer, slower than the local 5 s poll: `_scanSessions` awaits its
+   * sources in sequence, so a peer probe on that path would stall the local session list behind
+   * the network. This timer only refreshes a cache that the merge reads synchronously.
+   */
+  private _startRemotePolling(): void {
+    // 'off' means no discovery, no timer, and no ssh connection of any kind.
+    if (!remotePeersEnabled()) { return; }
+
+    const runner = new SshRunner();
+    // Shared with `focusRemoteSession`, so focus reuses the same warm ControlMaster connection.
+    this._remoteRunner = runner;
+    this._remote = new RemoteSessionSource({
+      runner,
+      discover: () => discoverPeers(),
+      // The real parser, so a peer's session is titled by exactly the code that titles a local one.
+      parseSessionFile: (filePath) => this._parseSessionFile(filePath),
+    });
+
+    const pull = async () => {
+      try {
+        await this._remote?.refresh();
+        await this._runScan();
+      } catch { /* a peer failure must never break the local panel */ }
+    };
+    void pull();
+    this._remoteTimer = setInterval(() => { void pull(); }, REMOTE_POLL_MS);
+  }
+
+  /** Reachability of each peer machine, for display in the panel. */
+  getPeerStatuses(): PeerStatus[] {
+    return this._remote?.getPeerStatuses() ?? [];
+  }
+
+  /** The peer window that owns a workspace path, for focusing a session on its own machine. */
+  findRemoteOwnerWindow(projectPath: string): RemoteOwner | null {
+    return this._remote?.findOwnerWindow(projectPath) ?? null;
+  }
+
+  /**
+   * Bring the peer window that owns a session to the front, on its own machine.
+   *
+   * Returns false when this session is not on a peer, when no live peer window owns its
+   * workspace, or when the peer window entry predates the fields the handshake needs.
+   */
+  async focusRemoteSession(sessionId: string): Promise<boolean> {
+    const session = this._sessions.find(s => s.sessionId === sessionId);
+    if (!session?.peer || !session.projectPath) { return false; }
+
+    const owner = this.findRemoteOwnerWindow(session.projectPath);
+    // An older build on the peer may not publish these, and without them there is nothing to talk to.
+    if (!owner?.window.ipcSocket || !owner.window.ideCli) { return false; }
+
+    const cfg = Buffer.from(JSON.stringify({
+      pid: owner.window.pid,
+      sessionId,
+      ideCli: owner.window.ideCli,
+      ipcSocket: owner.window.ipcSocket,
+      folder: owner.window.workspaceFolders[0],
+    }), 'utf8').toString('base64');
+
+    try {
+      await this._remoteRunner?.run(owner.peer, ['python3', '-', cfg], { stdin: REMOTE_FOCUS_PY });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   getSessions(): ClaudeSession[] {
@@ -542,6 +656,9 @@ export class SessionManager implements vscode.Disposable {
       clearTimeout(this._debounceTimer);
     }
     clearInterval(this._pollTimer);
+    if (this._remoteTimer !== undefined) {
+      clearInterval(this._remoteTimer);
+    }
     this._watcher.dispose();
     this._onDidChangeSessions.dispose();
   }
@@ -650,7 +767,16 @@ export class SessionManager implements vscode.Disposable {
     const bobSessions = await this._scanBobSessions(filePaths, sources);
     const codexSessions = await this._scanCodexSessions(filePaths, sources);
     const chatSessions = await this._scanChatSessions(filePaths, sources);
-    const merged = [...claudeSessions, ...bobSessions, ...codexSessions, ...chatSessions];
+    // Read synchronously from the cache the remote timer fills — never awaited on the network
+    // here, so a slow or unreachable peer cannot delay the local session list.
+    //
+    // Remote ids are intentionally left out of `filePaths` and `sources`: those maps drive the
+    // supervision export, which acts on the machine that owns the session. Registering a peer
+    // session there would invite supervision to act on a transcript it cannot control.
+    const remoteSessions = this._remote?.getSessions() ?? [];
+    const merged = [
+      ...claudeSessions, ...bobSessions, ...codexSessions, ...chatSessions, ...remoteSessions,
+    ];
     merged.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     this._sessionFilePaths = filePaths;
     this._sessionSources = sources;
@@ -706,33 +832,12 @@ export class SessionManager implements vscode.Disposable {
     const sessions: ClaudeSession[] = [];
     for (const row of rows) {
       try {
-        const sessionId = row.id;
-        const title = (row.title || row.first_message || '').slice(0, 60);
-        if (!title) { continue; }
-        const updatedAt = new Date(row.updated_at);
-
-        // Extract workspace path from env JSON
-        let projectPath = '';
-        try {
-          const env = JSON.parse(row.env) as {
-            workspace?: string;
-            staticEnvInfo?: { primaryWorkspace?: string };
-          };
-          projectPath = env.staticEnvInfo?.primaryWorkspace ?? env.workspace ?? '';
-          // project_id is "file:/path" — use as fallback
-          if (!projectPath && row.project_id.startsWith('file:')) {
-            projectPath = row.project_id.slice('file:'.length);
-          }
-        } catch { /* leave empty */ }
-        const projectName = projectPath ? path.basename(projectPath) : '';
-
-        // Map DB status to ClaudeSession status
-        // 'running' = actively processing, 'active' = completed task (idle)
-        const status: ClaudeSession['status'] = row.status === 'running' ? 'active' : 'idle';
-
-        filePaths.set(sessionId, sessionId); // store id as key for lookup
-        sources.set(sessionId, 'bob');
-        sessions.push({ sessionId, projectName, projectPath, title, updatedAt, status, source: 'bob' });
+        // Shared with the remote path in `sessionRows.ts`, so a peer's row renders identically.
+        const session = bobRowToSession(row);
+        if (!session) { continue; }
+        filePaths.set(session.sessionId, session.sessionId); // store id as key for lookup
+        sources.set(session.sessionId, 'bob');
+        sessions.push(session);
       } catch { /* skip malformed row */ }
     }
     return sessions;

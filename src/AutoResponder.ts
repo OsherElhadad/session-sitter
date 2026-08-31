@@ -146,7 +146,12 @@ export class AutoResponder {
       // Correlate each pending approval's task to its session project path so
       // session-scoped rules can be filtered per task.
       const pathByTask = new Map<string, string>();
-      for (const s of this.sessionManager.getSessions()) { pathByTask.set(s.sessionId, s.projectPath); }
+      // Local sessions only: these approvals come from this machine's agents, so a peer's task
+      // has no business contributing a project path that session-scoped rules would match on.
+      for (const s of this.sessionManager.getSessions()) {
+        if (s.peer) { continue; }
+        pathByTask.set(s.sessionId, s.projectPath);
+      }
 
       // Prune ids no longer pending so the same requestId can never be re-processed,
       // but a genuinely new request (different id) re-arms naturally.
