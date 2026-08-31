@@ -1,10 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { sessionDisplayName, shortHost } from './supervisor/sessionIdentity';
 
 /** One row in the Activity feed — a supervision decision the user should be able to see. */
 export interface ActivityItem {
   requestId: string;
   sessionId: string;
+  /** The session's human name — its title, else its project name, else the session id. */
+  sessionName: string;
+  /** Short name of the machine the session runs on ('' when the record predates the field). */
+  host: string;
   light: string;        // green | yellow | orange | red | ''
   summary: string;
   userIntent: string;
@@ -55,6 +60,10 @@ export function recordToItem(raw: string, mtimeMs: number): ActivityItem | null 
   return {
     requestId: r.request_id,
     sessionId: str(r.session_id),
+    // A card without these is unattributable: every session id looks the same, and one panel now
+    // shows decisions taken on several machines. Falls back to the id, never to an empty label.
+    sessionName: sessionDisplayName(str(r.session_name), str(r.session_id)),
+    host: shortHost(str(r.host)),
     light: str(a.traffic_light),
     summary: str(a.summary),
     userIntent: str(a.user_intent),

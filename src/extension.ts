@@ -31,7 +31,11 @@ import { supervisorConfigFromSettings } from './supervisorSettings';
 import { ensureDirs, recordsDir, type SupervisorConfig } from './supervisor/config';
 import { buildChannel } from './supervisor/factory';
 import type { MessagingChannel } from './supervisor/messaging';
-import { RuleDecisionRecorder, type RuleDecision } from './supervisor/ruleDecisions';
+import {
+  RuleDecisionRecorder,
+  withSessionIdentity,
+  type RuleDecision,
+} from './supervisor/ruleDecisions';
 import { StateStore } from './supervisor/store';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -330,11 +334,15 @@ export function activate(context: vscode.ExtensionContext) {
   // ALL of Session Sitter's interventions — not only the ones the supervisor AI took.
   // A Claude pending approval carries a channelId as its `taskId`, so relabel it with the
   // session the decision actually landed in (same single-session correlation the export uses).
+  // The session's name and machine are attached here rather than at each call site: this is the
+  // one place that has both the (possibly relabelled) session id and the session list to look it
+  // up in. Without them a rule card names nothing but a UUID.
   const onRuleDecision = (d: RuleDecision): void => {
     const sessionId = d.source === 'claude'
       ? (mostRecent(sessionManager, 'claude')?.sessionId ?? d.sessionId)
       : d.sessionId;
-    void ruleRecorder.report({ ...d, sessionId });
+    const session = sessionManager.getSessions().find(s => s.sessionId === sessionId);
+    void ruleRecorder.report(withSessionIdentity({ ...d, sessionId }, session));
   };
 
   const autoResponder = new AutoResponder(

@@ -74,6 +74,12 @@ offered, and your answer. An Orange awaiting you is highlighted with its countdo
 supervision expands to the recorded error, with buttons to open the record JSON or copy its path
 — a failure is debuggable from the panel instead of being a dead end.
 
+**Every row and every card names its session and its machine** — `🗂 fix the login flow` with
+`🖥 devbox` — because one panel lists decisions from several sessions and one Telegram chat receives
+them from several machines, and a session id answers neither question. The Telegram card carries the
+same thing on its `session:` line, with the raw id kept in parentheses for support. A record written
+before this existed still reads as it always did: the id alone.
+
 **Both tiers appear here.** A decision your `sessionSitter.autoRespond` rules took is tagged
 **⚙ rule**; one the supervisor took is tagged **🧠 AI**. Rule decisions also go out as one-way
 updates on your messaging channel, so nothing Session Sitter does to a session is invisible —

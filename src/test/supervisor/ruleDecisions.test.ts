@@ -13,9 +13,11 @@ import {
   ruleLight,
   ruleOutcomeLabel,
   ruleTrace,
+  withSessionIdentity,
   type RuleDecision,
 } from '../../supervisor/ruleDecisions';
 import { FakeChannel } from '../../supervisor/messaging';
+import { localHostName } from '../../supervisor/sessionIdentity';
 import { StateStore } from '../../supervisor/store';
 import { SupervisionState } from '../../supervisor/models';
 import { makeTmpDir } from './fixtures';
@@ -109,6 +111,29 @@ describe('ruleAssessment', () => {
   });
 });
 
+describe('withSessionIdentity', () => {
+  it('names the session and puts it on this machine', () => {
+    const d = withSessionIdentity(approval(), { title: 'fix the login flow', projectName: 'app' });
+    expect(d.sessionName).toBe('fix the login flow');
+    expect(d.host).toBe(localHostName());
+  });
+
+  it('uses the project name when the session has no title', () => {
+    expect(withSessionIdentity(approval(), { projectName: 'app' }).sessionName).toBe('app');
+  });
+
+  it('puts a peer session on the peer machine, not this one', () => {
+    const d = withSessionIdentity(approval(), { title: 't', peer: 'eranra@devbox.lan' });
+    expect(d.host).toBe('devbox');
+  });
+
+  it('leaves the name unset for an unknown session, and still says which machine', () => {
+    const d = withSessionIdentity(approval(), undefined);
+    expect(d.sessionName).toBeUndefined(); // the display falls back to the id
+    expect(d.host).toBe(localHostName());
+  });
+});
+
 describe('ruleTrace', () => {
   it('persists the rule in snake_case with nulls for the absent halves', () => {
     expect(ruleTrace(approval())).toEqual({
@@ -139,6 +164,23 @@ describe('RuleDecisionRecorder', () => {
     const onDisk = JSON.parse(fs.readFileSync(path.join(tmp, 'records', files[0]), 'utf8'));
     expect(onDisk.decided_by).toBe('rule');
     expect(onDisk.assessment.traffic_light).toBe('green');
+  });
+
+  // The feed and the Telegram card both read these off the record, so a rule decision that omits
+  // them is a card naming nothing but a UUID.
+  it('records which session, and on which machine, the rule acted', async () => {
+    const channel = new FakeChannel();
+    const record = await recorder(channel).report(
+      approval({ sessionName: 'fix the login flow', host: 'devbox.lan' }));
+    expect(record?.session_name).toBe('fix the login flow');
+    expect(record?.host).toBe('devbox'); // one shape on disk: the short name
+  });
+
+  it('falls back to this machine when the caller supplies no host', async () => {
+    const channel = new FakeChannel();
+    const record = await recorder(channel).report(approval());
+    expect(record?.host).toBe(localHostName());
+    expect(record?.session_name).toBeNull(); // unknown name → the display falls back to the id
   });
 
   it('sends a ONE-WAY update — never an interactive decision card', async () => {

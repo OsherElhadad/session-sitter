@@ -23,6 +23,7 @@ import {
   USER,
 } from './fixtures';
 import { historyDir } from '../../supervisor/config';
+import { localHostName } from '../../supervisor/sessionIdentity';
 
 let tmp: string;
 beforeEach(() => { tmp = makeTmpDir(); });
@@ -64,6 +65,27 @@ describe('green', () => {
     expect(deliveries[0].channel).toBe('approval');
     expect(deliveries[0].decision).toBe('allow');
     expect(deliveries[0].requestId).toBe('req-live-1');
+  });
+});
+
+// Which session, on which machine: a decision that cannot be attributed cannot be acted on, and
+// the transcript is gone by the time the card or the feed is rendered.
+describe('session attribution', () => {
+  it('records the session name from the transcript, and this machine as the host', async () => {
+    const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), { exported: ambiguous() });
+    const rec = await rig.orch.supervise(SESSION_ID);
+
+    expect(rec.session_name).toBe('Fix the failing test in auth.py'); // the export's title
+    expect(rec.host).toBe(localHostName());
+  });
+
+  it('still records the host when the transcript cannot be read', async () => {
+    const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]));
+    const rec = await rig.orch.supervise('no-such-session');
+
+    expect(rec.state).toBe(SupervisionState.FAILED);
+    expect(rec.session_name).toBeNull(); // nothing to name it with — the feed falls back to the id
+    expect(rec.host).toBe(localHostName());
   });
 });
 

@@ -121,6 +121,16 @@ describe('buildCard', () => {
     expect(text).toContain('0 min to respond');
   });
 
+  // One chat receives decisions from every session on every machine, so a card that names only a
+  // session id cannot be answered — the reader has no way to tell which session it is about.
+  it('names the session and the machine when the record carries them', () => {
+    const [text] = buildCard(
+      record({ session_name: 'fix the login flow', host: 'devbox' }), 'note',
+      { interactive: false },
+    );
+    expect(text).toContain('session: fix the login flow @ devbox (sess-1)');
+  });
+
   it('handles a record with no assessment yet', () => {
     const [text] = buildCard(record({ assessment: null }), 'note', { interactive: false });
     expect(text).toContain('note');

@@ -3,6 +3,25 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.7.2
+
+### Activity rows and Telegram cards now say which session, and which machine
+
+A decision card named its session by id and nothing else. Every id looks the same, so the panel
+listed a column of interventions with no way to tell which session each one landed in — and with
+several machines reporting into one Telegram chat, a card could not even be attributed to a host.
+Approving from your phone meant guessing.
+
+Each record now carries the session's name (its panel title, else its project name) and the short
+name of the machine it ran on. The activity row shows `🗂 <name>` with `🖥 <host>` and keeps the id in
+its tooltip; the Telegram `session:` line reads `session: <name> @ <host> (<id>)`. Both tiers set
+them: the supervisor takes the name from the transcript it just classified, and a deterministic
+`autoRespond` decision takes it from the session list, so a rule card is as attributable as an AI
+one. A peer's session is credited to the peer's machine, not to this one.
+
+One formatter serves the card and the feed, and it falls back to the id rather than to an empty
+label — so a record written before these fields existed still reads exactly as it used to.
+
 ## 0.7.1
 
 ### Peer sessions landed in History instead of the session list

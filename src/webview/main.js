@@ -578,6 +578,31 @@
   }
 
   /**
+   * Which session a decision belongs to, and the machine it ran on. Always rendered: several
+   * sessions — and, since peers landed, several machines — report into this one feed, so a card
+   * that names neither cannot be acted on. The session id stays in the tooltip.
+   * @param {object} item
+   * @returns {HTMLElement}
+   */
+  function buildSessionRef(item) {
+    const el = document.createElement('div');
+    el.className = 'activity-line activity-session';
+    const name = document.createElement('span');
+    name.className = 'activity-session-name';
+    name.textContent = '🗂 ' + (item.sessionName || item.sessionId || 'unknown session');
+    el.appendChild(name);
+    if (item.host) {
+      const host = document.createElement('span');
+      host.className = 'activity-session-host';
+      host.textContent = '🖥 ' + item.host;
+      el.appendChild(host);
+    }
+    el.title = 'session ' + (item.sessionId || '(unknown)')
+      + (item.host ? ' on ' + item.host : '');
+    return el;
+  }
+
+  /**
    * @param {object} item
    * @returns {HTMLElement}
    */
@@ -621,6 +646,7 @@
     const body = document.createElement('div');
     body.className = 'activity-body';
 
+    body.appendChild(buildSessionRef(item));
     if (item.summary) {
       const summary = document.createElement('div');
       summary.className = 'activity-summary';

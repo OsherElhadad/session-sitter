@@ -46,6 +46,28 @@ describe('recordToItem', () => {
     expect(item?.error).toBeNull();
   });
 
+  it('carries the session name and host so a card says which session it was', () => {
+    const raw = JSON.stringify({
+      request_id: 'req-name1',
+      session_id: 'sess-1',
+      session_name: 'fix the login flow',
+      host: 'devbox.lan',
+      state: 'green_completed',
+    });
+    const item = recordToItem(raw, MTIME);
+    expect(item?.sessionName).toBe('fix the login flow');
+    expect(item?.host).toBe('devbox'); // domain dropped
+  });
+
+  it('falls back to the session id when a record predates the name field', () => {
+    const raw = JSON.stringify({
+      request_id: 'req-name2', session_id: 'sess-2', state: 'rule_applied',
+    });
+    const item = recordToItem(raw, MTIME);
+    expect(item?.sessionName).toBe('sess-2'); // never an empty label
+    expect(item?.host).toBe('');
+  });
+
   it('returns null for malformed JSON or a record without a request_id', () => {
     expect(recordToItem('{not json', MTIME)).toBeNull();
     expect(recordToItem(JSON.stringify({ state: 'failed' }), MTIME)).toBeNull();
