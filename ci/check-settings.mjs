@@ -28,6 +28,19 @@ const namespaces = new Set(declared.map(k => k.split('.')[0]));
 /** Settings a user sets but no TypeScript reads directly. Keep this list empty if you can. */
 const UI_ONLY = new Set();
 
+/**
+ * Namespaces owned by ANOTHER extension that we deliberately read. Session Sitter drives other
+ * agents' views, so it sometimes has to honour their configuration. We cannot validate these keys
+ * against our own `package.json` — the owning extension declares them — so the check we can make
+ * is that every such namespace is listed here on purpose, and that its keys are never mistaken for
+ * ours. Add one only with a comment naming the owner and the key, and verify the key against that
+ * extension's `package.json`.
+ *
+ *  - `claudeCode` — Anthropic.claude-code. We read `claudeCode.preferredLocation`
+ *    ('sidebar' | 'panel') to focus a session where the user's Claude layout actually puts it.
+ */
+const FOREIGN_NAMESPACES = new Set(['claudeCode']);
+
 function sourceFiles(dir) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -51,19 +64,35 @@ for (const file of sourceFiles('src')) {
   const text = readFileSync(file, 'utf8');
 
   for (const [, ns] of text.matchAll(/getConfiguration\(\s*'([^']+)'\s*\)/g)) {
+    // A foreign namespace is not ours to declare, and its keys must not be attributed to ours,
+    // so it never joins `usedNamespaces`.
+    if (FOREIGN_NAMESPACES.has(ns)) { continue; }
     usedNamespaces.add(ns);
     if (!namespaces.has(ns)) {
       problems.push(
         `${file}: getConfiguration('${ns}') — no setting is declared under that namespace `
-        + `(declared: ${[...namespaces].join(', ')})`);
+        + `(declared: ${[...namespaces].join(', ')}; `
+        + `to read another extension's setting, add the namespace to FOREIGN_NAMESPACES)`);
     }
   }
+
+  // A read chained straight onto a foreign namespace, e.g.
+  // `getConfiguration('claudeCode').get<string>('preferredLocation')`. Record where it sits so the
+  // generic scan below cannot attribute that key to OUR namespace — key attribution is otherwise
+  // a deliberate cross-product (a `cfg` handle is often read far from where it was created, and
+  // through the `supervisorSettings.ts` helpers), which would claim `sessionSitter.<foreign key>`.
+  const foreignReadSpans = [];
+  for (const m of text.matchAll(/getConfiguration\(\s*'([^']+)'\s*\)\s*\.(?:get|inspect)(?:<[^>]*>)?\(\s*'([^']+)'/g)) {
+    if (FOREIGN_NAMESPACES.has(m[1])) { foreignReadSpans.push([m.index, m.index + m[0].length]); }
+  }
+  const insideForeignRead = i => foreignReadSpans.some(([from, to]) => i >= from && i < to);
 
   // `.get<T>('key', default)` / `.get('key')` / `.inspect<T>('key')` — the key is relative to
   // the namespace above it. `inspect` counts as a read: it is how the supervisor settings are
   // read, because it distinguishes "the user set this" from "this is the package.json default".
-  for (const [, key] of text.matchAll(/\.(?:get|inspect)(?:<[^>]*>)?\(\s*'([^']+)'/g)) {
-    for (const ns of usedNamespaces) { readKeys.add(`${ns}.${key}`); }
+  for (const m of text.matchAll(/\.(?:get|inspect)(?:<[^>]*>)?\(\s*'([^']+)'/g)) {
+    if (insideForeignRead(m.index)) { continue; }
+    for (const ns of usedNamespaces) { readKeys.add(`${ns}.${m[1]}`); }
   }
 
   // The same read through the two `supervisorSettings.ts` helpers, which wrap `inspect()` so an

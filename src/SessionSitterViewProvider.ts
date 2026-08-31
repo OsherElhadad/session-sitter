@@ -130,7 +130,7 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
             if (!sessionId) { break; }
             void this._tryFocusForeignWindow(sessionId).then(result => {
               if (result === 'local') {
-                this._openSessionLocal(sessionId);
+                void this._openSessionLocal(sessionId);
               } else if (result === 'foreign-failed') {
                 void vscode.window.showWarningMessage('Could not switch to the window containing this session.');
               }
@@ -172,7 +172,9 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
             } else if (histSession?.source === 'chat') {
               void vscode.commands.executeCommand('workbench.action.chat.open');
             } else {
-              void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+              // Same rule as switching: a history row can still be live in this window
+              // (the side bar especially), so focus it there rather than duplicating it.
+              await this._openClaudeSessionLocal(sessionId);
             }
             break;
           }
@@ -327,11 +329,8 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     void vscode.commands.executeCommand('claude-vscode.primaryEditor.open');
   }
 
-  // Reveal a live session in the current window. If it is already an open editor
-  // tab, reveal it there (unambiguous). Otherwise it lives in the secondary side
-  // panel, so focus that — the Claude extension exposes no per-session sidebar API,
-  // and `preferredLocation` is a single global that can't track mixed-mode layouts.
-  private _openSessionLocal(sessionId: string): void {
+  // Reveal a session in the current window, in the place it is ALREADY open.
+  private async _openSessionLocal(sessionId: string): Promise<void> {
     const session = this._sessionManager.getSessions().find(s => s.sessionId === sessionId);
     if (!session) { return; }
 
@@ -350,11 +349,65 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
       return;
     }
 
-    // Claude: open the session BY ID whether or not a tab is currently open.
-    // `primaryEditor.open` with a sessionId reopens a closed/old conversation; the old
-    // `sidebar.open` fallback did NOT target a specific session, so switching to a closed
-    // session appeared to "not find it".
+    await this._openClaudeSessionLocal(sessionId);
+  }
+
+  /**
+   * Focus a Claude session where it already lives, instead of opening a duplicate.
+   *
+   * `primaryEditor.open` is not a "focus" command — it calls Claude's `createPanel`,
+   * which reveals an existing panel ONLY when `sessionPanels` holds the session id, and
+   * otherwise creates a brand-new editor panel. A session living in the side bar is never
+   * in `sessionPanels`, so calling it unconditionally spawned a second view of a session
+   * that was already on screen. Hence the three-way split:
+   *
+   *  1. **Open as an editor panel** (`panels` holds the id) — `primaryEditor.open` is
+   *     exactly right here: it reveals that panel in whatever editor group it sits in and
+   *     creates nothing. This is also Claude's own definition of "open": it broadcasts
+   *     `sessionPanels.keys()` to its UI as `openSessionIds`.
+   *  2. **Held by this window but not an editor panel, while the user's Claude layout is
+   *     the side bar** — then the side bar is where it is showing, so focus that.
+   *     `claude-vscode.sidebar.open` is the extension's own entry point and picks
+   *     `claudeVSCodeSidebarSecondary` or `claudeVSCodeSidebar` per host support.
+   *  3. **Anything else** (a closed or older session, or panel layout) — open it by id,
+   *     which reopens the conversation. Pre-existing behaviour, unchanged.
+   *
+   * Known limit: Claude exposes no per-session side bar API and does not track which
+   * session the side bar is showing — `sessionStates` accumulates, and the side bar's
+   * session-change reports are discarded by its manager. So in case 2 we can focus the
+   * side bar but not force it to a specific session. That still beats opening a duplicate
+   * panel, and it matches what Claude's own `editor.openLast` does.
+   */
+  private async _openClaudeSessionLocal(sessionId: string): Promise<void> {
+    const state = await getOpenClaudeSessionIds(this._log);
+
+    if (state.panels.includes(sessionId)) {
+      this._log(`switch: ${sessionId} is an open editor panel — revealing it`);
+      void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+      return;
+    }
+
+    if (state.states.includes(sessionId) && this._claudePrefersSidebar()) {
+      this._log(`switch: ${sessionId} is held by this window in side bar layout — focusing the side bar`);
+      void vscode.commands.executeCommand('claude-vscode.sidebar.open');
+      return;
+    }
+
+    this._log(`switch: ${sessionId} has no open view here — opening it by id`);
     void vscode.commands.executeCommand('claude-vscode.primaryEditor.open', sessionId);
+  }
+
+  /**
+   * Whether Claude is configured to open conversations in the side bar.
+   *
+   * `claudeCode.preferredLocation` ('sidebar' | 'panel', default 'panel') is a normal
+   * setting, so we read it directly — no inspector needed. Claude keeps it current on its
+   * own: `sidebar.open` writes 'sidebar' and `editor.open` writes 'panel', so it tracks
+   * where the user last opened Claude. We mirror Claude's own comparison, where anything
+   * that is not exactly 'sidebar' means panel.
+   */
+  private _claudePrefersSidebar(): boolean {
+    return vscode.workspace.getConfiguration('claudeCode').get<string>('preferredLocation') === 'sidebar';
   }
 
   // Returns labels of all currently open Claude Code or Bob editor tabs.
@@ -478,7 +531,7 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
       const data = JSON.parse(raw) as { sessionId?: unknown; requestedAt?: unknown };
       if (typeof data.sessionId !== 'string' || typeof data.requestedAt !== 'number') { return; }
       if (Date.now() - data.requestedAt > 10_000) { return; }
-      this._openSessionLocal(data.sessionId);
+      await this._openSessionLocal(data.sessionId);
     } catch { /* malformed or missing */ } finally {
       try { await fs.promises.unlink(uri.fsPath); } catch { /* already gone */ }
     }

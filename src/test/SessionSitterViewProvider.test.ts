@@ -101,6 +101,40 @@ vi.mock('../WindowRegistry', async (importOriginal) => {
   };
 });
 
+// ── ClaudeInspector stub ─────────────────────────────────────────────────────
+// The real probe reaches Claude's live extension host over the V8 inspector, which
+// does not exist under test. Stubbing it lets us state exactly WHERE a session is
+// open — as an editor panel, or held by the window with no panel (the side bar).
+const { mockGetOpenClaudeSessionIds } = vi.hoisted(() => ({
+  mockGetOpenClaudeSessionIds: vi.fn(),
+}));
+vi.mock('../agents/ClaudeInspector', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../agents/ClaudeInspector')>();
+  return { ...actual, getOpenClaudeSessionIds: mockGetOpenClaudeSessionIds };
+});
+
+/** Point the stubbed probe at a given layout. Defaults to "this window holds nothing". */
+function setClaudeOpenState(state: { panels?: string[]; states?: string[]; active?: string | null }): void {
+  const panels = state.panels ?? [];
+  const states = state.states ?? [];
+  mockGetOpenClaudeSessionIds.mockResolvedValue({
+    open: [...new Set([...panels, ...states])],
+    panels,
+    states,
+    active: state.active ?? null,
+  });
+}
+
+/** Set Claude's `claudeCode.preferredLocation` as the extension would read it. */
+function setClaudePreferredLocation(location: 'sidebar' | 'panel'): void {
+  mockGetConfiguration.mockImplementation((section?: string) => ({
+    get: (key?: string, fallback?: unknown) => {
+      if (section === 'claudeCode' && key === 'preferredLocation') { return location; }
+      return fallback;
+    },
+  }));
+}
+
 // ── child_process stub ─────────────────────────────────────────────────────────
 vi.mock('child_process', () => ({ execFile: vi.fn() }));
 
@@ -132,6 +166,13 @@ function makeProvider(
     mockManager,
   );
 }
+
+// Every test starts from "this window holds no Claude session, panel layout", so the
+// tests that care about location opt in explicitly and cannot leak into each other.
+beforeEach(() => {
+  setClaudeOpenState({});
+  mockGetConfiguration.mockImplementation(() => ({ get: () => 'panel' }));
+});
 
 // ── Tests: _handleFocusRequest ────────────────────────────────────────────────
 describe('_handleFocusRequest', () => {
@@ -307,27 +348,83 @@ describe('_openSessionLocal', () => {
     updatedAt: new Date(), status: 'idle' as const, source: 'claude' as const,
   };
 
+  type Openable = { _openSessionLocal(id: string): Promise<void> };
+
   beforeEach(() => {
     mockExecuteCommand.mockClear();
     vi.mocked(os.homedir).mockReturnValue(os.tmpdir());
     setOpenClaudeTabs([]);
+    setClaudeOpenState({});
+    setClaudePreferredLocation('panel');
   });
-  afterEach(() => { setOpenClaudeTabs([]); });
-
-  it('reveals in the editor when the session is an open editor tab', () => {
-    setOpenClaudeTabs(['My Session']);
-    const p = makeProvider([session]) as unknown as { _openSessionLocal(id: string): void };
-    p._openSessionLocal('sess-1');
-    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
-  });
-
-  it('opens a Claude session by id even when no editor tab is open for it', () => {
+  afterEach(() => {
     setOpenClaudeTabs([]);
-    const p = makeProvider([session]) as unknown as { _openSessionLocal(id: string): void };
-    p._openSessionLocal('sess-1');
-    // `primaryEditor.open` with a sessionId reopens a closed conversation; the old
-    // `sidebar.open` fallback did not target a specific session, so a closed session
-    // appeared to "not be found".
+    mockGetConfiguration.mockImplementation(() => ({ get: () => 'panel' }));
+  });
+
+  it('reveals the existing editor panel when the session is open as one', async () => {
+    // `primaryEditor.open` with an id that IS in Claude's sessionPanels reveals that
+    // panel in place — createPanel returns early and creates nothing.
+    setClaudeOpenState({ panels: ['sess-1'], states: ['sess-1'] });
+    const p = makeProvider([session]) as unknown as Openable;
+    await p._openSessionLocal('sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.sidebar.open');
+  });
+
+  it('focuses the side bar for a live session that has no editor panel, in side bar layout', async () => {
+    // The reported bug: the session is live in the secondary side bar, so it is held by
+    // the window but absent from sessionPanels. Opening it "by id" made Claude create a
+    // SECOND view of a session already on screen. It must focus the side bar instead.
+    setClaudeOpenState({ panels: [], states: ['sess-1'] });
+    setClaudePreferredLocation('sidebar');
+    const p = makeProvider([session]) as unknown as Openable;
+    await p._openSessionLocal('sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.sidebar.open');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
+  });
+
+  it('prefers the editor panel over the side bar when the session has both', async () => {
+    // A panel is an unambiguous, per-session target; the side bar is not. Panel wins.
+    setClaudeOpenState({ panels: ['sess-1'], states: ['sess-1'] });
+    setClaudePreferredLocation('sidebar');
+    const p = makeProvider([session]) as unknown as Openable;
+    await p._openSessionLocal('sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.sidebar.open');
+  });
+
+  it('opens by id in panel layout even when the window holds the session', async () => {
+    // Panel layout means conversations live in editor panels, so there is no side bar
+    // view to focus — open it by id.
+    setClaudeOpenState({ panels: [], states: ['sess-1'] });
+    setClaudePreferredLocation('panel');
+    const p = makeProvider([session]) as unknown as Openable;
+    await p._openSessionLocal('sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.sidebar.open');
+  });
+
+  it('opens a closed session by id rather than focusing the side bar', async () => {
+    // Not in panels and not held by this window at all: nothing to focus. Reopen by id.
+    // Regression guard for the old `sidebar.open` fallback, which did not target a
+    // specific session, so a closed session appeared to "not be found".
+    setClaudeOpenState({ panels: [], states: [] });
+    setClaudePreferredLocation('sidebar');
+    const p = makeProvider([session]) as unknown as Openable;
+    await p._openSessionLocal('sess-1');
+    expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
+    expect(mockExecuteCommand).not.toHaveBeenCalledWith('claude-vscode.sidebar.open');
+  });
+
+  it('falls back to opening by id when the probe cannot reach Claude', async () => {
+    // Probe failure reports an empty state. Degrade to the old behaviour rather than
+    // silently doing nothing.
+    mockGetOpenClaudeSessionIds.mockResolvedValue({
+      open: [], panels: [], states: [], active: null, diag: 'gB-not-found',
+    });
+    const p = makeProvider([session]) as unknown as Openable;
+    await p._openSessionLocal('sess-1');
     expect(mockExecuteCommand).toHaveBeenCalledWith('claude-vscode.primaryEditor.open', 'sess-1');
   });
 });

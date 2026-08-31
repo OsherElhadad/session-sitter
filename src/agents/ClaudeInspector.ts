@@ -3,28 +3,40 @@ import * as inspector from 'inspector';
 import { runExclusive } from './BobInspector';
 
 export interface ClaudeOpenState {
-  open: string[];        // session ids with an open panel (sessionPanels keys)
-  active: string | null; // the focused session id (activeSessionId)
+  open: string[];        // union of `panels` and `states` — every session this window holds
+  panels: string[];      // sessions open as EDITOR PANELS (sessionPanels keys)
+  states: string[];      // every session the manager holds (sessionStates keys)
+  active: string | null; // the focused session id (activeSessionId) — panels only
   diag?: string;         // how the probe resolved (for debugging reachability)
 }
 
 // Injected with `this` = Claude's manager instance (module-global `gB`, class Xq).
-// The open sessions in this window are the union of:
-//   - sessionStates: Map<sessionId, state> — every session the manager holds,
-//     including the one shown in the sidebar view (verified against a live
-//     instance: size matches the sidebar session the user has open).
-//   - sessionPanels: Map<sessionId, panel> — sessions opened as editor panels.
+// Reports the two maps SEPARATELY, because they mean different things and the
+// difference is what tells us WHERE a session lives:
+//   - sessionPanels: Map<sessionId, WebviewPanel> — sessions open as editor panels.
+//     Authoritative and self-pruning (the entry is deleted when the panel is
+//     disposed). Claude broadcasts exactly these keys to its own UI as
+//     `openSessionIds`, and labels them "Switch to session" rather than "Resume
+//     session" — so this IS Claude's own definition of "open in the editor".
+//   - sessionStates: Map<sessionId, {info, author}> — every session the manager
+//     holds, including one shown in the sidebar view. This ACCUMULATES: entries
+//     are only removed when their authoring surface is disposed (`lT0`) or a
+//     restore is declined (`cT0`), never when the sidebar switches session, and
+//     growth is bounded only by a size cap (`gT0`). So it means "this window's
+//     manager knows this session" — NOT "this session is visible right now".
+// Merging the two (what we used to do) throws the location away, which is why we
+// could not tell a sidebar session from a closed one.
 const READ_OPEN_FN = `function(){
   try {
-    var ids = new Set();
-    if (this.sessionStates && typeof this.sessionStates.keys === 'function') {
-      for (var a of this.sessionStates.keys()) ids.add(a);
-    }
+    var panels = [], states = [];
     if (this.sessionPanels && typeof this.sessionPanels.keys === 'function') {
-      for (var b of this.sessionPanels.keys()) ids.add(b);
+      for (var a of this.sessionPanels.keys()) panels.push(a);
     }
-    return JSON.stringify({ open: Array.from(ids), active: this.activeSessionId || null });
-  } catch (e) { return JSON.stringify({ open: [], active: null, err: String(e) }); }
+    if (this.sessionStates && typeof this.sessionStates.keys === 'function') {
+      for (var b of this.sessionStates.keys()) states.push(b);
+    }
+    return JSON.stringify({ panels: panels, states: states, active: this.activeSessionId || null });
+  } catch (e) { return JSON.stringify({ panels: [], states: [], active: null, err: String(e) }); }
 }`;
 
 // Probe a closure variable: is it Claude's manager? (has the sessionPanels Map and createPanel)
@@ -57,19 +69,28 @@ function findClaudeActivate(): ((...args: unknown[]) => unknown) | string {
   return `DIAG:activate-not-fn (claudeModules=${matches.length})`;
 }
 
+const EMPTY_OPEN_STATE: ClaudeOpenState = { open: [], panels: [], states: [], active: null };
+
+/** Dedupe and drop non-string / empty entries from a raw id array. */
+function cleanIds(value: unknown): string[] {
+  if (!Array.isArray(value)) { return []; }
+  return [...new Set(value.filter((x): x is string => typeof x === 'string' && x.length > 0))];
+}
+
 /** Parse the JSON payload READ_OPEN_FN returns into a ClaudeOpenState.
+ *  `open` is derived as the union of `panels` and `states`, so existing callers
+ *  that only care whether a session is held by this window keep working.
  *  Returns an empty state for any malformed input. Pure — unit-tested. */
 export function parseClaudeOpenState(raw: unknown): ClaudeOpenState {
-  if (typeof raw !== 'string') { return { open: [], active: null }; }
+  if (typeof raw !== 'string') { return { ...EMPTY_OPEN_STATE }; }
   try {
-    const p = JSON.parse(raw) as { open?: unknown; active?: unknown };
-    const open = Array.isArray(p.open)
-      ? [...new Set(p.open.filter((x): x is string => typeof x === 'string' && x.length > 0))]
-      : [];
+    const p = JSON.parse(raw) as { panels?: unknown; states?: unknown; active?: unknown };
+    const panels = cleanIds(p.panels);
+    const states = cleanIds(p.states);
     const active = typeof p.active === 'string' && p.active.length > 0 ? p.active : null;
-    return { open, active };
+    return { open: [...new Set([...panels, ...states])], panels, states, active };
   } catch {
-    return { open: [], active: null };
+    return { ...EMPTY_OPEN_STATE };
   }
 }
 
@@ -245,9 +266,11 @@ async function callOnClaudeManagerUnsafe(
 export async function getOpenClaudeSessionIds(log: (msg: string) => void): Promise<ClaudeOpenState> {
   const { raw, diag } = await callOnClaudeManager(READ_OPEN_FN, log);
   const state = parseClaudeOpenState(raw);
-  state.diag = diag === 'ok' ? `ok (open=${state.open.length})` : diag;
+  state.diag = diag === 'ok'
+    ? `ok (panels=${state.panels.length}, states=${state.states.length})`
+    : diag;
   if (diag === 'ok') {
-    log(`claude inspector: open=${state.open.length} [${state.open.join(', ')}] active=${state.active}`);
+    log(`claude inspector: panels=[${state.panels.join(', ')}] states=[${state.states.join(', ')}] active=${state.active}`);
   }
   return state;
 }
