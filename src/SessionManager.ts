@@ -62,6 +62,7 @@ export interface ClaudeSession {
 
 interface ContentBlock {
   type?: string;
+  text?: string;
 }
 
 interface JsonlRecord {
@@ -69,9 +70,44 @@ interface JsonlRecord {
   cwd?: string;
   aiTitle?: string;     // present in ai-title records written by Claude Code
   timestamp?: string;
+  isMeta?: boolean;     // injected context (skill loads, scheduled prompts), not user typing
+  toolUseResult?: unknown; // present on the user-type records that carry tool results
   message?: {
     content?: string | ContentBlock[];
   };
+}
+
+// Synthetic text Claude Code writes into a user-type record when you interrupt it. A marker,
+// not a prompt: a session whose transcript ends on one is finished, not awaiting a reply.
+const INTERRUPT_MARKERS: ReadonlySet<string> = new Set([
+  '[Request interrupted by user]',
+  '[Request interrupted by user for tool use]',
+]);
+
+// The plain text of a record's message, joining text blocks.
+function recordText(record: JsonlRecord): string {
+  const content = record.message?.content;
+  if (typeof content === 'string') { return content.trim(); }
+  if (!Array.isArray(content)) { return ''; }
+  return content
+    .filter(b => b?.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text as string)
+    .join('')
+    .trim();
+}
+
+// Is a `type: 'user'` record the user actually typing a prompt?
+//
+// Claude Code writes several other things as user-type records: every tool result (carrying
+// `toolUseResult` and a tool_result block), injected context such as skill loads and scheduled
+// prompts (`isMeta`), and interrupt markers. Counting those as a fresh prompt pins a finished
+// session at 'waiting' forever, which keeps it in the active worklist for weeks.
+function isUserPrompt(record: JsonlRecord): boolean {
+  if (record.isMeta === true) { return false; }
+  if (record.toolUseResult !== undefined) { return false; }
+  const content = record.message?.content;
+  if (Array.isArray(content) && content.some(b => b?.type === 'tool_result')) { return false; }
+  return !INTERRUPT_MARKERS.has(recordText(record));
 }
 
 // Read ~/.claude/sessions/*.json and return session IDs whose Claude process
@@ -1360,7 +1396,13 @@ export class SessionManager implements vscode.Disposable {
       try {
         const record = JSON.parse(trimmed) as JsonlRecord;
 
-        if (record.type === 'user') { return 'waiting'; }
+        // Only a real prompt means "your turn is done, Claude's turn hasn't started". Tool
+        // results, injected context and interrupt markers are user-type records too — keep
+        // scanning backward past those.
+        if (record.type === 'user') {
+          if (isUserPrompt(record)) { return 'waiting'; }
+          continue;
+        }
 
         if (record.type === 'tool_use' || record.type === 'tool_result') {
           return 'active';

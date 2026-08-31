@@ -599,7 +599,7 @@ describe('Sessions view: active-vs-history partition', () => {
     sessionId: string,
     minutesAgo: number,
     source: 'claude' | 'bob' | 'codex' | 'chat' = 'claude',
-    status: 'active' | 'idle' = 'idle',
+    status: 'active' | 'waiting' | 'idle' = 'idle',
   ): import('../SessionManager').ClaudeSession {
     return {
       sessionId,
@@ -670,6 +670,36 @@ describe('Sessions view: active-vs-history partition', () => {
       .toEqual(['b-running']);
     expect(capture(postMessage, 'updateHistory')?.sessions.map(s => s.sessionId))
       .toEqual(['b-idle']);
+  });
+
+  it('ages a stale non-idle session into History', async () => {
+    // The non-idle fallback covers a momentary probe hiccup, not a session abandoned weeks ago.
+    // A month-old transcript has no live process behind it whatever its inferred status says.
+    const provider = makeProvider([
+      makeSession('c-stale-waiting', 60 * 24 * 29, 'claude', 'waiting'),
+      makeSession('c-stale-active', 60 * 24 * 3, 'claude', 'active'),
+    ]);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions).toHaveLength(0);
+    expect(capture(postMessage, 'updateHistory')?.sessions.map(s => s.sessionId))
+      .toEqual(['c-stale-active', 'c-stale-waiting']);
+  });
+
+  it('keeps a stale session active when a probe still reports it open', async () => {
+    // The age bound only gates the fallback. A live report is authoritative at any age.
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: 3, workspaceFolders: [], ideCli: 'code', ipcSocket: '', updatedAt: Date.now(),
+        openClaudeSessionIds: ['c-old-but-open'] },
+    ]);
+    const provider = makeProvider([makeSession('c-old-but-open', 60 * 24 * 29, 'claude', 'waiting')]);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['c-old-but-open']);
   });
 
   it('keeps recent Codex/Chat sessions active and ages older ones into History', async () => {

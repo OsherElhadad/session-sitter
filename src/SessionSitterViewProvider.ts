@@ -23,6 +23,13 @@ const HISTORY_LIMIT = 50;
 const PROBELESS_SOURCES: ReadonlySet<string> = new Set(['codex', 'chat']);
 const DEFAULT_PROBELESS_ACTIVE_WINDOW_MINUTES = 120;
 
+// How long a non-idle status alone keeps a Claude/Bob session in the worklist when no probe
+// reports it open. The fallback exists to survive a momentary probe failure (a WSL2 /
+// inspector hiccup), so it only needs to outlast the hiccup — not the session. Without a
+// bound, one abandoned mid-turn transcript sits in the worklist forever, because its status
+// is read from a file that will never change again.
+const STALE_FALLBACK_WINDOW_MS = 120 * 60_000;
+
 function getNonce(): string {
   return randomBytes(16).toString('hex');
 }
@@ -456,7 +463,8 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
    *    read this window fresh and union it with what other live windows published to the
    *    registry, so the answer is cross-window. A session is also treated as active when its
    *    status is not idle, so one you are actively in still shows up if the probe is
-   *    momentarily silent (a WSL2 / inspector hiccup).
+   *    momentarily silent (a WSL2 / inspector hiccup) — but only while it is recent, see
+   *    `STALE_FALLBACK_WINDOW_MS`. A live report from a probe is authoritative at any age.
    *  - **Codex / VS Code Chat** — no extension host to ask, no liveness signal of any kind.
    *    Recency is the only honest proxy, so they count as active while updated within
    *    `sessionSitter.probelessActiveWindowMinutes`.
@@ -482,7 +490,10 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
       const reportedOpen = s.source === 'bob'
         ? bobOpenIds.has(s.sessionId)
         : claudeOpenIds.has(s.sessionId);
-      return reportedOpen || s.status !== 'idle';
+      if (reportedOpen) { return true; }
+      // Non-idle status is a fallback, not a live signal — it must not outlive its window.
+      return s.status !== 'idle'
+        && s.updatedAt.getTime() >= Date.now() - STALE_FALLBACK_WINDOW_MS;
     };
 
     const all = this._sortedByRecency();

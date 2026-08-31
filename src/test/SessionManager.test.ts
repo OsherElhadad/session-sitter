@@ -225,6 +225,104 @@ describe('SessionManager._parseSessionFile', () => {
       expect(result?.status).toBe('waiting'); // user record is the last known
     });
 
+    // ── Not every `type: "user"` record is the user typing a prompt ─────────────
+    // Claude Code writes tool results and synthetic markers as user-type records too.
+    // Treating those as "user sent a message, no reply yet" pins a finished session at
+    // 'waiting' forever, which keeps it in the active worklist for weeks.
+
+    it('interrupted session: synthetic [Request interrupted by user] is not a prompt', async () => {
+      const file = await writeTempJsonl(tmpDir, 'interrupted-session', [
+        { type: 'user', cwd: '/p', message: { content: 'do something' } },
+        { type: 'assistant', message: { content: 'on it' } },
+        { type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } },
+      ]);
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('idle');
+    });
+
+    it('interrupted session: the "for tool use" variant is not a prompt either', async () => {
+      const file = await writeTempJsonl(tmpDir, 'interrupted-tool-session', [
+        { type: 'user', cwd: '/p', message: { content: 'do something' } },
+        { type: 'assistant', message: { content: 'on it' } },
+        { type: 'user', message: { content: '[Request interrupted by user for tool use]' } },
+      ]);
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('idle');
+    });
+
+    it('reaches the last-prompt terminal marker past a trailing interrupt record', async () => {
+      // The exact real-world shape that kept a month-old session in the active list:
+      // assistant tool_use -> tool-result user record -> last-prompt -> interrupt marker.
+      const file = await writeTempJsonl(tmpDir, 'real-world-stale', [
+        { type: 'user', cwd: '/p', message: { content: 'look on the CI run and explain' } },
+        {
+          type: 'assistant',
+          message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] },
+        },
+        {
+          type: 'user',
+          toolUseResult: { stdout: 'file contents' },
+          message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'file contents' }] },
+        },
+        { type: 'last-prompt' },
+        { type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } },
+      ]);
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('idle');
+    });
+
+    it('injected isMeta record is not a prompt', async () => {
+      // Skill loads and scheduled prompts arrive as isMeta user records, not user typing.
+      const file = await writeTempJsonl(tmpDir, 'meta-session', [
+        { type: 'user', cwd: '/p', message: { content: 'do something' } },
+        { type: 'assistant', message: { content: 'done' } },
+        { type: 'user', isMeta: true, message: { content: 'Base directory for this skill: /x' } },
+      ]);
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('idle');
+    });
+
+    it('a tool-result user record still reads as active mid-tool', async () => {
+      // Not a prompt, but the assistant tool_use behind it means work is in flight.
+      const file = await writeTempJsonl(tmpDir, 'tool-result-user-record', [
+        { type: 'user', cwd: '/p', message: { content: 'run a tool' } },
+        {
+          type: 'assistant',
+          message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] },
+        },
+        {
+          type: 'user',
+          toolUseResult: { stdout: 'ok' },
+          message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] },
+        },
+      ]);
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('active');
+    });
+
+    it('a real user prompt after an interrupt still reads as waiting', async () => {
+      const file = await writeTempJsonl(tmpDir, 'reprompt-session', [
+        { type: 'user', cwd: '/p', message: { content: 'do something' } },
+        { type: 'assistant', message: { content: 'on it' } },
+        { type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } },
+        { type: 'user', message: { content: 'actually do this instead' } },
+      ]);
+      const old = new Date(Date.now() - 60_000);
+      await fs.promises.utimes(file, old, old);
+      const result = await manager._parseSessionFile(file);
+      expect(result?.status).toBe('waiting');
+    });
+
     it('no known record types at all defaults to idle', async () => {
       // Construct a session whose first user record appears early (so we get
       // a title), but whose tail contains only unrecognised record types.
