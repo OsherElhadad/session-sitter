@@ -3,6 +3,33 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.6.2
+
+### A session you interrupted no longer sits in the active list forever
+
+A Claude session last touched a month ago stayed in **Sessions** instead of falling back to
+History. Two things combined to keep it there.
+
+**A `type: "user"` record is not always the user typing.** Status is inferred from the tail of
+the transcript, and any user-type record was read as "you sent a message, Claude has not replied
+yet" — status `waiting`. But Claude Code writes several other things as user-type records: every
+tool result (carrying `toolUseResult`), injected context such as skill loads and scheduled prompts
+(`isMeta`), and the `[Request interrupted by user]` marker. The reported session ended on that
+interrupt marker, written *after* the `last-prompt` terminal record, so the backward scan returned
+`waiting` before it ever reached the marker that says "this session is done". A transcript never
+written to again reports `waiting` forever.
+
+The scan now skips those three kinds of record and keeps looking backward, so it reaches the real
+signal behind them. A genuine prompt still reports `waiting`, and a tool result still reports
+`active` while the tool is in flight.
+
+**The non-idle fallback had no age bound.** A Claude or Bob session counts as active when its
+extension host reports it open, *or* when its status is not idle. That second clause exists to
+survive a momentary probe failure (a WSL2 / inspector hiccup), but it applied at any age — so one
+mis-read status pinned a session in the worklist indefinitely. The fallback is now bounded to two
+hours, matching the recency window already used for Codex and VS Code Chat. A live report from a
+probe stays authoritative at any age.
+
 ## 0.6.1
 
 ### Switching to a Claude session now focuses it where it already is
