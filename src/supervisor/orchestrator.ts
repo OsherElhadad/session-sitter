@@ -38,6 +38,7 @@ import {
   unclassifiedOrangeAssessment,
   validate,
 } from './schema';
+import { localHostName, sessionNameFrom } from './sessionIdentity';
 import { LockBusy, StateStore } from './store';
 import { applyToggle } from './telegram';
 import { actionLabel, greenAssessment, preClassify, redAssessment } from './tiers';
@@ -217,8 +218,11 @@ export class Orchestrator {
       session = await this.transcript.load(sessionId);
     } catch (err) {
       if (!(err instanceof TranscriptError)) { throw err; }
+      // No transcript, so no name — but the host is still worth recording: a failed decision
+      // has to be attributable to a machine, and that is the one thing we know here.
       const record = await this.store.create(sessionId, 'unknown', {
         user: routing.user ?? null, project: routing.project ?? null, team: routing.team ?? null,
+        host: localHostName() || null,
       });
       return this.fail(record, `transcript: ${err.message}`);
     }
@@ -227,6 +231,10 @@ export class Orchestrator {
       user: routing.user ?? session.user ?? null,
       project: routing.project ?? null,
       team: routing.team ?? null,
+      // Name the session on the record itself: the card and the feed must say which session a
+      // decision belongs to, and by then the transcript is long gone.
+      session_name: sessionNameFrom(session),
+      host: localHostName() || null,
     });
     if (session.pendingAction) {
       record.pending_request_id = session.pendingAction.requestId;

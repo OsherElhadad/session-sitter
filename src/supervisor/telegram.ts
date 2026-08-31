@@ -24,6 +24,7 @@ import {
   SUPERVISOR_LABEL,
 } from './messaging';
 import { SupervisionRecord, SupervisionState } from './models';
+import { sessionRefLine } from './sessionIdentity';
 import { Clock, minutesUntil, nowUtc, toIso } from './timeutil';
 
 export const LIGHT_ICON: Record<string, string> = {
@@ -85,7 +86,7 @@ export function buildCard(
     header,
     '',
     `${SUPERVISOR_LABEL} ${interactive ? 'decision needed' : 'update'}`,
-    `session: ${record.session_id}`,
+    sessionRefLine(record),
   ];
   if (userIntent) { lines.push(`🧑 request: ${userIntent}`); }
   if (agentIntent) { lines.push(`🤖 wants to: ${agentIntent}`); }
@@ -159,7 +160,7 @@ export function buildQuestionCard(record: SupervisionRecord): [string, ReplyMark
   const lines: string[] = [
     `❓ QUESTION — ${String(spec.prompt ?? '').slice(0, 80)}`.replace(/[\s—]+$/, ''),
     '',
-    `session: ${record.session_id}`,
+    sessionRefLine(record),
   ];
   const keyboard: InlineButton[][] = [];
   const questions = Array.isArray(spec.questions) ? spec.questions : [];

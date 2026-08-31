@@ -198,6 +198,13 @@ export interface SupervisionEvent {
 export interface SupervisionRecord {
   request_id: string;
   session_id: string;
+  /**
+   * The session's human name (its panel title, else its project name). Null on a record written
+   * before names existed, or when the transcript could not be read — never assume it is set.
+   */
+  session_name: string | null;
+  /** Short name of the machine the session runs on, so one chat can carry several machines. */
+  host: string | null;
   source: string;
   state: string;
   /** 'supervisor' (default) or 'rule' — which tier produced this decision. */
@@ -254,6 +261,8 @@ export function newRecord(fields: {
   updated_at: string;
 } & Partial<SupervisionRecord>): SupervisionRecord {
   return {
+    session_name: null,
+    host: null,
     decided_by: DecidedBy.SUPERVISOR,
     rule: null,
     user: null,
@@ -292,6 +301,8 @@ export function recordFrom(d: Record<string, unknown>): SupervisionRecord {
     ...(d as Partial<SupervisionRecord>),
     request_id: String(d.request_id ?? ''),
     session_id: String(d.session_id ?? ''),
+    session_name: nullableStr(d.session_name),
+    host: nullableStr(d.host),
     source: String(d.source ?? 'unknown'),
     state: String(d.state ?? SupervisionState.ANALYSIS_PENDING),
     created_at: String(d.created_at ?? ''),

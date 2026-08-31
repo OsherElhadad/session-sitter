@@ -24,6 +24,7 @@ import {
   SupervisionState,
   TrafficLight,
 } from './models';
+import { hostFromPeer, localHostName, sessionNameFrom, shortHost } from './sessionIdentity';
 import { StateStore } from './store';
 import { toIso } from './timeutil';
 
@@ -31,6 +32,10 @@ import { toIso } from './timeutil';
 export interface RuleDecision {
   /** The agent session the rule acted on (Bob taskId / Claude sessionId). */
   sessionId: string;
+  /** That session's human name (panel title, else project name), when the caller can supply it. */
+  sessionName?: string;
+  /** Short name of the machine the session runs on. Defaults to this machine when omitted. */
+  host?: string;
   /** 'bob' | 'claude' */
   source: string;
   /** 'approval' resolved a pending tool prompt; 'text' sent a canned reply. */
@@ -51,6 +56,28 @@ export interface RuleDecision {
   requestId?: string;
   /** What the user originally asked, when the caller can cheaply supply it. */
   userIntent?: string;
+}
+
+/**
+ * Attach the session's name and machine to a decision, given the session it landed in.
+ *
+ * The auto-responder reports a decision with an id and nothing else, because that is all a pending
+ * approval carries. Only the caller holding the session list can say what that session is called
+ * and where it runs — and without those the card and the feed name nothing but a UUID. An unknown
+ * session leaves the name out (the display falls back to the id) and the host defaults to this
+ * machine, which is where a local agent's prompt was answered.
+ */
+export function withSessionIdentity(
+  d: RuleDecision,
+  session?: { title?: string; projectName?: string; peer?: string } | null,
+): RuleDecision {
+  const name = session ? sessionNameFrom(session) : null;
+  return {
+    ...d,
+    sessionName: name ?? d.sessionName,
+    // A peer's session runs on the peer's machine, not on this one.
+    host: hostFromPeer(session?.peer) || d.host || localHostName(),
+  };
 }
 
 /** Traffic light a rule outcome maps to: approve → green, reject → red, canned reply → yellow. */
@@ -170,7 +197,11 @@ export class RuleDecisionRecorder {
 
     let record: SupervisionRecord;
     try {
-      record = await this.store.create(d.sessionId, d.source);
+      record = await this.store.create(d.sessionId, d.source, {
+        // Which session, on which machine — the card and the feed are unreadable without it.
+        session_name: d.sessionName?.trim() || null,
+        host: (shortHost(d.host) || localHostName()) || null,
+      });
       record.decided_by = DecidedBy.RULE;
       record.rule = ruleTrace(d);
       record.pending_request_id = d.requestId ?? null;

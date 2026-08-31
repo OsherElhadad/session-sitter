@@ -12,6 +12,7 @@ import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SupervisionRecord } from './models';
+import { sessionRefLine } from './sessionIdentity';
 import { Clock, nowUtc, toIso } from './timeutil';
 
 export const SUPERVISOR_LABEL = '[Session Supervisor]';
@@ -58,7 +59,7 @@ export interface MessagingChannel {
 export function formatNotification(record: SupervisionRecord, notification: string): string {
   return (
     `${SUPERVISOR_LABEL} human input needed\n`
-    + `session: ${record.session_id}\n`
+    + `${sessionRefLine(record)}\n`
     + `reply id: ${record.request_id}\n\n`
     + `${notification}`
   );

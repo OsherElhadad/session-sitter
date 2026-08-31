@@ -49,6 +49,8 @@ session-sitter/
 │   │   ├── transcript.ts  knowledge.ts  tiers.ts      prompt.ts
 │   │   ├── engine.ts      store.ts      messaging.ts  telegram.ts
 │   │   ├── agentControl.ts orchestrator.ts config.ts  factory.ts
+│   │   ├── ruleDecisions.ts            # the deterministic tier's records + reports
+│   │   ├── sessionIdentity.ts          # which session, on which machine — one format
 │   │   └── cli.ts                      # node out/supervisor/cli.js run|poll
 │   ├── corpus/                         # session corpus tooling
 │   │   ├── upload.ts  mask.ts  cli.ts

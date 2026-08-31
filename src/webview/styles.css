@@ -703,6 +703,18 @@ button:focus-visible {
 .activity-line-label { opacity: 0.6; }
 .activity-you { color: var(--vscode-charts-blue, #4aa8ff); }
 
+/* Which session, on which machine. Muted and one line: it identifies the card, it is not its
+   content, and the name is clipped rather than allowed to wrap the whole card taller. */
+.activity-session {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 11px;
+  opacity: 0.7;
+}
+.activity-session-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-session-host { margin-left: auto; white-space: nowrap; opacity: 0.85; }
+
 .activity-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .activity-chip {
   font-size: 11px;

@@ -13,7 +13,8 @@ import type { AutoRespondRule, BobSender } from '../agents/BobSender';
 import type { BobApprover, PendingApproval } from '../agents/BobApprover';
 import type { ClaudeSession } from '../SessionManager';
 import type { MessagingChannel, SendResult } from '../supervisor/messaging';
-import { RuleDecisionRecorder } from '../supervisor/ruleDecisions';
+import { RuleDecisionRecorder, withSessionIdentity } from '../supervisor/ruleDecisions';
+import { localHostName } from '../supervisor/sessionIdentity';
 import { ensureDirs, recordsDir, type SupervisorConfig } from '../supervisor/config';
 import { StateStore } from '../supervisor/store';
 import type { SupervisionRecord } from '../supervisor/models';
@@ -102,10 +103,15 @@ describe('a deterministic rule decision is visible with NO configuration', () =>
     // Reporting is fire-and-forget in the extension (it must never delay an approval reaching a
     // blocked agent), so the test keeps the promises and awaits them instead of racing them.
     const reports: Array<Promise<unknown>> = [];
+    const sessions = [bobSession('s')];
     const responder = new AutoResponder(
-      managerWith([bobSession('s')]), new FakeSender(), () => rules, () => { /* noop */ },
+      managerWith(sessions), new FakeSender(), () => rules, () => { /* noop */ },
       approver, undefined, undefined, undefined, undefined, undefined, undefined,
-      (d) => { reports.push(recorder.report(d)); },
+      // Exactly what extension.ts does: name the session the decision landed in before reporting.
+      (d) => {
+        const session = sessions.find(x => x.sessionId === d.sessionId);
+        reports.push(recorder.report(withSessionIdentity(d, session)));
+      },
     );
     /** Sweep, then wait for the reporting the sweep kicked off. */
     const sweepAndSettle = async (): Promise<void> => {
@@ -136,6 +142,9 @@ describe('a deterministic rule decision is visible with NO configuration', () =>
       expect(item?.ruleLabel).toBe("'*' → approveForTask");
       expect(item?.summary).toContain('execute_command');
       expect(item?.summary).toContain('date');
+      // Which session, and on which machine — without these the row names only a task id.
+      expect(item?.sessionName).toBe('t');
+      expect(item?.host).toBe(localHostName());
     });
 
   it('sends it to the human channel as a one-way update', async () => {
