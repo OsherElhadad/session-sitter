@@ -771,6 +771,84 @@ describe('Sessions view: active-vs-history partition', () => {
     expect(sessions).toHaveLength(50);
     expect(sessions[0].sessionId).toBe('s74'); // newest of the inactive set
   });
+
+  // ── Peer windows count as live reporters ───────────────────────────────────
+  //
+  // `readLiveWindows` only ever sees this machine's registry, and its liveness test is
+  // `process.kill`, which cannot say anything about a pid on another host. So a peer's session
+  // could never be "reported open" and fell back to the status check — which an idle session at a
+  // prompt fails. The result was a peer session that was pulled correctly and then filed under
+  // History, looking to the user exactly like a session that was never found at all.
+  //
+  // The probe already resolves liveness on the owning machine (`kill -0` there, 24 h staleness),
+  // so a peer window entry is as authoritative about its own machine as a local one is about this
+  // one, and the two sets simply union.
+
+  function peerSession(
+    sessionId: string, minutesAgo: number, source: 'claude' | 'bob' = 'claude',
+  ): import('../SessionManager').ClaudeSession {
+    return { ...makeSession(sessionId, minutesAgo, source, 'idle'), peer: 'vpcuser@olap.ibm.com' };
+  }
+
+  it('keeps an idle peer session active when the peer window reports it open', async () => {
+    const provider = makeProvider([peerSession('c-remote', 45)], {
+      getPeerWindows: () => [{
+        pid: 2881165, workspaceFolders: ['/home/vpcuser/proj'], ideCli: 'bobide',
+        ipcSocket: '/run/user/1000/x.sock', updatedAt: Date.now(),
+        openClaudeSessionIds: ['c-remote'],
+      }],
+    });
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['c-remote']);
+  });
+
+  it('keeps an idle peer Bob task active when the peer window reports it open', async () => {
+    const provider = makeProvider([peerSession('b-remote', 45, 'bob')], {
+      getPeerWindows: () => [{
+        pid: 99, workspaceFolders: ['/home/vpcuser/proj'], ideCli: 'bobide',
+        ipcSocket: '', updatedAt: Date.now(), openBobTaskIds: ['b-remote'],
+      }],
+    });
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['b-remote']);
+  });
+
+  it('still files a peer session no peer window reports under History', async () => {
+    // Union, not blanket promotion: a closed session on a peer is still history.
+    const provider = makeProvider([peerSession('c-closed', 45)], {
+      getPeerWindows: () => [{
+        pid: 1, workspaceFolders: ['/home/vpcuser/proj'], ideCli: 'bobide',
+        ipcSocket: '', updatedAt: Date.now(), openClaudeSessionIds: ['c-other'],
+      }],
+    });
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions ?? []).toEqual([]);
+    expect(capture(postMessage, 'updateHistory')?.sessions.map(s => s.sessionId))
+      .toEqual(['c-closed']);
+  });
+
+  it('partitions normally for a manager with no peer support at all', async () => {
+    // `getPeerWindows` is additive; a manager without it must behave exactly as before.
+    mockReadLiveWindows.mockResolvedValue([
+      { pid: 1, workspaceFolders: [], ideCli: 'code', ipcSocket: '', updatedAt: Date.now(),
+        openClaudeSessionIds: ['c-local'] },
+    ]);
+    const provider = makeProvider([makeSession('c-local', 30, 'claude')]);
+    const postMessage = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(capture(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['c-local']);
+  });
 });
 
 // ── Tests: copy transcript handlers ──────────────────────────────────────────

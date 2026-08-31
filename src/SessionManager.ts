@@ -12,6 +12,7 @@ import {
   type RemoteOwner,
 } from './remote/RemoteSessionSource';
 import { REMOTE_FOCUS_PY } from './remote/remoteFocus';
+import type { WindowEntry } from './WindowRegistry';
 import { FullTranscript, readBobTranscript } from './SessionExporter';
 
 /**
@@ -350,6 +351,17 @@ export class SessionManager implements vscode.Disposable {
   /** Reachability of each peer machine, for display in the panel. */
   getPeerStatuses(): PeerStatus[] {
     return this._remote?.getPeerStatuses() ?? [];
+  }
+
+  /**
+   * Live window entries published by peer machines.
+   *
+   * The panel unions these with `readLiveWindows` when deciding which sessions are open. Without
+   * them a peer session can never be reported open — `readLiveWindows` sees only this machine —
+   * so an idle peer session would always be filed under History.
+   */
+  getPeerWindows(): WindowEntry[] {
+    return this._remote?.getPeerWindows() ?? [];
   }
 
   /** The peer window that owns a workspace path, for focusing a session on its own machine. */

@@ -61,6 +61,53 @@ export function parseAuthority(authority: string): PeerAddress | null {
   return { user, host, raw: `${user}@${host}` };
 }
 
+/** Every address currently bound to a local interface. */
+function localInterfaceAddresses(): string[] {
+  const out: string[] = [];
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const iface of list ?? []) {
+      if (iface.address) { out.push(iface.address); }
+    }
+  }
+  return out;
+}
+
+/** Normalise a host for comparison: lowercase, no brackets, no IPv6 zone. */
+function normalizeHost(host: string): string {
+  return host.trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/%.*$/, '');
+}
+
+/**
+ * Is this authority really this machine?
+ *
+ * Worth stating why this cannot be left to the probe. `RemoteSessionSource` also compares the
+ * `machineId` the probe reports against the local one — but that answer only arrives *after* a
+ * successful SSH. An IDE routinely records this host's own LAN address as an ssh-remote target,
+ * and a machine has no reason to hold an authorized key for itself, so probing yourself fails on
+ * publickey. The probe's check therefore never runs, and the panel names the user's own machine as
+ * unreachable, forever, every poll. Self-detection has to happen before the connection.
+ *
+ * Names are compared on whole labels, never as substrings: `eranra-wsl2` is a different machine
+ * from `eranra-wsl`, and hiding a real peer is worse than probing one extra host.
+ */
+export function isSelfAddress(
+  host: string,
+  opts: { addresses?: string[]; hostname?: string } = {},
+): boolean {
+  const h = normalizeHost(host);
+  if (!h) { return false; }
+  if (h === 'localhost' || h === 'localhost.localdomain') { return true; }
+
+  const addresses = (opts.addresses ?? localInterfaceAddresses()).map(normalizeHost);
+  if (addresses.includes(h)) { return true; }
+
+  const hostname = normalizeHost(opts.hostname ?? os.hostname());
+  if (h === hostname) { return true; }
+  // A short name matches the host's own first label, and only as the whole authority.
+  const short = hostname.split('.')[0];
+  return short.length > 0 && h === short;
+}
+
 // Matches both encodings of the marker (`+` and `%2B`) and both encodings of the separator
 // (`@` and `%40`), so one pattern covers the key form and the URI form.
 const AUTHORITY_RE = /ssh-remote(?:\+|%2B)([A-Za-z0-9_.%@-]*)/g;
@@ -167,6 +214,10 @@ export interface DiscoverPeersOptions {
   readItemTable?: (dbPath: string) => Promise<{ keys: string[]; values: string[] }>;
   /** Drop a peer that is really this machine, so we never SSH to ourselves. */
   isSelf?: (peer: PeerAddress) => boolean;
+  /** Local interface addresses, for the default `isSelf`. Injected by tests. */
+  localAddresses?: string[];
+  /** This host's name, for the default `isSelf`. Injected by tests. */
+  localHostname?: string;
   homedir?: string;
 }
 
@@ -179,7 +230,10 @@ export interface DiscoverPeersOptions {
 export async function discoverPeers(opts: DiscoverPeersOptions = {}): Promise<PeerAddress[]> {
   const findStateDbs = opts.findStateDbs ?? (() => findStateDbsOnDisk(opts.homedir));
   const readItemTable = opts.readItemTable ?? readItemTableViaSqlite;
-  const isSelf = opts.isSelf ?? (() => false);
+  const isSelf = opts.isSelf ?? ((p: PeerAddress) => isSelfAddress(p.host, {
+    addresses: opts.localAddresses,
+    hostname: opts.localHostname,
+  }));
 
   let dbs: string[];
   try { dbs = await findStateDbs(); } catch { return []; }

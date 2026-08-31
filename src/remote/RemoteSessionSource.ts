@@ -105,6 +105,25 @@ export class RemoteSessionSource {
     return all.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
   }
 
+  /**
+   * Live window entries from every reachable peer.
+   *
+   * These are what tell the panel a peer's session is *open*, not merely present on disk. The
+   * local equivalent, `readLiveWindows`, cannot help here twice over: it reads only this
+   * machine's registry directory, and it tests liveness with `process.kill`, which says nothing
+   * about a pid on another host. The probe already resolved liveness on the machine that owns the
+   * pid, so these entries are as authoritative about their machine as local ones are about this
+   * one, and the two sets simply union.
+   */
+  getPeerWindows(): WindowEntry[] {
+    const all: WindowEntry[] = [];
+    for (const peer of this._order) {
+      const state = this._peers.get(peer.raw);
+      if (state) { all.push(...state.windows); }
+    }
+    return all;
+  }
+
   /** Per-peer reachability, so the panel can say which machines it could not reach. */
   getPeerStatuses(): PeerStatus[] {
     return this._order

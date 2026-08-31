@@ -129,6 +129,25 @@ describe('RemoteSessionSource', () => {
     await src.refresh();
     expect(src.findOwnerWindow('/home/eranra/local-thing')).toBeNull();
   });
+
+  it('publishes the peer windows, which is what makes a peer session count as open', async () => {
+    // The panel unions these into its open-id sets. Without them a peer session can never be
+    // reported open — `readLiveWindows` only ever sees this machine — so it would be filed under
+    // History however alive it actually is.
+    const src = sourceWith(vi.fn().mockResolvedValue(payload()));
+    await src.refresh();
+    const windows = src.getPeerWindows();
+    expect(windows.map(w => w.pid)).toEqual([2795794]);
+    expect(windows[0].openClaudeSessionIds).toEqual(['2457b752-c8fe-4a70-bbb1-4d1d9842aeb6']);
+    expect(windows[0].openBobTaskIds).toEqual([bobRow.id]);
+  });
+
+  it('publishes no windows for an unreachable peer', async () => {
+    // A machine we could not reach this pass cannot vouch for anything being open on it.
+    const src = sourceWith(vi.fn().mockRejectedValue(new Error('Permission denied (publickey).')));
+    await src.refresh();
+    expect(src.getPeerWindows()).toEqual([]);
+  });
 });
 
 describe('RemoteSessionSource claude transcripts', () => {
