@@ -3,6 +3,35 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.6.1
+
+### Switching to a Claude session now focuses it where it already is
+
+Clicking a Claude session that was open in the **side bar** opened a *second* view of it as a new
+editor tab, instead of focusing the one already on screen.
+
+`claude-vscode.primaryEditor.open` reads like "focus this session", but it is not. It calls Claude's
+`createPanel`, which reveals an existing panel only when its `sessionPanels` map holds the session
+id, and otherwise **creates a new panel**. A session living in the side bar is never in
+`sessionPanels`, so switching to it always built a duplicate.
+
+Switching now asks Claude where the session actually is before acting:
+
+- **Open as an editor panel** → reveal that panel, in whatever editor group it sits in.
+- **Held by this window with no panel, and `claudeCode.preferredLocation` is `sidebar`** → focus the
+  side bar, which is where it is showing.
+- **Closed or older session** → open it by id, reopening the conversation. Unchanged.
+
+The same rule now applies to adding a session from **History**, which had the identical problem.
+
+Known limit: Claude exposes no per-session side bar API and does not track which session its side bar
+is showing, so in the second case Session Sitter can focus the side bar but not force it to a
+specific session. This matches what Claude's own "Claude Code: Open" command does.
+
+Internally, the open-sessions probe now reports Claude's `sessionPanels` and `sessionStates` maps
+separately instead of merging them, because the difference between the two is what says *where* a
+session lives. A merged set could not tell a live side bar session from a closed one.
+
 ## 0.6.0
 
 **Every intervention is visible, and everything is configured from settings.**
