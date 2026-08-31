@@ -474,7 +474,14 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
   private async _partitionSessions(): Promise<{ active: ClaudeSession[]; history: ClaudeSession[] }> {
     const localClaude = await getOpenClaudeSessionIds(this._log);
     const localBobIds = await getOpenBobTaskIds(this._log);
-    const windows = await readLiveWindows();
+    // `readLiveWindows` is local by construction: it reads this machine's registry directory and
+    // tests liveness with `process.kill`, which cannot describe a pid on another host. Peer
+    // windows arrive already filtered for liveness by the probe, on the machine that owns the pid.
+    // Optional call: peer support is additive, and a session manager without it is still valid.
+    const windows = [
+      ...await readLiveWindows(),
+      ...(this._sessionManager.getPeerWindows?.() ?? []),
+    ];
     const claudeOpenIds = new Set<string>([
       ...localClaude.open,
       ...windows.flatMap(w => w.openClaudeSessionIds ?? []),

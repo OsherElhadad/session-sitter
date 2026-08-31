@@ -3,6 +3,35 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.7.1
+
+### Peer sessions landed in History instead of the session list
+
+0.7.0 pulled a peer's sessions correctly and then hid them. A session reaches the active list only
+when some **live window** reports it open, and that set was built from `readLiveWindows`, which
+reads this machine's registry directory and tests liveness with `process.kill` — neither of which
+can say anything about a process on another host. So a peer session was never "reported open" and
+fell through to the status fallback, which an idle session waiting at a prompt fails. The session
+was pulled, tagged, and filed under History, which looks exactly like a session that was never
+found at all.
+
+The peer's own window entries now count as reporters alongside the local ones. They are the right
+authority: the probe resolves liveness with `kill -0` on the machine that owns the pid, so a peer
+window entry is as trustworthy about its machine as a local entry is about this one. An unreachable
+peer publishes no windows, so it vouches for nothing.
+
+### Your own machine is no longer probed, or reported unreachable
+
+An IDE records this host's own LAN address as an `ssh-remote` target as readily as any other, and a
+machine has no reason to hold an authorized key for itself — so the extension probed itself, failed
+on publickey, and named the user's own machine as unreachable in the panel, every pass, forever.
+
+Self-detection could not be left to the probe's `machineId` reply, because that answer only arrives
+after the SSH that is failing. Discovery now recognises this host up front, by its interface
+addresses and its own name, and drops it before any connection is attempted. Host names are
+compared on whole labels, never as substrings: hiding a real peer is worse than probing one extra
+host.
+
 ## 0.7.0
 
 ### Sessions from your other machines, with no configuration

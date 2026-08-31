@@ -329,7 +329,17 @@ SSH call on that path would stall the local session list behind the network. A s
 refreshes a cache; the merge reads it synchronously.
 
 **Why liveness is decided on the peer.** `process.kill` and `/proc` describe the local machine
-only, so the probe filters windows with `kill -0` there and returns only live ones.
+only, so the probe filters windows with `kill -0` there and returns only live ones. Those entries
+are then unioned into the panel's open-id sets, which is what makes a peer session count as *open*
+rather than merely present on disk — see **Active vs History** above.
+
+**Why self-detection happens before the connection, not after.** `RemoteSessionSource` also compares
+the `machineId` a peer reports against the local one, but that reply only exists after a successful
+SSH. An IDE records this host's own LAN address as an `ssh-remote` target like any other, and a
+machine holds no authorized key for itself, so probing yourself fails on publickey and the
+`machineId` check never runs. `isSelfAddress` therefore recognises this host from its interface
+addresses and its own name, in `PeerDiscovery`, before any connection is attempted. Names match on
+whole labels only: hiding a real peer is worse than probing one extra host.
 
 **Why visibility is one-way.** Reachability usually is: a laptop or WSL box behind NAT runs no
 reachable sshd. Each window shows what it can reach and names what it cannot, because an
@@ -491,6 +501,13 @@ does not vanish because the probe was momentarily silent.
 That registry is per-machine, because `os.homedir()` is. Sessions on *other* machines arrive
 through a separate path — see **Cross-machine sessions** below — and each carries a `peer` tag so
 every local code path can tell the difference.
+
+A peer's window entries are unioned into the same open-id sets, because `readLiveWindows` cannot
+speak for another machine twice over: it reads only this machine's registry directory, and its
+liveness test is `process.kill`, which says nothing about a pid on another host. Leaving them out
+was the 0.7.1 bug — a peer session could never be reported open, fell through to the status
+fallback that an idle session fails, and was filed under History, which looks exactly like a
+session that was never found.
 
 Codex and Chat have no liveness signal at all, so recency is the only honest proxy: they count as
 active while updated within `sessionSitter.probelessActiveWindowMinutes` (default 120,
