@@ -10,7 +10,8 @@
   Permission rules that never match <code>git add &amp;&amp; git commit</code>. An "always allow" that saves
   the whole command line and so never matches again. Unattended runs that stall, or are denied with
   nothing said. Session Sitter answers each prompt from your team's written practices instead —
-  citing the clause it applied, and keeping one durable record per decision.
+  rules that hold across a whole command, approvals that generalise, and a record of every
+  decision, each one citing the clause it applied.
 </p>
 
 <p align="center"><em>Silence is never approval.</em></p>
@@ -131,14 +132,18 @@ waved through. Session Sitter is the layer that answers, in writing, and keeps t
 
 | | Without it | With it |
 |---|---|---|
-| **An overnight run** | stalls at the first prompt, or runs under `--dangerously-skip-permissions` and you hope | keeps going on the actions your rules already allow |
+| **An overnight run** | stalls at the first prompt — or, in a session that cannot prompt, is silently denied — unless you run under `--dangerously-skip-permissions` and hope | keeps going on the actions your rules already allow, and a denial says which clause denied it |
 | **A safe, boring prompt** | you approve `read_file` for the ninetieth time | resolved by rule, before any model call |
-| **"Always allow", clicked** | the literal command line is saved, so it never matches again | the practice that settled it is the standing answer |
+| **A compound command** † | `Bash(git:*)` never matches `git add x && git commit -m y` — and a **deny** rule you wrote is walked past the same way | every part of the line is judged, and the most restrictive verdict wins |
+| **"Always allow", clicked** † | the literal command line is saved, so the next near-identical one asks again | the approval is generalised from the practice that justified it |
 | **An unsafe action** | approved, or blocked with nothing to act on | blocked, and the agent is handed the safe alternatives instead |
 | **A judgment call** | it waits until you look | a decision card on your phone with a countdown — and on timeout it is **denied**, never approved |
 | **"What did it actually do?"** | scroll four transcripts | one durable JSON record per decision, plus the activity feed |
 | **An agent stuck in another window** | you find out when you get there | it is in this window's worklist, marked as waiting on you |
 | **A session on another machine** | you go and look for it | it is in the same list, one click to focus the window that owns it |
+
+† These two are in the open pull requests behind the Claude Code plugin, not in the released
+extension — same status as the plugin itself.
 
 ---
 
@@ -242,12 +247,6 @@ part that has to be yours, because the policy is yours:
 | **Scope** | Claude Code, one machine (Agent view is local by design) | Claude Code, IBM Bob, Codex, VS Code Chat — unioned across windows and peer machines |
 
 Both layers run at once, and the supervision half of this extension is off until you turn it on.
-
-Two of those rows are why `settings.json` is not enough on its own: a `Bash(git:*)` rule does not
-match `git add x && git commit -m y` — which defeats **deny** rules, not just allow ones — and an
-"always allow" click saves the command line it saw rather than the rule you meant. Judging the whole
-command line against your practices, and writing an approval back as the rule the clause implies,
-are in the open pull requests behind the Claude Code plugin, not in the released extension.
 
 ---
 
