@@ -269,6 +269,9 @@ export function activate(context: vscode.ExtensionContext) {
     `rule decisions: recording to ${recordsDir(supervisorConfig)}`
     + ` — notify=${supervisorConfig.notifyRuleDecisions} via ${supervisorConfig.messagingChannel}`,
   );
+  // The panel names the channel on a card that is waiting for you, so it has to know which one
+  // won: the setting layers over `.env`, and only this config has the answer.
+  provider.setMessagingChannel(supervisorConfig.messagingChannel);
   if (supervisorConfig.notifyRuleDecisions && supervisorConfig.messagingChannel !== 'telegram') {
     log('rule decisions: no human channel configured, so they appear in the panel only. Set '
       + 'sessionSitter.supervisor.messagingChannel to "telegram" plus '

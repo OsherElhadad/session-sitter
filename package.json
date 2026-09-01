@@ -17,6 +17,8 @@
     "vscode": "^1.64.0"
   },
   "categories": [
+    "AI",
+    "Chat",
     "Other"
   ],
   "activationEvents": [
@@ -79,286 +81,345 @@
       {
         "command": "sessionSitter.testBobSend",
         "title": "Test Bob Send (to existing session)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.testClaudeSend",
         "title": "Test Claude Send (to existing session)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.testClaudeListApprovals",
         "title": "Test Claude List Approvals (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.probeClaudeOpen",
         "title": "Probe Claude Open Panels (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.probeClaudeInternals",
         "title": "Probe Claude Internals — send + approval (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.probeBobQuestion",
         "title": "Probe Bob Question — ask_followup_question (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.probeBobQuestionFull",
         "title": "Probe Bob Question — full approval state (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.probeClaudeQuestion",
         "title": "Probe Claude Question — AskUserQuestion (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.installClaudeQuestionHook",
         "title": "Install Claude Question Hook (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.captureClaudeQuestion",
         "title": "Capture Claude Question (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.installClaudeAnswerHook",
         "title": "Install Claude Answer Hook (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       },
       {
         "command": "sessionSitter.captureClaudeAnswer",
         "title": "Capture Claude Answer (debug)",
-        "category": "Session Sitter"
+        "category": "Session Sitter",
+        "enablement": "config.sessionSitter.debugCommands"
       }
     ],
-    "configuration": {
-      "title": "Session Sitter",
-      "properties": {
-        "sessionSitter.autoRespond": {
-          "type": "array",
-          "default": [],
-          "markdownDescription": "Auto-respond rules for **Bob** and **Claude** sessions, evaluated in order (first match wins). Each rule is either a **text rule** `{ matchPattern, response }` (sends `response` when the latest assistant message matches the `matchPattern` regex) or an **approval rule** `{ toolPattern, decision }` (resolves a pending tool-approval prompt when `toolPattern` — a glob, `*` = any run of characters, `|` = alternatives — matches the tool name, optionally narrowed by an `argumentPattern` regex over the arguments JSON). Set `source` to `bob` (default) or `claude`. Add an optional `sessionPattern` (regex) to scope a rule to sessions whose project path matches.\n\nA pending prompt that no rule handles is left for you — or handed to the supervisor when `sessionSitter.autoSupervise` is on. A user-facing question (`ask_followup_question` / `AskUserQuestion`) is never auto-approved.",
-          "items": {
+    "configuration": [
+      {
+        "title": "Session panel",
+        "order": 1,
+        "properties": {
+          "sessionSitter.sessionSort": {
+            "type": "string",
+            "enum": [
+              "recent",
+              "hostWorkspace",
+              "workspace",
+              "source",
+              "title",
+              "status"
+            ],
+            "enumDescriptions": [
+              "Recently updated — newest activity first. Rows move as sessions update.",
+              "Machine, then workspace, then title. Rows hold still.",
+              "Workspace, then title, regardless of machine. Rows hold still.",
+              "Agent (Claude, Bob, Codex, Chat), then workspace. Rows hold still.",
+              "Session title, A to Z. Rows hold still.",
+              "Needs you first: waiting, then running, then idle."
+            ],
+            "default": "recent",
+            "markdownDescription": "How the **Sessions** list and **History** are ordered. Also switchable from the panel's ⇅ toolbar button, which writes this setting.\n\n`recent` (the default) sorts by newest activity, so rows move every time a session updates — which is what makes it hard to keep your place. The other orders sort by properties of the session rather than by the clock, so a row only moves when a session appears or disappears:\n\n- `hostWorkspace` — machine, then workspace, then title. This machine's sessions lead.\n- `workspace` — workspace, then title, regardless of which machine it is on.\n- `source` — grouped by agent: Claude, Bob, Codex, Chat.\n- `title` — alphabetical by session title.\n- `status` — waiting on you first, then running, then idle (newest first inside each group; this one does move)."
+          },
+          "sessionSitter.workspaceColors": {
             "type": "object",
-            "properties": {
-              "sessionPattern": {
-                "type": "string",
-                "description": "Optional: JavaScript regex matched against the session's project path. When set, the rule applies only to sessions whose project path matches; omit to apply to all sessions."
-              },
-              "matchPattern": {
-                "type": "string",
-                "description": "Text rule: JavaScript regex tested against the latest assistant message."
-              },
-              "response": {
-                "type": "string",
-                "description": "Text rule: text sent into the session on a match."
-              },
-              "toolPattern": {
-                "type": "string",
-                "description": "Approval rule: glob matched against the pending tool name ('*' = any run of characters, '|' separates alternatives)."
-              },
-              "argumentPattern": {
-                "type": "string",
-                "description": "Approval rule (optional): JavaScript regex matched against the pending tool arguments as JSON. Unanchored — matches anywhere in the JSON."
-              },
-              "decision": {
-                "type": "string",
-                "enum": [
-                  "approveOnce",
-                  "approveForTask",
-                  "reject"
-                ],
-                "description": "Approval rule: how to resolve the prompt. approveForTask also suppresses future prompts for that permission group (and command, for execute_command)."
-              },
-              "source": {
-                "type": "string",
-                "enum": [
-                  "bob",
-                  "claude"
-                ],
-                "default": "bob",
-                "description": "Which IDE the rule applies to: 'bob' (default) or 'claude'."
+            "default": {},
+            "additionalProperties": {
+              "type": "string"
+            },
+            "markdownDescription": "Colour for the **workspace pill** on a session row, per workspace. Unlisted workspaces keep the theme's badge colour.\n\nEach key is a workspace **name** (`my-app`), a full workspace **path** (`/home/you/work/my-app`), or a glob over either (`*` = any run of characters, `?` = one; `*` alone matches every workspace). Keys are tried in the order you write them and the **first match wins**, so put a specific workspace above a broad glob.\n\nEach value is a hex colour (`#0f8`, `#1a2b3c`), one of the built-in names — `red`, `orange`, `amber`, `yellow`, `lime`, `green`, `teal`, `cyan`, `blue`, `indigo`, `violet`, `purple`, `magenta`, `pink`, `brown`, `slate`, `gray` — or `auto` to derive a stable colour from the workspace itself. The label colour is chosen for contrast automatically. A value that is not a colour is ignored, leaving that pill on the theme colour.\n\nExample:\n\n```json\n{\n  \"session-sitter\": \"green\",\n  \"/home/you/work/payments\": \"#c0392b\",\n  \"scratch-*\": \"slate\",\n  \"*\": \"auto\"\n}\n```"
+          },
+          "sessionSitter.probelessActiveWindowMinutes": {
+            "type": "number",
+            "default": 120,
+            "minimum": 0,
+            "markdownDescription": "How recently a **Codex** or **VS Code Chat** session must have been updated to count as active in the Sessions list. Those sources expose no live-process signal, so recency is the only available proxy; Claude and Bob sessions are judged by what their extension hosts actually report as open. Set to `0` to keep them in History always."
+          },
+          "sessionSitter.remotePeers": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "off"
+            ],
+            "default": "auto",
+            "markdownDescription": "Whether to show sessions from other machines. `auto` (default) finds peer machines from the remote windows this IDE has already opened — no configuration needed — and pulls their live sessions over SSH, reusing one connection per peer. Clicking such a session focuses the window on **its own** machine. Set to `off` to disable this entirely: no peer discovery, no polling, and no SSH connection of any kind.\n\nOnly peers reachable from this machine appear. SSH runs with `BatchMode=yes`, so a host that would prompt for a password is reported unreachable rather than blocking."
+          },
+          "sessionSitter.autoRespond": {
+            "type": "array",
+            "default": [],
+            "markdownDescription": "Auto-respond rules for **Bob** and **Claude** sessions, evaluated in order (first match wins). Each rule is either a **text rule** `{ matchPattern, response }` (sends `response` when the latest assistant message matches the `matchPattern` regex) or an **approval rule** `{ toolPattern, decision }` (resolves a pending tool-approval prompt when `toolPattern` — a glob, `*` = any run of characters, `|` = alternatives — matches the tool name, optionally narrowed by an `argumentPattern` regex over the arguments JSON). Set `source` to `bob` (default) or `claude`. Add an optional `sessionPattern` (regex) to scope a rule to sessions whose project path matches.\n\nA pending prompt that no rule handles is left for you — or handed to the supervisor when `sessionSitter.autoSupervise` is on. A user-facing question (`ask_followup_question` / `AskUserQuestion`) is never auto-approved.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "sessionPattern": {
+                  "type": "string",
+                  "description": "Optional: JavaScript regex matched against the session's project path. When set, the rule applies only to sessions whose project path matches; omit to apply to all sessions."
+                },
+                "matchPattern": {
+                  "type": "string",
+                  "description": "Text rule: JavaScript regex tested against the latest assistant message."
+                },
+                "response": {
+                  "type": "string",
+                  "description": "Text rule: text sent into the session on a match."
+                },
+                "toolPattern": {
+                  "type": "string",
+                  "description": "Approval rule: glob matched against the pending tool name ('*' = any run of characters, '|' separates alternatives)."
+                },
+                "argumentPattern": {
+                  "type": "string",
+                  "description": "Approval rule (optional): JavaScript regex matched against the pending tool arguments as JSON. Unanchored — matches anywhere in the JSON."
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "approveOnce",
+                    "approveForTask",
+                    "reject"
+                  ],
+                  "description": "Approval rule: how to resolve the prompt. approveForTask also suppresses future prompts for that permission group (and command, for execute_command)."
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "bob",
+                    "claude"
+                  ],
+                  "default": "bob",
+                  "description": "Which IDE the rule applies to: 'bob' (default) or 'claude'."
+                }
               }
             }
           }
-        },
-        "sessionSitter.probelessActiveWindowMinutes": {
-          "type": "number",
-          "default": 120,
-          "minimum": 0,
-          "markdownDescription": "How recently a **Codex** or **VS Code Chat** session must have been updated to count as active in the Sessions list. Those sources expose no live-process signal, so recency is the only available proxy; Claude and Bob sessions are judged by what their extension hosts actually report as open. Set to `0` to keep them in History always."
-        },
-        "sessionSitter.sessionSort": {
-          "type": "string",
-          "enum": [
-            "recent",
-            "hostWorkspace",
-            "workspace",
-            "source",
-            "title",
-            "status"
-          ],
-          "enumDescriptions": [
-            "Recently updated — newest activity first. Rows move as sessions update.",
-            "Machine, then workspace, then title. Rows hold still.",
-            "Workspace, then title, regardless of machine. Rows hold still.",
-            "Agent (Claude, Bob, Codex, Chat), then workspace. Rows hold still.",
-            "Session title, A to Z. Rows hold still.",
-            "Needs you first: waiting, then running, then idle."
-          ],
-          "default": "recent",
-          "markdownDescription": "How the **Sessions** list and **History** are ordered. Also switchable from the panel's ⇅ toolbar button, which writes this setting.\n\n`recent` (the default) sorts by newest activity, so rows move every time a session updates — which is what makes it hard to keep your place. The other orders sort by properties of the session rather than by the clock, so a row only moves when a session appears or disappears:\n\n- `hostWorkspace` — machine, then workspace, then title. This machine's sessions lead.\n- `workspace` — workspace, then title, regardless of which machine it is on.\n- `source` — grouped by agent: Claude, Bob, Codex, Chat.\n- `title` — alphabetical by session title.\n- `status` — waiting on you first, then running, then idle (newest first inside each group; this one does move)."
-        },
-        "sessionSitter.workspaceColors": {
-          "type": "object",
-          "default": {},
-          "additionalProperties": {
-            "type": "string"
+        }
+      },
+      {
+        "title": "Supervision",
+        "order": 2,
+        "properties": {
+          "sessionSitter.supervisorStateDir": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Absolute path to the supervision state directory. **Required to enable supervision.** Transcripts are exported to `<stateDir>/history/`, decisions are recorded in `<stateDir>/records/` (what the Supervision activity panel shows), and interventions queue in `<stateDir>/outbox/` until the agent confirms them.\n\nExample: `/home/you/.ai-sessions/state`",
+            "scope": "machine-overridable"
           },
-          "markdownDescription": "Colour for the **workspace pill** on a session row, per workspace. Unlisted workspaces keep the theme's badge colour.\n\nEach key is a workspace **name** (`my-app`), a full workspace **path** (`/home/you/work/my-app`), or a glob over either (`*` = any run of characters, `?` = one; `*` alone matches every workspace). Keys are tried in the order you write them and the **first match wins**, so put a specific workspace above a broad glob.\n\nEach value is a hex colour (`#0f8`, `#1a2b3c`), one of the built-in names — `red`, `orange`, `amber`, `yellow`, `lime`, `green`, `teal`, `cyan`, `blue`, `indigo`, `violet`, `purple`, `magenta`, `pink`, `brown`, `slate`, `gray` — or `auto` to derive a stable colour from the workspace itself. The label colour is chosen for contrast automatically. A value that is not a colour is ignored, leaving that pill on the theme colour.\n\nExample:\n\n```json\n{\n  \"session-sitter\": \"green\",\n  \"/home/you/work/payments\": \"#c0392b\",\n  \"scratch-*\": \"slate\",\n  \"*\": \"auto\"\n}\n```"
-        },
-        "sessionSitter.supervisorStateDir": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Absolute path to the supervision state directory. **Required to enable supervision.** Transcripts are exported to `<stateDir>/history/`, decisions are recorded in `<stateDir>/records/` (what the Supervision activity panel shows), and interventions queue in `<stateDir>/outbox/` until the agent confirms them.\n\nExample: `/home/you/.ai-sessions/state`"
-        },
-        "sessionSitter.autoSupervise": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "When on, every agent prompt that no auto-approve rule handles is handed to the supervisor: the transcript is exported, the action is classified into a traffic light, and the decision is applied back into the agent. Requires `sessionSitter.supervisorStateDir`."
-        },
-        "sessionSitter.supervisorRepoPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Workspace root the supervisor runs against — used to locate `.env` files and as the classifier's working directory. Derived from `sessionSitter.supervisorStateDir` (its parent) when empty."
-        },
-        "sessionSitter.dataRepoPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Absolute path to your corpus repository — the one containing `data/sessions/` (uploaded sessions) and `data/knowledge/` (the BDI tier files). Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source for supervision."
-        },
-        "sessionSitter.remotePeers": {
-          "type": "string",
-          "enum": [
-            "auto",
-            "off"
-          ],
-          "default": "auto",
-          "markdownDescription": "Whether to show sessions from other machines. `auto` (default) finds peer machines from the remote windows this IDE has already opened — no configuration needed — and pulls their live sessions over SSH, reusing one connection per peer. Clicking such a session focuses the window on **its own** machine. Set to `off` to disable this entirely: no peer discovery, no polling, and no SSH connection of any kind.\n\nOnly peers reachable from this machine appear. SSH runs with `BatchMode=yes`, so a host that would prompt for a password is reported unreachable rather than blocking."
-        },
-        "sessionSitter.knowledge.user": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Knowledge-routing `user` slug → `data/knowledge/users/<user>/bottom-line.md` (highest precedence tier)."
-        },
-        "sessionSitter.knowledge.project": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Knowledge-routing `project` slug → `data/knowledge/projects/<project>/bottom-line.md`."
-        },
-        "sessionSitter.knowledge.team": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Knowledge-routing `team` slug → `data/knowledge/teams/<team>/bottom-line.md` (broadest, lowest precedence tier)."
-        },
-        "sessionSitter.knowledge.registryPath": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Optional path to a knowledge **registry** markdown file. When set, the `(user, project, team)` triple is validated against its tables and the documented fallbacks apply (a user on exactly one project may omit the project; an unknown slug is an error). When empty, the three slugs above are used as given. See `knowledge/REGISTRY.example.md`."
-        },
-        "sessionSitter.supervisor.engine": {
-          "type": "string",
-          "enum": [
-            "bob",
-            "claude"
-          ],
-          "default": "bob",
-          "markdownDescription": "Which agent CLI classifies an ambiguous action: `bob` (IBM Bob Shell, default) or `claude` (Claude Code). The deterministic tier and your `sessionSitter.autoRespond` rules run first and need no CLI at all."
-        },
-        "sessionSitter.supervisor.bobCliPath": {
-          "type": "string",
-          "default": "bob",
-          "markdownDescription": "Path to the `bob` executable used when `sessionSitter.supervisor.engine` is `bob`."
-        },
-        "sessionSitter.supervisor.claudeCliPath": {
-          "type": "string",
-          "default": "claude",
-          "markdownDescription": "Path to the `claude` executable used when `sessionSitter.supervisor.engine` is `claude`."
-        },
-        "sessionSitter.supervisor.bobApiKey": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "API key for headless Bob classification (passed to the CLI as `BOBSHELL_API_KEY`). Leave empty to fall back to `BOBSHELL_API_KEY` / `BOB_API_KEY` in the environment or a `.env` file.\n\n**Note:** VS Code settings are stored in plain text. Prefer the environment fallback if that matters to you."
-        },
-        "sessionSitter.supervisor.anthropicBaseUrl": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Optional Claude Code gateway base URL, passed to the classifier subprocess as `ANTHROPIC_BASE_URL`. Empty falls back to the environment / `.env` value, if any."
-        },
-        "sessionSitter.supervisor.anthropicAuthToken": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Optional auth token for the Claude Code gateway, passed as `ANTHROPIC_AUTH_TOKEN`. Empty falls back to the environment / `.env` value, if any.\n\n**Note:** VS Code settings are stored in plain text."
-        },
-        "sessionSitter.supervisor.classifierTimeoutSeconds": {
-          "type": "number",
-          "default": 300,
-          "minimum": 10,
-          "markdownDescription": "How long to wait for the classifier CLI before treating the classification as failed."
-        },
-        "sessionSitter.supervisor.orangeResponseTimeoutMinutes": {
-          "type": "number",
-          "default": 30,
-          "minimum": 1,
-          "markdownDescription": "How long an interactive decision card waits for your answer. On timeout, silence is **not** approval: an Orange denies the action and hands the agent safe alternatives; a Red stays blocked."
-        },
-        "sessionSitter.supervisor.messagingChannel": {
-          "type": "string",
-          "enum": [
-            "stub",
-            "telegram"
-          ],
-          "default": "stub",
-          "markdownDescription": "Where decisions and updates go. `telegram` sends real cards (needs the bot token + chat id below); `stub` writes them to `<stateDir>/notifications/` and reads simulated replies from `<stateDir>/inbox/<requestId>.txt`."
-        },
-        "sessionSitter.supervisor.telegramBotToken": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Telegram bot token (from @BotFather), used when `sessionSitter.supervisor.messagingChannel` is `telegram`. Empty falls back to `TELEGRAM_BOT_TOKEN` in the environment or a `.env` file.\n\n**Note:** VS Code settings are stored in plain text; use the environment fallback if you would rather not keep the token there."
-        },
-        "sessionSitter.supervisor.telegramChatId": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Telegram chat id that receives the cards. Empty falls back to `TELEGRAM_CHAT_ID` in the environment or a `.env` file."
-        },
-        "sessionSitter.supervisor.redNotify": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Whether a **Red** (blocked destructive action) also sends a one-way alert. The block itself always holds until you explicitly unblock."
-        },
-        "sessionSitter.supervisor.notifyRuleDecisions": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Whether decisions taken by your **deterministic** `sessionSitter.autoRespond` rules are also reported to the messaging channel as one-way updates. They are always recorded and shown in the panel's Supervision activity feed; turn this off to keep them out of Telegram.\n\nWith this on, every intervention Session Sitter makes is visible — not just the ones the supervisor AI decided."
-        },
-        "sessionSitter.supervisor.knowledgeRepo": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Git URL of the knowledge (BDI) repository. Used only when no local checkout is configured — see `sessionSitter.dataRepoPath`."
-        },
-        "sessionSitter.supervisor.knowledgeRef": {
-          "type": "string",
-          "default": "main",
-          "markdownDescription": "Git ref to read the knowledge repository at, when fetching it by URL."
+          "sessionSitter.autoSupervise": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "When on, every agent prompt that no auto-approve rule handles is handed to the supervisor: the transcript is exported, the action is classified into a traffic light, and the decision is applied back into the agent. Requires `sessionSitter.supervisorStateDir`."
+          },
+          "sessionSitter.supervisorRepoPath": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Workspace root the supervisor runs against — used to locate `.env` files and as the classifier's working directory. Derived from `sessionSitter.supervisorStateDir` (its parent) when empty.",
+            "scope": "machine-overridable"
+          }
+        }
+      },
+      {
+        "title": "Classifier",
+        "order": 3,
+        "properties": {
+          "sessionSitter.supervisor.engine": {
+            "type": "string",
+            "enum": [
+              "bob",
+              "claude"
+            ],
+            "default": "bob",
+            "markdownDescription": "Which agent CLI classifies an ambiguous action: `bob` (IBM Bob Shell, default) or `claude` (Claude Code). The deterministic tier and your `sessionSitter.autoRespond` rules run first and need no CLI at all."
+          },
+          "sessionSitter.supervisor.bobCliPath": {
+            "type": "string",
+            "default": "bob",
+            "markdownDescription": "Path to the `bob` executable used when `sessionSitter.supervisor.engine` is `bob`.",
+            "scope": "machine-overridable"
+          },
+          "sessionSitter.supervisor.claudeCliPath": {
+            "type": "string",
+            "default": "claude",
+            "markdownDescription": "Path to the `claude` executable used when `sessionSitter.supervisor.engine` is `claude`.",
+            "scope": "machine-overridable"
+          },
+          "sessionSitter.supervisor.bobApiKey": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "API key for headless Bob classification (passed to the CLI as `BOBSHELL_API_KEY`). Leave empty to fall back to `BOBSHELL_API_KEY` / `BOB_API_KEY` in the environment or a `.env` file.\n\n**Note:** VS Code settings are stored in plain text. Prefer the environment fallback if that matters to you.",
+            "scope": "machine"
+          },
+          "sessionSitter.supervisor.anthropicBaseUrl": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Optional Claude Code gateway base URL, passed to the classifier subprocess as `ANTHROPIC_BASE_URL`. Empty falls back to the environment / `.env` value, if any."
+          },
+          "sessionSitter.supervisor.anthropicAuthToken": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Optional auth token for the Claude Code gateway, passed as `ANTHROPIC_AUTH_TOKEN`. Empty falls back to the environment / `.env` value, if any.\n\n**Note:** VS Code settings are stored in plain text.",
+            "scope": "machine"
+          },
+          "sessionSitter.supervisor.classifierTimeoutSeconds": {
+            "type": "number",
+            "default": 300,
+            "minimum": 10,
+            "markdownDescription": "How long to wait for the classifier CLI before treating the classification as failed."
+          }
+        }
+      },
+      {
+        "title": "Messaging",
+        "order": 4,
+        "properties": {
+          "sessionSitter.supervisor.messagingChannel": {
+            "type": "string",
+            "enum": [
+              "stub",
+              "telegram"
+            ],
+            "default": "stub",
+            "markdownDescription": "Where decisions and updates go. `telegram` sends real cards (needs the bot token + chat id below); `stub` writes them to `<stateDir>/notifications/` and reads simulated replies from `<stateDir>/inbox/<requestId>.txt`."
+          },
+          "sessionSitter.supervisor.telegramBotToken": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Telegram bot token (from @BotFather), used when `sessionSitter.supervisor.messagingChannel` is `telegram`. Empty falls back to `TELEGRAM_BOT_TOKEN` in the environment or a `.env` file.\n\n**Note:** VS Code settings are stored in plain text; use the environment fallback if you would rather not keep the token there.",
+            "scope": "machine"
+          },
+          "sessionSitter.supervisor.telegramChatId": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Telegram chat id that receives the cards. Empty falls back to `TELEGRAM_CHAT_ID` in the environment or a `.env` file."
+          },
+          "sessionSitter.supervisor.orangeResponseTimeoutMinutes": {
+            "type": "number",
+            "default": 30,
+            "minimum": 1,
+            "markdownDescription": "How long an interactive decision card waits for your answer. On timeout, silence is **not** approval: an Orange denies the action and hands the agent safe alternatives; a Red stays blocked."
+          },
+          "sessionSitter.supervisor.redNotify": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Whether a **Red** (blocked destructive action) also sends a one-way alert. The block itself always holds until you explicitly unblock."
+          },
+          "sessionSitter.supervisor.notifyRuleDecisions": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Whether decisions taken by your **deterministic** `sessionSitter.autoRespond` rules are also reported to the messaging channel as one-way updates. They are always recorded and shown in the panel's Supervision activity feed; turn this off to keep them out of Telegram.\n\nWith this on, every intervention Session Sitter makes is visible — not just the ones the supervisor AI decided."
+          }
+        }
+      },
+      {
+        "title": "Knowledge",
+        "order": 5,
+        "properties": {
+          "sessionSitter.dataRepoPath": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Absolute path to your corpus repository — the one containing `data/sessions/` (uploaded sessions) and `data/knowledge/` (the BDI tier files). Used by **Upload Session to Corpus** and, unless overridden, as the knowledge source for supervision.",
+            "scope": "machine-overridable"
+          },
+          "sessionSitter.knowledge.user": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Knowledge-routing `user` slug → `data/knowledge/users/<user>/bottom-line.md` (highest precedence tier)."
+          },
+          "sessionSitter.knowledge.project": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Knowledge-routing `project` slug → `data/knowledge/projects/<project>/bottom-line.md`."
+          },
+          "sessionSitter.knowledge.team": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Knowledge-routing `team` slug → `data/knowledge/teams/<team>/bottom-line.md` (broadest, lowest precedence tier)."
+          },
+          "sessionSitter.knowledge.registryPath": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Optional path to a knowledge **registry** markdown file. When set, the `(user, project, team)` triple is validated against its tables and the documented fallbacks apply (a user on exactly one project may omit the project; an unknown slug is an error). When empty, the three slugs above are used as given. See `knowledge/REGISTRY.example.md`.",
+            "scope": "machine-overridable"
+          },
+          "sessionSitter.supervisor.knowledgeRepo": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Git URL of the knowledge (BDI) repository. Used only when no local checkout is configured — see `sessionSitter.dataRepoPath`."
+          },
+          "sessionSitter.supervisor.knowledgeRef": {
+            "type": "string",
+            "default": "main",
+            "markdownDescription": "Git ref to read the knowledge repository at, when fetching it by URL."
+          }
+        }
+      },
+      {
+        "title": "Developer",
+        "order": 6,
+        "properties": {
+          "sessionSitter.debugCommands": {
+            "type": "boolean",
+            "default": false,
+            "markdownDescription": "Show the developer commands — **Probe …**, **Install … Hook**, **Capture …** and **Test … Send** — in the Command Palette.\n\nThey exist to inspect the agent bridges by hand (which panels Claude has open, what a pending approval looks like, whether a send reaches a session) and they print to the Session Sitter output channel rather than doing anything a user asked for. Off by default so typing \"Session\" in the palette lists the commands you actually use. Turning this on changes nothing but their visibility."
+          }
         }
       }
-    }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -379,5 +440,16 @@
     "@typescript-eslint/parser": "^6.0.0",
     "eslint": "^8.0.0",
     "vitest": "^1.6.0"
-  }
+  },
+  "keywords": [
+    "claude code",
+    "coding agent",
+    "agent sessions",
+    "session switcher",
+    "supervision",
+    "codex",
+    "ibm bob",
+    "approval",
+    "auto approve"
+  ]
 }

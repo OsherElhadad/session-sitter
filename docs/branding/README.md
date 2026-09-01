@@ -21,12 +21,20 @@ derivative of one of the agents the extension supervises.
 | `logo-256.png` | 256×256 | Docs and web. Copied to `resources/logo.png` as the marketplace icon. |
 | `wordmark-light.svg` / `.png` | 1000×300 | Logo + name, dark text on transparent. The README header on a light theme. |
 | `wordmark-dark.svg` / `.png` | 1000×300 | Same, light text on a dark ground. The README header on a dark theme. |
-| `lockup-light.png` / `lockup-dark.png` | 1440×380 | Logo + name + tagline. Slides, blog posts, release notes. |
-| `social-preview.png` | 1280×640 | The GitHub social preview (Settings → General → Social preview). |
+| `lockup-light.svg` / `.png` | 1440×380 | Logo + name + tagline. Slides, blog posts, release notes. |
+| `lockup-dark.svg` / `.png` | 1440×380 | Same, on an ink ground. |
+| `social-preview.svg` / `.png` | 1280×640 | The GitHub social preview (Settings → General → Social preview). |
 
 `resources/logo.png` is a copy, not a symlink, because `docs/` is listed in `.vscodeignore` —
 anything the packaged `.vsix` needs has to live outside `docs/`. If you change the logo, change
 both.
+
+> **The lockup and social-preview PNGs are one regeneration behind their new SVG sources.** Those
+> three PNGs were hand-composed with no source file, which made them un-editable; the SVGs now exist
+> and carry the current tagline, but regenerating the PNGs needs `inkscape`, which was not available
+> where the sources were written. Anyone with `inkscape` should run `regen.sh` and commit the three
+> PNGs it rewrites. Until then the PNGs still read *"a babysitter for your AI coding sessions"* and
+> *"see every agent session · supervise what they pause on"*, which is the pre-0.9 positioning.
 
 `resources/icon.svg` is a different thing and stays as it is: the monochrome activity-bar glyph.
 It is drawn with `currentColor` so VS Code can tint it to match the user's theme, which a
@@ -53,5 +61,9 @@ The SVGs are the source of truth. After editing one:
 bash docs/branding/regen.sh
 ```
 
-Needs `inkscape` on PATH. It re-exports every PNG in this folder and refreshes
-`resources/logo.png`.
+Needs `inkscape` on PATH. It re-exports **every** PNG in this folder — logo, wordmarks, lockups and
+the social preview — and refreshes `resources/logo.png`. Nothing here is composed by hand any more,
+so there is no asset that cannot be edited and regenerated.
+
+The explainer diagrams in [`../diagrams/`](../diagrams/) are SVG only and are not part of this
+script: a diagram inside a document needs no PNG.

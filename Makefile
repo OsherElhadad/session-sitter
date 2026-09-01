@@ -92,7 +92,7 @@ lint: node_modules $(BUILD_INFO) ## Run ESLint over src/
 	$(NPX) eslint src
 
 .PHONY: test
-test: node_modules $(BUILD_INFO) ## Run the test suite (vitest, ~600 tests)
+test: node_modules $(BUILD_INFO) ## Run the test suite (vitest)
 	$(NPX) vitest run
 
 .PHONY: test-watch
@@ -119,6 +119,16 @@ guards: compile ## Run every CI guard: no Python, settings match, one project na
 check: typecheck lint test ## compile + lint + test — the same gate CI applies
 	@echo
 	@echo "✓ check passed — safe to push"
+
+# ---------------------------------------------------------------------------
+# Screenshots
+# ---------------------------------------------------------------------------
+
+# Needs no node_modules: the harness is plain node plus whatever playwright is already installed,
+# and it exits 0 with an explanation when there is none. Deliberately not part of `check`.
+.PHONY: screenshots
+screenshots: ## Re-capture docs/screenshots/*.png from the real webview (needs playwright)
+	node tools/screenshots/capture.mjs
 
 # ---------------------------------------------------------------------------
 # Package and install
