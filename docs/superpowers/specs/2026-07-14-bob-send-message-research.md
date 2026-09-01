@@ -1,5 +1,13 @@
 # Research: Sending Messages Programmatically to IBM Bob Sessions
 
+*2026-07-14*
+
+> **Historical record.** This is the work log of the investigation, kept as written. Its
+> conclusion — that no send mechanism existed yet — has since been superseded: sending into an
+> existing Bob session ships in `src/agents/BobSender.ts`, and the pattern-matching engine
+> sketched at the end of this document ships in `src/AutoResponder.ts`. Read it for *why* the
+> mechanism looks the way it does, not for what the code does today.
+
 **Goal:** From the Session Sitter panel, detect a specific text pattern in the
 last messages of a Bob session and automatically send a configured reply into that session
 as if the user typed it — so Bob continues without manual intervention.
@@ -12,7 +20,7 @@ as if the user typed it — so Bob continues without manual intervention.
 |---|---|
 | Host OS | Windows (Bob IDE runs natively on Windows) |
 | Dev environment | WSL2 (extension is developed and compiled here) |
-| Bob IDE install | `C:\Users\332543756\AppData\Local\Programs\IBM Bob` |
+| Bob IDE install | `C:\Users\<you>\AppData\Local\Programs\IBM Bob` |
 | Bob DB | `~/.bob/db/bob.db` (SQLite, queried from WSL via `python3`) |
 | Bob extension ID | `IBM.bob-code` (built-in, not in user extensions folder) |
 | Bob extension source | `…\IBM Bob\resources\app\extensions\bob-code\dist\extension.js` |
