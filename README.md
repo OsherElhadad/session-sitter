@@ -9,7 +9,6 @@
 
 <p align="center">
   <a href="https://github.com/eranra/session-sitter/actions/workflows/ci.yml"><img src="https://github.com/eranra/session-sitter/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/tests-602-success" alt="tests">
   <img src="https://img.shields.io/badge/TypeScript-only-3178c6?logo=typescript&logoColor=white" alt="TypeScript only">
   <img src="https://img.shields.io/badge/VS%20Code-1.65%2B-007ACC?logo=visualstudiocode&logoColor=white" alt="VS Code 1.65+">
   <img src="https://img.shields.io/badge/license-MIT-informational" alt="MIT">
@@ -81,7 +80,7 @@ change before it lands.
 
 ```bash
 npm ci        # once
-make check    # type-check + lint + 602 tests
+make check    # type-check + lint + the test suite
 ```
 
 Then press **F5** for an Extension Development Host with live reloading — no packaging step.
@@ -270,7 +269,7 @@ through the V8 inspector. → [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 `make` with no target lists everything. The ones you will use:
 
 ```bash
-make check      # type-check + lint + 602 tests — the same gate CI applies
+make check      # type-check + lint + tests — the same gate CI applies
 make test       # just the tests
 make install    # build the .vsix and install it
 make package    # build the .vsix without installing
@@ -308,7 +307,10 @@ the full gate, and publishes the `.vsix` to a GitHub Release.
 
 ## Contributing
 
-Issues and pull requests welcome. Run `make check` before you push; CI runs the same thing.
+Issues and pull requests welcome. Run `make check` before you push; CI runs the same thing. The
+details — the guards, the TypeScript-only rule, the commit voice, the release process — are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). For a vulnerability, please use the private path in
+[`SECURITY.md`](SECURITY.md) rather than an issue.
 
 ## License
 
