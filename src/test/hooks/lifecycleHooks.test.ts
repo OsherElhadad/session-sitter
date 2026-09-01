@@ -10,7 +10,7 @@ import { handle as sessionEnd } from '../../hooks/sessionEnd';
 import { handle as notification } from '../../hooks/notification';
 import { parseInput, readStdin } from '../../hooks/io';
 import { activityPath, dataDir, decisionsPath, sessionPath, sessionsDir } from '../../hooks/paths';
-import { engineToolName, haystackFor, sessionFromPermissionRequest } from '../../hooks/session';
+import { haystackFor, sessionFromPermissionRequest } from '../../hooks/session';
 import { appendJsonl } from '../../audit/trail';
 
 let dir: string;
@@ -84,22 +84,12 @@ describe('readStdin', () => {
 // --------------------------------------------------------------------------- the session adapter
 
 describe('the session adapter', () => {
-  it('maps Claude Code tool names onto the engine vocabulary', () => {
-    expect(engineToolName('Read')).toBe('read_file');
-    expect(engineToolName('Bash')).toBe('execute_command');
-  });
-
-  it('leaves an unmapped tool alone, so it falls through to scrutiny', () => {
-    expect(engineToolName('Write')).toBe('Write');
-    expect(engineToolName('SomeMcpTool')).toBe('SomeMcpTool');
-  });
-
-  it('builds a pending action the tiers can read', () => {
+  it('passes the Claude Code tool name straight through — tiers.ts names them itself', () => {
     const session = sessionFromPermissionRequest({
       session_id: 's', cwd: '/repo', tool_name: 'Bash', tool_input: { command: 'ls' },
     });
     expect(session.pendingAction).toMatchObject({
-      kind: 'tool_call', name: 'execute_command', arguments: { command: 'ls' },
+      kind: 'tool_call', name: 'Bash', arguments: { command: 'ls' },
     });
     expect(session.turns).toEqual([]); // deliberately not read — see session.ts
     expect(session.projectPath).toBe('/repo');

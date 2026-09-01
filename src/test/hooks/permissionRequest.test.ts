@@ -113,6 +113,13 @@ describe('decideDeterministically — rung 1, deterministic green', () => {
       .toBe('allow');
   });
 
+  it('treats a Claude Code read tool as green without any alias mapping', () => {
+    for (const tool of ['Read', 'Glob', 'Grep', 'NotebookRead', 'BashOutput']) {
+      expect(decideDeterministically(req(tool, { file_path: '/tmp/a.ts' }), [])?.decision.behavior)
+        .toBe('allow');
+    }
+  });
+
   it('does not treat a write as green', () => {
     expect(decideDeterministically(req('Write', { file_path: '/tmp/a.ts', content: 'x' }), []))
       .toBeNull();
