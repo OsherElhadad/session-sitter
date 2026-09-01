@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -148,10 +149,81 @@ function isUserPrompt(record: JsonlRecord): boolean {
   return !INTERRUPT_MARKERS.has(recordText(record));
 }
 
+/**
+ * The platform-specific process lookups the liveness check needs, behind one seam so both
+ * branches below can be driven from a test without a real process to point at.
+ */
+export interface ProcessProbe {
+  /** Signal 0: throws when the PID is not running. */
+  signal(pid: number): void;
+  /** Raw `/proc/<pid>/stat`. Throws on the platforms that have no /proc. */
+  procStat(pid: number): string;
+  /** `ps -o lstart= -p <pid>`. Throws when `ps` is missing or refuses the PID. */
+  psStart(pid: number): string;
+}
+
+const realProcessProbe: ProcessProbe = {
+  signal: (pid) => { process.kill(pid, 0); },
+  procStat: (pid) => fs.readFileSync(`/proc/${pid}/stat`, 'utf8'),
+  // Synchronous, like the /proc read it stands in for. Only the handful of session files that
+  // already passed the entrypoint and 24-hour filters get this far, so the cost is a few spawns.
+  psStart: (pid) => execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }),
+};
+
+/**
+ * Whether `ps`'s start-time line describes the same process start as the recorded `procStart`.
+ *
+ * Claude writes `procStart` in UTC while `ps` prints the machine's local zone, so on a host that
+ * is not on UTC the two strings never match literally — comparing them as text is what made every
+ * macOS session look dead. Both readings of the recorded string are therefore accepted. The cost
+ * is that a recycled PID would also pass if its real start time were exactly the UTC offset away
+ * from the recorded one, to the second; that coincidence is not worth more code to exclude.
+ */
+function startTimesAgree(procStart: string, psMs: number): boolean {
+  const asLocal = Date.parse(procStart);
+  const asUtc = Date.parse(`${procStart} UTC`);
+  return [asLocal, asUtc].some(ms => !Number.isNaN(ms) && Math.abs(ms - psMs) < 2000);
+}
+
+/**
+ * Whether the Claude process a session file describes is still the one that wrote it — alive, and
+ * not a different process that happens to have inherited its PID.
+ *
+ * Exported for the tests; `platform` and `probe` are injected there and defaulted here.
+ */
+export function isSessionProcessAlive(
+  pid: number,
+  procStart: string | number | undefined,
+  platform: NodeJS.Platform = process.platform,
+  probe: ProcessProbe = realProcessProbe,
+): boolean {
+  try {
+    probe.signal(pid);
+  } catch {
+    return false;
+  }
+  if (platform === 'linux') {
+    try {
+      // Field 21 of /proc/<pid>/stat is the kernel start time; a recycled PID gets a different one.
+      return String(procStart) === probe.procStat(pid).split(' ')[21];
+    } catch {
+      return false;
+    }
+  }
+  // No /proc here (macOS, Windows), so `ps` carries the only start time on offer. When it cannot
+  // be run, or prints something unparsable, fall back to the signal alone: losing the PID-recycling
+  // guard is far better than losing every session, which is what reading /proc here used to do.
+  try {
+    const psMs = Date.parse(probe.psStart(pid).trim());
+    if (!Number.isNaN(psMs)) { return startTimesAgree(String(procStart), psMs); }
+  } catch { /* no usable `ps` on this host */ }
+  return true;
+}
+
 // Read ~/.claude/sessions/*.json and return session IDs whose Claude process
-// is still running. Each file stores the PID and the kernel start-time
-// (procStart) of the Claude process so we can distinguish a live session
-// from a recycled PID.  Only interactive VS Code sessions are included.
+// is still running. Each file stores the PID and the start-time (procStart) of
+// the Claude process so we can distinguish a live session from a recycled PID.
+// Only interactive VS Code sessions are included.
 export async function getActiveSessionIds(): Promise<Set<string>> {
   const active = new Set<string>();
   const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
@@ -180,16 +252,8 @@ export async function getActiveSessionIds(): Promise<Set<string>> {
       // background sessions from a previous VS Code session that was never
       // properly closed, not sessions the user opened today.
       if (typeof data.startedAt === 'number' && data.startedAt < cutoff) { continue; }
-      try {
-        process.kill(data.pid, 0); // throws if process is dead
-        // Verify the PID hasn't been recycled by comparing kernel start-times.
-        const stat = await fs.promises.readFile(`/proc/${data.pid}/stat`, 'utf8');
-        const actualStart = stat.split(' ')[21];
-        if (String(data.procStart) === actualStart) {
-          active.add(data.sessionId);
-        }
-      } catch {
-        // Dead or unreadable — skip
+      if (isSessionProcessAlive(data.pid, data.procStart)) {
+        active.add(data.sessionId);
       }
     } catch {
       // Malformed session file — skip
