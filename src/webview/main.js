@@ -433,18 +433,21 @@
 
   // ── Tab builder ───────────────────────────────────────────────────────────
 
-  // Uniform metadata rows shared by buildTab and buildHistoryItem — appends
-  // the source badge (Claude/Bob/Codex/Chat) and the workspace pill (or
-  // "(no workspace)" fallback) as separate children so `.tab-text` (flex
-  // column) stacks them on their own lines.
-  function appendSessionMetaRows(textEl, session) {
+  // The metadata line shared by buildTab and buildHistoryItem: the source badge
+  // (Claude/Bob/Codex/Chat), the machine pill and the workspace pill, all on ONE wrapping line.
+  // They used to be a child each of `.tab-text`, which is a flex column — so a row was four or
+  // five lines tall and twenty sessions were a very long scroll in a narrow sidebar.
+  // Returns the line, so the caller can put the timestamp on the end of it.
+  function appendSessionMeta(textEl, session) {
+    const metaEl = document.createElement('div');
+    metaEl.className = 'tab-meta';
     const SOURCE_LABELS = { claude: 'Claude', bob: 'Bob', codex: 'Codex', chat: 'Chat' };
     const label = SOURCE_LABELS[session.source];
     if (label) {
       const sourceBadge = document.createElement('span');
       sourceBadge.className = 'tab-badge tab-badge--' + session.source;
       sourceBadge.textContent = label;
-      textEl.appendChild(sourceBadge);
+      metaEl.appendChild(sourceBadge);
     }
 
     // A session on another machine gets the machine's name, because "which box is this on" is
@@ -456,7 +459,7 @@
       // Show the host, not user@host: the username is noise once you know the machine.
       peerBadge.textContent = String(session.peer).split('@').pop().split('.')[0];
       peerBadge.title = 'on ' + session.peer;
-      textEl.appendChild(peerBadge);
+      metaEl.appendChild(peerBadge);
     }
 
     const workspaceBadge = document.createElement('span');
@@ -473,7 +476,10 @@
       workspaceBadge.style.backgroundColor = session.workspaceColor.background;
       workspaceBadge.style.color = session.workspaceColor.foreground || '#ffffff';
     }
-    textEl.appendChild(workspaceBadge);
+    metaEl.appendChild(workspaceBadge);
+
+    textEl.appendChild(metaEl);
+    return metaEl;
   }
 
   /**
@@ -511,12 +517,12 @@
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
 
-    appendSessionMetaRows(textEl, session);
+    const metaEl = appendSessionMeta(textEl, session);
 
     const timeEl = document.createElement('span');
     timeEl.className = 'tab-time';
     timeEl.textContent = formatRelativeTime(session.updatedAt);
-    textEl.appendChild(timeEl);
+    metaEl.appendChild(timeEl);
 
     tab.appendChild(statusEl);
     tab.appendChild(textEl);
@@ -591,12 +597,12 @@
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
 
-    appendSessionMetaRows(textEl, session);
+    const metaEl = appendSessionMeta(textEl, session);
 
     const timeEl = document.createElement('span');
     timeEl.className = 'history-time';
     timeEl.textContent = formatRelativeTime(session.updatedAt);
-    textEl.appendChild(timeEl);
+    metaEl.appendChild(timeEl);
 
     item.appendChild(textEl);
 

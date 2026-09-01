@@ -280,7 +280,9 @@ describe('webview: keyboard and screen-reader access', () => {
     expect(provider).toContain('aria-modal="true"');
     expect(provider).toContain('aria-labelledby="about-title"');
     // Focus moves in, is trapped on the single control, and goes back where it came from.
-    expect(menu).toContain('aboutOpener = document.activeElement');
+    // Opened from the ☰ menu, the element that had focus is a menu item about to be removed —
+    // restoring focus to it would put it on a detached node.
+    expect(menu).toContain('aboutOpener = menuEl ? menuBtn : document.activeElement');
     expect(menu).toContain('aboutOpener.focus()');
     expect(menu).toMatch(/'Tab'[\s\S]{0,160}aboutClose\.focus\(\)/);
   });
@@ -300,5 +302,29 @@ describe('webview: keyboard and screen-reader access', () => {
       expect(opacity, selector).toBeGreaterThanOrEqual(0.75);
     }
     expect(css).toMatch(/\.activity-timeago[^}]*opacity: 0\.8/);
+  });
+});
+
+// Layout: a session row used to stack title, source badge, machine pill, workspace pill and
+// timestamp on five separate lines, and the two new-session buttons used to split every remaining
+// pixel of the toolbar between them.
+describe('webview: the row and the toolbar fit a narrow sidebar', () => {
+  const dir = path.join(__dirname, '..', 'webview');
+  const main = fs.readFileSync(path.join(dir, 'main.js'), 'utf8');
+  const css = fs.readFileSync(path.join(dir, 'styles.css'), 'utf8');
+
+  it('puts the badges and the timestamp on one wrapping line', () => {
+    expect(main).toContain("metaEl.className = 'tab-meta'");
+    // The timestamp joins the line rather than starting a new one.
+    expect(main).toMatch(/metaEl\.appendChild\(timeEl\)/);
+    const rule = css.match(/\.tab-meta\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('flex-wrap: wrap');
+  });
+
+  it('keeps the new-session buttons a fixed width', () => {
+    const rule = css.match(/#new-session-btn,\s*\n#new-bob-session-btn\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(rule).toContain('flex: 0 0 auto');
+    expect(rule).toMatch(/width: \d+px/);
+    expect(rule).not.toContain('flex: 1 1 auto');
   });
 });
