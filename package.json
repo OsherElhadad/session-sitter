@@ -25,6 +25,9 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
+  "bin": {
+    "session-sitter": "./out/cli/index.js"
+  },
   "extensionDependencies": [
     "Anthropic.claude-code"
   ],
