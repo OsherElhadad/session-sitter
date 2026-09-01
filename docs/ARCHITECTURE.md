@@ -118,12 +118,16 @@ For each file in ~/.claude/sessions/:
   2. Skip if entrypoint != "claude-vscode"          (ignore CLI sessions)
   3. Skip if startedAt < (now - 24h)                (ignore zombie processes)
   4. process.kill(pid, 0)  →  throws if dead         (PID liveness check)
-  5. Read /proc/<pid>/stat field 21 (starttime)      (kernel jiffies since boot)
-  6. Compare to procStart  →  skip if mismatch       (PID recycling guard)
+  5. Collect every surviving candidate, then cross-check its start time:
+       on Linux    /proc/<pid>/stat field 21 == procStart   (kernel jiffies since boot)
+       elsewhere   one `ps -o pid=,lstart=` for all of them, compared as instants
+  6. Skip on a mismatch                              (PID recycling guard)
   7. Add sessionId to the active set
 ```
 
-The `procStart` comparison is the key insight: Linux can reuse a PID after a process dies. By storing and comparing the kernel start-time, we can distinguish the *original* Claude process from an unrelated process that happened to get the same PID later.
+The `procStart` comparison is the key insight: an OS can reuse a PID after a process dies. By storing and comparing the process start-time, we can distinguish the *original* Claude process from an unrelated process that happened to get the same PID later.
+
+Step 5 branches because `/proc` is Linux-only, and reading it on macOS threw for every session, which judged the whole worklist dead. The `ps` path asks about every candidate PID in **one** spawn, because this runs on a 5 s poll. Two details it has to get right: Claude writes `procStart` in UTC while `ps` prints the machine's local zone, so the two are compared as instants rather than as text; and when `ps` cannot be run, or says nothing parsable about a PID, the `kill(pid, 0)` signal alone decides — losing the recycling guard beats losing the feature.
 
 ### Why not VS Code's tab API?
 
@@ -132,7 +136,7 @@ The `procStart` comparison is the key insight: Linux can reuse a PID after a pro
 ### Fallback chain
 
 ```
-1. Tab API (duck-typed viewType check)      →  if produces matches: use tab titles
+1. Tab API (duck-typed viewType check)      →  if it produces matches: use tab titles
 2. ~/.claude/sessions/ PID liveness         →  primary detection (always tried)
 3. 2-hour recency window                    →  last resort if session files unreadable
 ```
