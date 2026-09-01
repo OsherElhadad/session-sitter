@@ -411,6 +411,7 @@ Every document is indexed in [`docs/README.md`](docs/README.md). The short versi
 | [`docs/KNOWLEDGE.md`](docs/KNOWLEDGE.md) | the BDI schema, the three tiers, routing |
 | [`docs/CORPUS.md`](docs/CORPUS.md) | collecting sessions, bulk import, secret masking |
 | [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) | every setting, environment variable, flag and command |
+| [`docs/PLUGIN.md`](docs/PLUGIN.md) | the Claude Code plugin: install, the hooks, the practices format, the audit trail |
 
 ---
 
