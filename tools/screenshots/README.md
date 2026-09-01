@@ -7,6 +7,19 @@ Renders the **real** Session Sitter panel in a real browser and writes the PNGs 
 make screenshots            # or: node tools/screenshots/capture.mjs [outDir]
 ```
 
+`--root` picks which checkout's UI to photograph — its `src/webview/` and its provider — and
+defaults to the repo the script lives in. Pointing it at another worktree is how you get before/after
+images of a branch that touches the webview:
+
+```sh
+node tools/screenshots/capture.mjs /tmp/before --root /path/to/main-worktree
+node tools/screenshots/capture.mjs /tmp/after  --root /path/to/branch-worktree
+# rendering is byte-deterministic, so `cmp` names exactly which shots the branch changed
+```
+
+The output directory is always relative to *this* checkout, never to `--root`, so aiming the harness
+at a sibling worktree cannot write PNGs into it.
+
 ## Why this works at all
 
 The panel is a webview built from plain files — `src/webview/styles.css`, `src/webview/main.js`,

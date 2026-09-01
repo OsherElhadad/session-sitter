@@ -17,7 +17,14 @@
  * whatever global or npx location already has it, and when it is missing this script says so and
  * exits 0 — so `make check` and CI never depend on a browser.
  *
- * Usage:  node tools/screenshots/capture.mjs [outDir]
+ * Usage:  node tools/screenshots/capture.mjs [outDir] [--root <repo>]
+ *
+ * `--root` is which checkout's UI to photograph — its src/webview/ and its provider. It defaults to
+ * the repo this script lives in, and pointing it at another worktree is how you get before/after
+ * images of a branch that changes the webview:
+ *
+ *   node tools/screenshots/capture.mjs /tmp/before --root /path/to/main-worktree
+ *   node tools/screenshots/capture.mjs /tmp/after  --root /path/to/branch-worktree
  */
 
 import { createRequire } from 'node:module';
@@ -28,9 +35,17 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(HERE, '..', '..');
+/** The checkout this script lives in — where a plain `make screenshots` writes its PNGs. */
+const SELF_ROOT = resolve(HERE, '..', '..');
+
+const args = process.argv.slice(2);
+const rootFlag = args.indexOf('--root');
+/** The checkout whose UI is photographed: its src/webview/, its provider, its version. */
+const ROOT = rootFlag === -1 ? SELF_ROOT : resolve(args.splice(rootFlag, 2)[1] ?? '.');
 const WEBVIEW = join(ROOT, 'src', 'webview');
-const OUT_DIR = resolve(process.argv[2] ?? join(ROOT, 'docs', 'screenshots'));
+// Deliberately relative to this checkout, not to --root: pointing the harness at another worktree
+// must not write PNGs into it.
+const OUT_DIR = resolve(args[0] ?? join(SELF_ROOT, 'docs', 'screenshots'));
 
 const SIDEBAR_WIDTH = 340;
 // Tall enough for the whole worklist plus a card or two of the feed, which is what a sidebar
@@ -299,6 +314,7 @@ async function main() {
 
   console.log(`playwright ${version} from ${from}`);
   console.log(`chromium ${browser.version()}`);
+  if (ROOT !== SELF_ROOT) { console.log(`photographing the UI in ${ROOT}`); }
 
   mkdirSync(OUT_DIR, { recursive: true });
   const scratch = mkdtempSync(join(tmpdir(), 'session-sitter-shots-'));
