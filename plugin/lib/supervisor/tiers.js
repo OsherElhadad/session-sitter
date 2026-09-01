@@ -22,11 +22,24 @@ exports.redAssessment = redAssessment;
 exports.greenAssessment = greenAssessment;
 const models_1 = require("./models");
 const transcript_1 = require("./transcript");
-/** Read-only agent tools — safe to auto-approve without a model call. */
-const READ_TOOLS = new Set([
+/**
+ * Tools that are safe to auto-approve without a model call. Almost all of them only read, but
+ * `TodoWrite` writes — to Claude's own scratch todo list, which is why the set is named for what
+ * it means (safe) rather than for what most of it does. Both naming schemes appear in practice:
+ * IBM Bob's snake_case tools and Claude Code's capitalised ones. Matched exactly and
+ * case-sensitively, so Claude's mutating `Write` can never be mistaken for a read.
+ *
+ * Claude's `WebFetch` and `WebSearch` are deliberately absent. They mutate nothing, but they aim
+ * outside the machine — what they send, and to whom, is exactly the kind of judgment the
+ * classifier exists to make.
+ */
+const SAFE_TOOLS = new Set([
     'read_file', 'list_files', 'search_files', 'list_code_definition_names',
     'glob', 'grep', 'codebase_search',
+    'Read', 'Glob', 'Grep', 'NotebookRead', 'TodoWrite', 'BashOutput',
 ]);
+/** The shell tools, whose command argument decides the answer. Both call the argument `command`. */
+const SHELL_TOOLS = new Set(['execute_command', 'Bash']);
 /** Safe, non-mutating shell commands (matched against the `command` argument). */
 const SAFE_COMMAND = /^\s*(ls|cat|pwd|echo|head|tail|wc|grep|rg|find|which|env|date|whoami|git\s+(status|log|diff|show|branch|remote|rev-parse|config\s+--get))\b/i;
 // These hard-coded destructive patterns mirror the team BDI reds (protected-branch push,
@@ -60,10 +73,10 @@ function isSafeRead(session) {
         return false;
     }
     const name = (p.name ?? '').trim();
-    if (READ_TOOLS.has(name)) {
+    if (SAFE_TOOLS.has(name)) {
         return true;
     }
-    if (name === 'execute_command') {
+    if (SHELL_TOOLS.has(name)) {
         const cmd = p.arguments ? String(p.arguments.command ?? '') : '';
         return SAFE_COMMAND.test(cmd);
     }

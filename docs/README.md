@@ -9,6 +9,12 @@ Everything in `docs/`, and what each file is for. Start with whichever question 
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | how sessions are detected, what each component does, how a click switches a session, how peer machines are reached, and how a blocked prompt is resolved through the agent bridges |
 | [`CONFIGURATION.md`](CONFIGURATION.md) | every setting, every environment-variable fallback, every CLI flag and every command — the reference, not a tutorial |
 
+## The Claude Code plugin
+
+| Document | Read it when you want to know |
+|---|---|
+| [`PLUGIN.md`](PLUGIN.md) | the two install commands, what each hook decides and inside what budget, the practices-file format with a worked example, the audit-trail records field by field — and, at the end, what this deliberately does not do |
+
 ## Supervision
 
 | Document | Read it when you want to know |
