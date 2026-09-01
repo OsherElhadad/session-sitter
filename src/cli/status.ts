@@ -8,9 +8,10 @@
 
 import { sortSessions, isSessionSortMode, SESSION_SORT_MODES } from '../sessionSort';
 import type { ClaudeSession } from '../sessionScan';
+import { SESSION_STATUSES, isBlockedOnYou, type SessionStatus } from '../sessionStatus';
 import {
-  NEEDS_ME_SORT, attentionOf, collectSessions, filterSessions, localHost, peerHost,
-  sortByAttention, type Attention, type CollectOptions, type Worklist,
+  collectSessions, filterSessions, localHost, peerHost,
+  type CollectOptions, type Worklist,
 } from './sessions';
 import { CliError, flagBool, flagNumber, flagString, parseFlags, type FlagSpec } from './args';
 import { humanAge, parseSince } from './time';
@@ -19,10 +20,15 @@ import {
   type ColorName, type Io, type Paint,
 } from './render';
 
+/** Every order `--sort` accepts — the same six the panel's sort menu offers. */
+const SORT_MODES: readonly string[] = SESSION_SORT_MODES.map(m => m.id);
+
 /**
- * Every order `--sort` accepts: the CLI's own worklist order, then the six the panel defines.
+ * The default order: `status`, which `sessionSort` ranks by urgency — approval, question,
+ * finished, working, seen, dormant. That is the worklist order, so the terminal does not need one
+ * of its own.
  */
-const SORT_MODES: readonly string[] = [NEEDS_ME_SORT, ...SESSION_SORT_MODES.map(m => m.id)];
+const DEFAULT_SORT = 'status';
 
 export const HELP = `session-sitter status — every agent session, and which of them need you
 
@@ -36,16 +42,21 @@ Options:
   --agent NAME        only claude, bob, codex or chat
   --needs-me          only sessions whose turn it is for a human
   --sort MODE         ${SORT_MODES.join(', ')}
-                      (default: needs-me — sessions waiting on a human first)
+                      (default: ${DEFAULT_SORT} — most urgent first)
   --peers             also pull sessions from peer machines over SSH
   --watch [SECONDS]   redraw in place every SECONDS (default: 5); Ctrl-C to stop
   --json              machine-readable output (see docs/CLI.md for the contract)
   -h, --help          show this help
 
-Statuses:
-  needs you   the agent finished and the transcript is quiet — your turn
-  working     tools are running or a reply is streaming
-  queued      a prompt has landed and the agent has not started answering it
+Statuses, most urgent first (docs/STATUS-INDICATORS.md has the full rules):
+  approval    paused on a permission prompt — your yes/no unblocks it
+  question    asked you something — needs an answer typed
+  finished    done, and you have not opened it since
+  working     running a tool or writing a reply — nothing for you to do
+  seen        done, and you have read it
+  dormant     nothing happening, or no signal to tell
+
+--needs-me keeps approval and question: the two states where nothing moves until you act.
 `;
 
 const SPEC: FlagSpec = {
@@ -65,10 +76,21 @@ const AGENTS: Readonly<Record<string, string>> = {
   claude: 'Claude', bob: 'Bob', codex: 'Codex', chat: 'Chat',
 };
 
-const INDICATOR: Readonly<Record<Attention, { glyph: string; label: string; color: ColorName }>> = {
-  'needs-you': { glyph: '●', label: 'needs you', color: 'yellow' },
-  working: { glyph: '▸', label: 'working', color: 'green' },
-  queued: { glyph: '◦', label: 'queued', color: 'cyan' },
+/**
+ * One marker per state, matching `docs/STATUS-INDICATORS.md` in meaning and in urgency order.
+ *
+ * A distinct glyph per state, not merely a distinct colour, for the same reason the panel uses
+ * distinct shapes: colour is the first thing a terminal theme overrides and the first thing a
+ * colour-blind reader loses, and `NO_COLOR` drops it entirely. Keyed by every state, so a seventh
+ * fails to compile here rather than rendering blank.
+ */
+const INDICATOR: Readonly<Record<SessionStatus, { glyph: string; label: string; color: ColorName }>> = {
+  approval: { glyph: '!', label: 'approval', color: 'yellow' },
+  question: { glyph: '?', label: 'question', color: 'yellow' },
+  finished: { glyph: '◉', label: 'finished', color: 'green' },
+  working: { glyph: '▸', label: 'working', color: 'cyan' },
+  seen: { glyph: '·', label: 'seen', color: 'gray' },
+  dormant: { glyph: '○', label: 'dormant', color: 'gray' },
 };
 
 const DEFAULT_WINDOW = '24h';
@@ -98,8 +120,8 @@ function parse(argv: readonly string[], io: Io): StatusOptions {
     throw new CliError('--all and --since contradict each other; pick one');
   }
 
-  const sort = flagString(args, '--sort') ?? NEEDS_ME_SORT;
-  if (sort !== NEEDS_ME_SORT && !isSessionSortMode(sort)) {
+  const sort = flagString(args, '--sort') ?? DEFAULT_SORT;
+  if (!isSessionSortMode(sort)) {
     throw new CliError(`unknown --sort "${sort}" — one of ${SORT_MODES.join(', ')}`);
   }
 
@@ -139,17 +161,16 @@ async function worklist(
   const filtered = filterSessions(source.sessions, {
     since: options.since, agent: options.agent, needsMe: options.needsMe,
   });
-  const ordered = options.sort === NEEDS_ME_SORT
-    ? sortByAttention(filtered)
-    : sortSessions(filtered, options.sort);
-  return { sessions: ordered, source };
+  return { sessions: sortSessions(filtered, options.sort), source };
 }
 
 // ── Plain text ──────────────────────────────────────────────────────────────
 
-function counts(sessions: readonly ClaudeSession[]): Record<Attention, number> {
-  const tally: Record<Attention, number> = { 'needs-you': 0, working: 0, queued: 0 };
-  for (const s of sessions) { tally[attentionOf(s)] += 1; }
+/** How many sessions are in each state. Every state is present, at zero if need be. */
+function counts(sessions: readonly ClaudeSession[]): Record<SessionStatus, number> {
+  const tally = Object.fromEntries(
+    SESSION_STATUSES.map(s => [s, 0])) as Record<SessionStatus, number>;
+  for (const s of sessions) { tally[s.status] += 1; }
   return tally;
 }
 
@@ -158,11 +179,15 @@ function summary(
 ): string {
   const tally = counts(sessions);
   const window = options.since ? `updated in the last ${humanAge(options.since, now)}` : 'all time';
+  const blocked = tally.approval + tally.question;
+  // Only the states actually present are named. Listing all six with four zeroes reads as noise,
+  // and the count that matters is the one you have to act on.
   const parts = [
     `${sessions.length} session${sessions.length === 1 ? '' : 's'}`,
-    paint(`${tally['needs-you']} need you`, 'yellow'),
-    `${tally.working} working`,
-    `${tally.queued} queued`,
+    paint(`${blocked} blocked on you`, blocked > 0 ? 'yellow' : 'dim'),
+    ...SESSION_STATUSES
+      .filter(s => !isBlockedOnYou(s) && tally[s] > 0)
+      .map(s => `${tally[s]} ${s}`),
   ];
   return `${parts.join(paint(' · ', 'dim'))}${paint(`  (${window})`, 'dim')}`;
 }
@@ -190,7 +215,7 @@ export function renderText(
     ];
     const here = localHost();
     const rows = sessions.map(s => {
-      const indicator = INDICATOR[attentionOf(s)];
+      const indicator = INDICATOR[s.status] ?? INDICATOR.dormant;
       return [
         paint(indicator.glyph, indicator.color),
         paint(indicator.label, indicator.color),
@@ -224,15 +249,17 @@ export function renderText(
  * The `--json` contract, version 1.
  *
  * Versioned and documented because other tools will read it. Two rules for changing it: fields are
- * added, never repurposed, and `version` goes up the day a field's meaning changes. `status` is the
- * raw value the store reported; `attention` is what it means for a human. Both are present because
- * the first is what the extension shows and the second is what a script wants to branch on.
+ * added, never repurposed, and `version` goes up the day a field's meaning changes.
+ *
+ * `status` is one of the six states in `sessionStatus.ts`, the same value the panel renders — a
+ * script and the IDE therefore agree about every session. `blockedOnYou` is carried alongside it so
+ * a consumer does not have to hard-code which two of the six those are.
  */
 export interface StatusJson {
   version: 1;
   generatedAt: string;
   host: string;
-  counts: { total: number } & Record<Attention, number>;
+  counts: { total: number } & Record<SessionStatus, number>;
   sessions: Array<{
     sessionId: string;
     agent: string;
@@ -240,8 +267,9 @@ export interface StatusJson {
     workspace: { name: string; path: string };
     machine: string;
     local: boolean;
-    status: string;
-    attention: Attention;
+    status: SessionStatus;
+    /** True for `approval` and `question` — the states where nothing moves until you act. */
+    blockedOnYou: boolean;
     updatedAt: string;
     ageSeconds: number;
   }>;
@@ -266,7 +294,7 @@ export function renderJson(
       machine: s.peer ? peerHost(s.peer) : here,
       local: !s.peer,
       status: s.status,
-      attention: attentionOf(s),
+      blockedOnYou: isBlockedOnYou(s.status),
       updatedAt: s.updatedAt.toISOString(),
       ageSeconds: Math.max(0, Math.round((now.getTime() - s.updatedAt.getTime()) / 1000)),
     })),

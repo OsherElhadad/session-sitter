@@ -89,8 +89,8 @@ session-sitter status [options]
 | `--since WHEN` | `24h` | only sessions updated since `WHEN` |
 | `--all` | off | no time window — every session on disk, however old. Contradicts `--since`. |
 | `--agent NAME` | all | one of `claude`, `bob`, `codex`, `chat` |
-| `--needs-me` | off | only sessions whose turn it is for a human |
-| `--sort MODE` | `needs-me` | see [orders](#orders) |
+| `--needs-me` | off | only `approval` and `question` — see [statuses](#statuses) |
+| `--sort MODE` | `status` | see [orders](#orders) |
 | `--peers` | off | also pull sessions from peer machines over SSH |
 | `--watch [SECONDS]` | off (`5` when bare) | redraw in place on an interval; Ctrl-C to stop |
 | `--json` | off | machine-readable ([contract](#status-json)) |
@@ -98,27 +98,47 @@ session-sitter status [options]
 
 ### Statuses
 
-The store reports one of three raw values; the CLI names what each means **for you**:
+Six states, the same set the panel renders. The rules that pick one live in
+[`src/sessionStatus.ts`](../src/sessionStatus.ts) and are written out in
+[`docs/STATUS-INDICATORS.md`](STATUS-INDICATORS.md); the terminal derives nothing of its own, so a
+row here and a row in the IDE always agree.
 
-| Raw `status` | Shown as | Means |
-|---|---|---|
-| `idle` | `needs you` | the agent finished and the transcript has been quiet — your turn |
-| `active` | `working` | tools are running or a reply is streaming — nothing for you to do |
-| `waiting` | `queued` | a prompt has landed and the agent has not started answering. Normally momentary; a session stuck here is a wedged session. |
+Listed most urgent first, which is also the default order:
 
-`--needs-me` keeps only `needs you`.
+| Marker | State | Means | Your move |
+|:---:|---|---|---|
+| `!` | `approval` | Paused on a permission prompt | Approve or reject it |
+| `?` | `question` | Asked you something | Answer it |
+| `◉` | `finished` | Done, and you have not opened it since | Read the result |
+| `▸` | `working` | Running a tool, or writing a reply | Nothing — it is busy |
+| `·` | `seen` | Done, and you have read it | Nothing |
+| `○` | `dormant` | Nothing happening, or no signal to tell | Nothing |
+
+The terminal reports the state a session's own storage supports. Splitting `finished` into `seen`
+(you have read it) needs the timestamp of when you last opened the row, which the extension keeps in
+its own VS Code state rather than in any agent's store — so **`seen` never appears in the CLI**, and
+a result you have read reads `finished` here. Nothing else differs.
+
+Every state gets its own glyph, not merely its own colour — a terminal theme can override the
+palette, `NO_COLOR` removes it entirely, and colour alone is not readable for everyone. The glyph is
+what survives all three.
+
+**`--needs-me` keeps `approval` and `question`**, and nothing else: those are the two states where
+nothing moves until you act. Not `finished` — an unread result is worth a look, but nothing is
+stalled waiting for you to look at it, and a to-do list containing everything you have not read is
+not a to-do list. (The extension's wider `needsYou` predicate, which does include `finished`, is
+what dims a row in the panel; the terminal filter is the narrower `isBlockedOnYou`.)
 
 ### Orders
 
-`--sort` accepts the six orders [`src/sessionSort.ts`](../src/sessionSort.ts) defines — `recent`,
-`hostWorkspace`, `workspace`, `source`, `title`, `status` — plus one the CLI adds:
+`--sort` accepts the six orders [`src/sessionSort.ts`](../src/sessionSort.ts) defines: `status`
+(the default), `recent`, `hostWorkspace`, `workspace`, `source`, `title`. They are the same six the
+panel's sort menu offers, and they behave identically.
 
-- **`needs-me`** (default) — `needs you` first, then `working`, then `queued`; newest first inside
-  each group, tie-broken on session id so the order holds between passes.
-
-`needs-me` is not `sessionSort`'s `status` mode. That mode ranks `waiting` ahead of `active` ahead
-of `idle`, which by the rules above leads with the sessions that need you *least*. `--sort status`
-still gives the panel's ordering exactly; the CLI just does not make it the default.
+**`status`** is the urgency ranking — `approval`, `question`, `finished`, `working`, `seen`,
+`dormant`, newest first inside each group and tie-broken on session id so the order holds between
+passes. It is the panel's "Needs you first", and it is the right default for a worklist, so the
+terminal does not define an order of its own.
 
 ### The time window, and why there is one
 
@@ -311,7 +331,9 @@ repurposed**, and `version` goes up the day a field's meaning changes. An unreco
   "version": 1,
   "generatedAt": "2026-09-01T08:12:44.101Z",
   "host": "buildbox",
-  "counts": { "total": 11, "needs-you": 8, "working": 3, "queued": 0 },
+  "counts": {
+    "total": 11, "approval": 2, "question": 0, "finished": 3, "working": 1, "seen": 4, "dormant": 1
+  },
   "sessions": [
     {
       "sessionId": "ad5078c2-07a1-43a2-a01b-a88d72925d2c",
@@ -320,8 +342,8 @@ repurposed**, and `version` goes up the day a field's meaning changes. An unreco
       "workspace": { "name": "session-sitter", "path": "/Users/u/session-sitter" },
       "machine": "buildbox",
       "local": true,
-      "status": "idle",
-      "attention": "needs-you",
+      "status": "approval",
+      "blockedOnYou": true,
       "updatedAt": "2026-09-01T08:11:58.707Z",
       "ageSeconds": 45
     }
@@ -335,15 +357,16 @@ repurposed**, and `version` goes up the day a field's meaning changes. An unreco
 | Field | Notes |
 |---|---|
 | `host` | this machine's short name |
-| `counts` | `total` plus one key per `attention` value |
+| `counts` | `total` plus one key per state, always all six, at `0` when empty |
 | `agent` | `claude` \| `bob` \| `codex` \| `chat` |
 | `machine` | short host; this machine for a local session, the peer's for a remote one |
-| `status` | the **raw** value the store reported — what the extension shows |
-| `attention` | what it means for a human: `needs-you` \| `working` \| `queued` — branch on this |
+| `status` | one of `approval` \| `question` \| `finished` \| `working` \| `seen` \| `dormant` — the same value the panel renders |
+| `blockedOnYou` | `true` for `approval` and `question`, so a consumer need not hard-code which two those are |
 | `peers` | empty unless `--peers`; `sessionCount` and `error` are `null` when not reported |
 
-Both `status` and `attention` are present because the first is what the panel displays and the
-second is what a script wants to branch on.
+`status` is the single source of truth and `blockedOnYou` is derived from it — a consumer may branch
+on either. The six values are a closed set: a seventh state would be a `version` bump, because a
+switch over the six is the natural way to read this field.
 
 ### `log --json` <a id="log-json"></a>
 
