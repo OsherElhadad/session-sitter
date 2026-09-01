@@ -1,0 +1,87 @@
+name: Bug report
+description: A session that does not appear, a click that does not work, a supervision decision that went wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not report a **security** vulnerability here — use
+        [Security → Advisories](https://github.com/eranra/session-sitter/security/advisories)
+        so a fix can land before the details are public.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part
+      options:
+        - The session list (a session missing, stale, or in the wrong section)
+        - Switching or closing a session
+        - Hover preview or Copy transcript
+        - Supervision (a classification, a decision card, a timeout)
+        - Auto-respond rules
+        - Sessions from other machines
+        - Upload to Corpus
+        - Build, packaging, or install
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent's sessions
+      description: Skip if it is not about a specific source.
+      multiple: true
+      options: [Claude Code, IBM Bob IDE, Codex CLI, VS Code Chat]
+
+  - type: input
+    id: version
+    attributes:
+      label: Session Sitter version
+      description: '**☰ → About** in the panel, or `make version`.'
+      placeholder: 0.8.0
+    validations:
+      required: true
+
+  - type: input
+    id: ide
+    attributes:
+      label: IDE and version
+      placeholder: VS Code 1.99.0 / IBM Bob IDE 1.x / Cursor
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: >-
+        Include whether this is a remote window (WSL, SSH, dev container). Claude liveness detection
+        reads `/proc/<pid>/stat`, so it is weaker outside Linux and WSL.
+      placeholder: WSL2 (Ubuntu 24.04) on Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Output channel
+      description: >-
+        **View → Output → Session Sitter**. The `state dir:` line on activation is often the whole
+        answer. Redact paths and tokens you would rather not publish.
+      render: text
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Relevant settings
+      description: 'Your `sessionSitter.*` settings, with any token replaced by `…`.'
+      render: jsonc

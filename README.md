@@ -307,7 +307,10 @@ the full gate, and publishes the `.vsix` to a GitHub Release.
 
 ## Contributing
 
-Issues and pull requests welcome. Run `make check` before you push; CI runs the same thing.
+Issues and pull requests welcome. Run `make check` before you push; CI runs the same thing. The
+details — the guards, the TypeScript-only rule, the commit voice, the release process — are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md). For a vulnerability, please use the private path in
+[`SECURITY.md`](SECURITY.md) rather than an issue.
 
 ## License
 
