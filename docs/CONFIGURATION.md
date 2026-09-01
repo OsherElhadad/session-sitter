@@ -100,6 +100,40 @@ The Settings UI groups them under the same headings this section uses. Two group
 | `sessionSitter.supervisor.anthropicBaseUrl` | `""` | Gateway passed into the `claude` subprocess. Empty falls back to `ANTHROPIC_BASE_URL`. |
 | `sessionSitter.supervisor.anthropicAuthToken` | `""` | Token passed into the `claude` subprocess. Empty falls back to `ANTHROPIC_AUTH_TOKEN`. |
 | `sessionSitter.supervisor.classifierTimeoutSeconds` | `300` | Per-invocation classifier timeout (both engines). |
+| `sessionSitter.supervisor.fastClassifier` | `true` | Judge an ambiguous action with the **fast** tier first — one prompt-cached HTTP call instead of a whole agent CLI. The CLI above stays as the fallback. See [below](#the-fast-classifier). |
+| `sessionSitter.supervisor.fastClassifierModel` | `""` | Model the fast tier judges with. Empty uses the **agent's own** `ANTHROPIC_MODEL`, minus any trailing `[1m]`. |
+| `sessionSitter.supervisor.fastClassifierTimeoutSeconds` | `10` | How long the fast tier may take before the action goes to the agent CLI instead. |
+| `sessionSitter.supervisor.fastClassifierBaseUrl` | `""` | Gateway the fast tier posts `/v1/messages` to. Empty falls back to `sessionSitter.supervisor.anthropicBaseUrl`. |
+
+### The fast classifier
+
+Three tiers now decide an action, and each one only sees what the tier above it could not settle:
+
+| Tier | Cost | What it is |
+|---|---|---|
+| deterministic rules | ~3ms | The read-only and unambiguously-destructive tables in `tiers.ts`. No model at all. |
+| **fast classifier** | ~4-6s | One `POST /v1/messages` that reuses the agent's own paused conversation as a prompt-cached prefix. |
+| agent CLI | ~13.5s | A whole `bob` / `claude` subprocess. Now only for the edge cases the fast tier hands over. |
+
+The fast tier is fast because it barely sends anything new. The agent's conversation goes in the
+`messages` array with a cache breakpoint on its last block, and because a conversation only ever
+grows at the end, the prefix cached by the previous decision is still a prefix of the next one.
+Measured against a real gateway, **98.9% of the prompt was a cache read** and only ~770 tokens were
+written per decision. `docs/superpowers/specs/2026-09-02-fast-supervisor.md` has the mechanism, the
+numbers and the command that produced them.
+
+It needs three things, and stays silently off without them — the agent CLI then classifies exactly
+as it did before:
+
+- a gateway: `fastClassifierBaseUrl`, else `anthropicBaseUrl`, else `ANTHROPIC_BASE_URL`
+- a token: `anthropicAuthToken`, else `ANTHROPIC_AUTH_TOKEN`
+- a model: `fastClassifierModel`, else the agent's own `ANTHROPIC_MODEL`
+
+**It never approves on doubt.** A timeout, an HTTP error, an unparsable verdict, a verdict that
+fails the assessment schema, or a self-reported confidence below `0.6` all hand the decision down
+to the agent CLI. Every attempt is recorded on the decision either way — a `tier_fast_llm` event
+when it answered, a `fast_llm_fell_back` event when it did not, both carrying the real latency and
+the four token counts. The activity feed and the audit trail therefore show what each tier cost.
 
 ### Messaging
 
@@ -200,8 +234,13 @@ input.
 | `BOB_CLI_PATH` | `bob` | Override when `bob` is not on `PATH`. |
 | `CLAUDE_CLI_PATH` | `claude` | Override when `claude` is not on `PATH`. |
 | `CLAUDE_TIMEOUT_SECONDS` | `300` | Per-invocation classifier timeout (both engines). |
-| `ANTHROPIC_BASE_URL` | — | Gateway passed into the `claude` subprocess. |
-| `ANTHROPIC_AUTH_TOKEN` | — | Token passed into the `claude` subprocess. |
+| `ANTHROPIC_BASE_URL` | — | Gateway passed into the `claude` subprocess, and the fast tier's default gateway. |
+| `ANTHROPIC_AUTH_TOKEN` | — | Token passed into the `claude` subprocess, and the fast tier's token. |
+| `ANTHROPIC_MODEL` | — | The **agent's own** model. The fast tier judges with it by default, minus any trailing `[1m]` — a suffix an agent harness understands but a plain Messages endpoint rejects. |
+| `FAST_CLASSIFIER` | `1` | Set `0` to turn the fast tier off and go straight to the agent CLI. |
+| `FAST_CLASSIFIER_MODEL` | — | Override the fast tier's model. |
+| `FAST_CLASSIFIER_TIMEOUT_SECONDS` | `10` | Fast-tier timeout, after which the agent CLI takes the decision. |
+| `FAST_CLASSIFIER_BASE_URL` | — | Override the fast tier's gateway. |
 
 ### Messaging
 

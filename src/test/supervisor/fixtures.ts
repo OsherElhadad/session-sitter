@@ -12,6 +12,7 @@ import * as path from 'path';
 import { OutboxAgentController } from '../../supervisor/agentControl';
 import { SupervisorConfig, ensureDirs, historyDir, outboxDir, recordsDir } from '../../supervisor/config';
 import { ClassifierEngine } from '../../supervisor/engine';
+import { FastClassifier } from '../../supervisor/fastClassifier';
 import { FetchFn, Tier } from '../../supervisor/knowledge';
 import { FakeChannel, MessagingChannel } from '../../supervisor/messaging';
 import { Orchestrator } from '../../supervisor/orchestrator';
@@ -235,6 +236,11 @@ export function makeConfig(stateDir: string, overrides: Partial<SupervisorConfig
     bobShellApiKey: null,
     anthropicBaseUrl: null,
     anthropicAuthToken: null,
+    agentModel: null,
+    fastClassifierEnabled: false,
+    fastClassifierModel: null,
+    fastClassifierTimeoutSeconds: 10,
+    fastClassifierBaseUrl: null,
     messagingChannel: 'stub',
     redNotify: true,
     notifyRuleDecisions: true,
@@ -268,6 +274,7 @@ export function buildTestOrchestrator(
     clock?: MutableClock;
     exported?: Record<string, unknown> | null;
     knowledgeRoot?: string;
+    fastClassifier?: FastClassifier;
     configOverrides?: Partial<SupervisorConfig>;
   } = {},
 ): TestRig {
@@ -286,6 +293,7 @@ export function buildTestOrchestrator(
     store,
     transcriptSource: new FileTranscriptSource(historyDir(config)),
     engine,
+    fastClassifier: opts.fastClassifier,
     channel,
     agentController: new OutboxAgentController(outboxDir(config)),
     clock: clock.get,

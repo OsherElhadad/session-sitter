@@ -8,7 +8,7 @@
  */
 
 import { KnowledgeBundle, KnowledgeEntry, entryPrecedence } from './knowledge';
-import { NormalizedSession, originalRequest } from './transcript';
+import { NormalizedSession, Turn, originalRequest } from './transcript';
 
 /** The exact output schema skeleton (kept in sync with schema.ts / models.Assessment). */
 export const OUTPUT_SCHEMA = `{
@@ -118,7 +118,7 @@ const SCHEMA_RULES = `OUTPUT SCHEMA RULES (follow EXACTLY — invalid output is 
 - A timeout fallback is traffic_light="yellow" with transitioned_from="orange",
   transition_reason set, and a non-empty supervisor_message_to_agent.`;
 
-function renderKnowledge(entries: KnowledgeEntry[]): string {
+export function renderKnowledge(entries: KnowledgeEntry[]): string {
   if (entries.length === 0) { return '(no BDI entries loaded)'; }
   // Narrower tier first so the model sees precedence order.
   const sorted = [...entries].sort((a, b) => entryPrecedence(b) - entryPrecedence(a));
@@ -131,28 +131,34 @@ function renderKnowledge(entries: KnowledgeEntry[]): string {
   }).join('\n');
 }
 
-function renderTurns(session: NormalizedSession, maxTurns = 40): string {
-  const turns = session.turns.slice(-maxTurns);
-  return turns.map(t => {
-    const header = `[${t.index}] ${t.role}`;
-    let body = t.text.trim();
-    if (t.toolCalls.length) {
-      const calls = t.toolCalls.map(c =>
-        `${c.name}(${JSON.stringify(c.arguments).slice(0, 400)})`
-        + (c.permission ? ` perm=${c.permission}` : ''),
-      ).join('; ');
-      body = `${body}\n    tool_calls: ${calls}`.trim();
-    }
-    if (t.toolResult !== null) {
-      body = `${body}\n    tool_result[${t.toolResult.name}] `
-        + `error=${t.toolResult.isError ? 'True' : 'False'}: ${t.toolResult.content.slice(0, 400)}`;
-      body = body.trim();
-    }
-    return `${header}: ${body}`;
-  }).join('\n');
+/**
+ * One turn's body, without its `[index] role` header. Shared with the fast tier, which carries
+ * the role on the message itself and so needs the body alone.
+ */
+export function renderTurn(t: Turn): string {
+  let body = t.text.trim();
+  if (t.toolCalls.length) {
+    const calls = t.toolCalls.map(c =>
+      `${c.name}(${JSON.stringify(c.arguments).slice(0, 400)})`
+      + (c.permission ? ` perm=${c.permission}` : ''),
+    ).join('; ');
+    body = `${body}\n    tool_calls: ${calls}`.trim();
+  }
+  if (t.toolResult !== null) {
+    body = `${body}\n    tool_result[${t.toolResult.name}] `
+      + `error=${t.toolResult.isError ? 'True' : 'False'}: ${t.toolResult.content.slice(0, 400)}`;
+    body = body.trim();
+  }
+  return body;
 }
 
-function renderPending(session: NormalizedSession): string {
+function renderTurns(session: NormalizedSession, maxTurns = 40): string {
+  return session.turns.slice(-maxTurns)
+    .map(t => `[${t.index}] ${t.role}: ${renderTurn(t)}`)
+    .join('\n');
+}
+
+export function renderPending(session: NormalizedSession): string {
   const p = session.pendingAction;
   if (p === null) { return '(no explicit pending action detected)'; }
   const args = p.arguments ? JSON.stringify(p.arguments) : '-';
