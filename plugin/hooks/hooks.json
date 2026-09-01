@@ -1,0 +1,79 @@
+{
+  "description": "Session Sitter — governance decisions, session registration, and the audit trail. Every command is plain Node with no runtime dependencies; lib/ is the committed build output of the repository's TypeScript engine (see docs/PLUGIN.md).",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/permissionRequest.js\"",
+            "timeout": 60,
+            "statusMessage": "Session Sitter is applying your practices..."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/sessionStart.js\"",
+            "timeout": 5,
+            "statusMessage": "Registering this session with Session Sitter..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/postToolUse.js\"",
+            "timeout": 5,
+            "statusMessage": "Recording tool activity..."
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/postToolUse.js\"",
+            "timeout": 5,
+            "statusMessage": "Recording tool activity..."
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "idle_prompt|permission_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/notification.js\"",
+            "timeout": 5,
+            "statusMessage": "Recording how long you were waited on..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/sessionEnd.js\"",
+            "timeout": 2,
+            "statusMessage": "Closing the audit record..."
+          }
+        ]
+      }
+    ]
+  }
+}

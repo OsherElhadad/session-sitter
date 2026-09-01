@@ -12,3 +12,5 @@ Makefile
 .github/
 ci/
 .claude/
+plugin/
+.claude-plugin/

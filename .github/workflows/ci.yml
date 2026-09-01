@@ -9,6 +9,7 @@
 #   3. links       — does every relative link in the docs resolve?
 #   4. spellcheck  — are the docs free of typos?
 #   5. guards      — TypeScript only, settings consistent, one project name?
+#   6. plugin      — is the committed plugin/lib fresh, and does the manifest validate?
 #
 # Every job runs the SAME commands a developer runs locally, through the Makefile or
 # `ci/`. Nothing here is CI-only, so a green pipeline means `make check` was honest.
@@ -174,3 +175,62 @@ jobs:
       # The whole project carries one name. A leftover is a bug report waiting to happen.
       - name: No leftovers of the old project names
         run: bash ci/check-naming.sh
+
+  plugin:
+    name: Claude Code plugin
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # plugin/lib/ is committed build output, because a plugin is installed by cloning a git
+      # ref and nothing compiles it on the way in. Its one failure mode is shipping a version
+      # behind the tests that vouch for it, so the guard rebuilds and diffs.
+      - name: Compile
+        run: make compile
+
+      - name: plugin/lib is the current build of src/
+        run: bash ci/check-plugin-lib.sh
+
+      # Guarded, not required: the `claude` binary is not on a GitHub runner, and a check that
+      # fails for being unavailable teaches people to ignore CI. It runs wherever the CLI is —
+      # which is every developer's machine, via `make plugin-validate`.
+      - name: Validate the plugin manifest (when the claude CLI is available)
+        run: |
+          if command -v claude >/dev/null 2>&1; then
+            claude plugin validate ./plugin --strict
+            claude plugin validate ./.claude-plugin/marketplace.json --strict
+          else
+            echo "claude CLI not present on this runner — skipping."
+            echo "Run 'make plugin-validate' locally; it is the same two commands."
+          fi
+
+      # The hooks are the product's critical path, so prove the binaries actually run as
+      # standalone processes — a compiled module that throws on load would pass every unit
+      # test and fail at the first permission prompt.
+      - name: The hook binaries run and emit a decision
+        run: |
+          set -euo pipefail
+          export SESSION_SITTER_DATA_DIR="$(mktemp -d)"
+          decision() {
+            echo "$1" | node plugin/lib/hooks/permissionRequest.js
+          }
+          allow="$(decision '{"session_id":"ci","cwd":"/tmp","hook_event_name":"PermissionRequest","tool_name":"Read","tool_input":{"file_path":"/tmp/x"}}')"
+          echo "$allow" | grep -q '"behavior":"allow"'
+          fixed="$(decision '{"session_id":"ci","cwd":"/tmp","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}')"
+          echo "$fixed" | grep -q -- '--force-with-lease'
+          denied="$(decision '{"session_id":"ci","cwd":"/tmp","hook_event_name":"PermissionRequest","tool_name":"Write","tool_input":{"file_path":"/tmp/a","content":"x"}}')"
+          echo "$denied" | grep -q '"behavior":"deny"'
+          echo '{"session_id":"ci"}' | node plugin/statusline.js
+          node plugin/lib/audit/cli.js log
+          echo "✓ the hook binaries decide, correct and fail closed"

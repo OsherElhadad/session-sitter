@@ -109,11 +109,12 @@ coverage: node_modules $(BUILD_INFO) ## Run the tests with a coverage report
 	$(NPX) vitest run --coverage
 
 .PHONY: guards
-guards: compile ## Run every CI guard: no Python, settings match, one project name
+guards: compile ## Run every CI guard: no Python, settings match, one project name, plugin/lib fresh
 	bash ci/check-no-python.sh
 	node ci/check-settings.mjs
 	bash ci/check-naming.sh
 	node ci/check-links.mjs
+	bash ci/check-plugin-lib.sh
 
 .PHONY: check
 check: typecheck lint test ## compile + lint + test — the same gate CI applies
@@ -155,6 +156,24 @@ ls-package: compile ## List exactly what would ship inside the .vsix
 	# Same --no-dependencies as `package`, or this lists the dependency tree instead of
 	# the real VSIX contents (and fails outright when node_modules is not a full install).
 	$(VSCE) ls --no-dependencies
+
+# ---------------------------------------------------------------------------
+# The Claude Code plugin
+# ---------------------------------------------------------------------------
+
+# plugin/lib/ is COMMITTED build output: a plugin is installed by cloning a git ref, and nothing
+# compiles it on the way in, so the plugin has to ship JavaScript. `ci/check-plugin-lib.sh` rebuilds
+# it and diffs, so a stale artifact fails CI rather than shipping.
+.PHONY: plugin
+plugin: compile ## Rebuild plugin/lib/ from out/ (committed build output)
+	node scripts/build-plugin-lib.js
+	@echo
+	@echo "✓ plugin/lib rebuilt — commit it"
+
+.PHONY: plugin-validate
+plugin-validate: plugin ## Validate the plugin manifest and marketplace with the claude CLI
+	claude plugin validate ./plugin --strict
+	claude plugin validate ./.claude-plugin/marketplace.json --strict
 
 # ---------------------------------------------------------------------------
 # The bundled CLIs — the same code the extension runs, driven by hand
