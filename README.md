@@ -411,6 +411,7 @@ Every document is indexed in [`docs/README.md`](docs/README.md). The short versi
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | components, session detection, cross-machine, the supervision layer, the agent bridges |
 | [`docs/STATUS-INDICATORS.md`](docs/STATUS-INDICATORS.md) | the six row markers, and the rules that pick one — per agent |
+| [`docs/CLI.md`](docs/CLI.md) | the `session-sitter` terminal command: status, log, digest, policy check |
 | [`docs/SUPERVISION.md`](docs/SUPERVISION.md) | the traffic lights, the lifecycle, the CLI, troubleshooting |
 | [`docs/TELEGRAM.md`](docs/TELEGRAM.md) | the remote interface: setup, ownership, write limits, troubleshooting |
 | [`docs/KNOWLEDGE.md`](docs/KNOWLEDGE.md) | the BDI schema, the three tiers, routing |
