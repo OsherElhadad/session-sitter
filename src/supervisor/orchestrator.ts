@@ -25,6 +25,7 @@ import {
 import {
   Assessment,
   AssessmentInput,
+  RecordedCall,
   SupervisionRecord,
   SupervisionState,
   TrafficLight,
@@ -43,7 +44,43 @@ import { LockBusy, StateStore } from './store';
 import { applyToggle } from './telegram';
 import { actionLabel, greenAssessment, preClassify, redAssessment } from './tiers';
 import { Clock, deadlineFrom, isPast, nowUtc, toIso } from './timeutil';
-import { NormalizedSession, TranscriptError, TranscriptSource, originalRequest } from './transcript';
+import {
+  NormalizedSession,
+  PendingAction,
+  TranscriptError,
+  TranscriptSource,
+  originalRequest,
+} from './transcript';
+import { redactSecrets } from '../corpus/mask';
+
+/**
+ * The pending tool call, structured, for the record's audit trail.
+ *
+ * The verdict alone never says what was allowed, so the call that was judged is recorded next to
+ * it. Inputs are redacted first: a command line, an env assignment or a URL routinely carries a
+ * token, and a record outlives the session by design. The call is never reconstructed from prose
+ * — no pending action, or a pending action with no tool name, means no call.
+ */
+export function recordedCall(pending: PendingAction | null): RecordedCall | null {
+  if (pending === null || !pending.name) { return null; }
+  return {
+    tool_name: pending.name,
+    input: pending.arguments === null
+      ? null
+      : redactDeep(pending.arguments) as Record<string, unknown>,
+  };
+}
+
+/** Redact credentials in every string the input holds, at any depth. */
+function redactDeep(v: unknown): unknown {
+  if (typeof v === 'string') { return redactSecrets(v); }
+  if (Array.isArray(v)) { return v.map(redactDeep); }
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, redactDeep(x)]));
+  }
+  return v;
+}
 
 /** Sentinel session id for "the active agent session" — resolved at delivery time. */
 export const ACTIVE_SESSION = '@active';
@@ -235,6 +272,9 @@ export class Orchestrator {
       // decision belongs to, and by then the transcript is long gone.
       session_name: sessionNameFrom(session),
       host: localHostName() || null,
+      // What was judged, not just the verdict: without the call the audit trail cannot answer
+      // "what exactly was allowed?" for anything the deterministic tier did not decide.
+      call: recordedCall(session.pendingAction),
     });
     if (session.pendingAction) {
       record.pending_request_id = session.pendingAction.requestId;

@@ -80,6 +80,52 @@ describe('create and get', () => {
   });
 });
 
+describe('the recorded call', () => {
+  it('round-trips through the store', async () => {
+    const s = store();
+    const rec = await s.create('sess-1', 'claude', {
+      call: { tool_name: 'Bash', input: { command: 'npm run lint' } },
+    });
+    expect((await s.get(rec.request_id))?.call)
+      .toEqual({ tool_name: 'Bash', input: { command: 'npm run lint' } });
+  });
+
+  it('parses to null on a record written before the field existed', async () => {
+    const s = store();
+    const rec = await s.create('sess-1', 'claude');
+    const file = path.join(recordsDir, `${rec.request_id}.json`);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    delete raw.call; // exactly what an older record on disk looks like
+    fs.writeFileSync(file, JSON.stringify(raw), 'utf8');
+
+    const reloaded = await s.get(rec.request_id);
+    expect(reloaded?.call).toBeNull();          // parsed, not thrown
+    expect(reloaded?.request_id).toBe(rec.request_id);
+  });
+
+  it('drops a persisted call that carries no tool identity', async () => {
+    const s = store();
+    const rec = await s.create('sess-1', 'claude');
+    const file = path.join(recordsDir, `${rec.request_id}.json`);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    raw.call = { input: { command: 'ls' } };
+    fs.writeFileSync(file, JSON.stringify(raw), 'utf8');
+
+    expect((await s.get(rec.request_id))?.call).toBeNull();
+  });
+
+  it('keeps a null input, and rejects one that is not an object', async () => {
+    const s = store();
+    const rec = await s.create('sess-1', 'claude');
+    const file = path.join(recordsDir, `${rec.request_id}.json`);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    raw.call = { tool_name: 'AskUser', input: 'not an object' };
+    fs.writeFileSync(file, JSON.stringify(raw), 'utf8');
+
+    expect((await s.get(rec.request_id))?.call).toEqual({ tool_name: 'AskUser', input: null });
+  });
+});
+
 describe('queries', () => {
   it('filters by session and by state, and skips a corrupt record', async () => {
     const s = store();
