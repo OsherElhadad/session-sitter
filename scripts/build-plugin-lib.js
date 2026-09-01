@@ -32,6 +32,7 @@ const libDir = path.join(repoRoot, 'plugin', 'lib');
 /** Everything the plugin invokes directly, as paths relative to `out/`. */
 const ENTRY_POINTS = [
   'hooks/permissionRequest.js',
+  'hooks/configChange.js',
   'hooks/sessionStart.js',
   'hooks/postToolUse.js',
   'hooks/sessionEnd.js',

@@ -1,5 +1,5 @@
 {
-  "description": "Session Sitter — governance decisions, session registration, and the audit trail. Every command is plain Node with no runtime dependencies; lib/ is the committed build output of the repository's TypeScript engine (see docs/PLUGIN.md).",
+  "description": "Session Sitter \u2014 governance decisions, session registration, and the audit trail. Every command is plain Node with no runtime dependencies; lib/ is the committed build output of the repository's TypeScript engine (see docs/PLUGIN.md).",
   "hooks": {
     "PermissionRequest": [
       {
@@ -9,6 +9,19 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/permissionRequest.js\"",
             "timeout": 60,
             "statusMessage": "Session Sitter is applying your practices..."
+          }
+        ]
+      }
+    ],
+    "ConfigChange": [
+      {
+        "matcher": "user_settings|project_settings|local_settings|policy_settings|skills",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/configChange.js\"",
+            "timeout": 5,
+            "statusMessage": "Checking whether this settings change widens permissions..."
           }
         ]
       }

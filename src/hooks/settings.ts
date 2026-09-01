@@ -8,6 +8,7 @@
  */
 
 import { SupervisorConfig, loadConfig } from '../supervisor/config';
+import { RULE_DESTINATIONS, RuleDestination } from '../policy/generalise';
 
 /**
  * `enforce` applies the full ladder, including the fail-closed rule: a call that is not
@@ -30,11 +31,17 @@ export interface PluginSettings {
    */
   classifierEnabled: boolean;
   /**
-   * Whether a settled allow may write a permission rule back into the user's local settings by
-   * echoing the dialog's own `permission_suggestions`. Off by default — a plugin that silently
-   * edits your permission rules is a bad citizen, however convenient.
+   * Whether a settled allow made by a written clause may write a standing permission rule back, via
+   * `decision.updatedPermissions`. Off by default — a plugin that silently edits your permission
+   * rules is a bad citizen, however convenient.
    */
   persistRules: boolean;
+  /**
+   * Where such a rule is written. `session` by default: in memory, gone when the session ends. The
+   * three file destinations all edit a settings file on disk, and `projectSettings` edits one that
+   * is usually git-tracked, so both are opt-in rather than assumed.
+   */
+  ruleDestination: RuleDestination;
   /** Knowledge-routing triple for the practices tiers. A missing tier is skipped, not an error. */
   user: string | null;
   project: string | null;
@@ -50,6 +57,12 @@ function bool(raw: string | undefined, fallback: boolean): boolean {
   return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
 }
 
+/** An unrecognised destination falls back to `session` — the one that changes nothing on disk. */
+function ruleDestination(raw: string | undefined): RuleDestination {
+  const v = (raw ?? '').trim();
+  return (RULE_DESTINATIONS as readonly string[]).includes(v) ? (v as RuleDestination) : 'session';
+}
+
 export function loadSettings(env: NodeJS.ProcessEnv = process.env, cwd?: string): PluginSettings {
   const mode = (env.SESSION_SITTER_MODE ?? '').trim().toLowerCase() === 'observe'
     ? 'observe' : 'enforce';
@@ -57,6 +70,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env, cwd?: string)
     mode,
     classifierEnabled: bool(env.SESSION_SITTER_CLASSIFIER, false),
     persistRules: bool(env.SESSION_SITTER_PERSIST_RULES, false),
+    ruleDestination: ruleDestination(env.SESSION_SITTER_RULE_DESTINATION),
     user: env.SESSION_SITTER_USER || null,
     project: env.SESSION_SITTER_PROJECT || null,
     team: env.SESSION_SITTER_TEAM || null,

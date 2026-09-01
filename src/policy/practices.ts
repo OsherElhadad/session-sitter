@@ -51,6 +51,21 @@ import {
 /** How a clause was written to be treated: red denies, yellow corrects, green permits. */
 export type ClauseLevel = 'red' | 'orange' | 'yellow' | 'green' | null;
 
+/**
+ * One compiled matcher, keeping the text it was written as.
+ *
+ * The raw form is kept because a *substring* matcher is the only kind that can be safely turned
+ * back into a Claude Code permission rule (see `src/policy/generalise.ts`): `npm test` licenses the
+ * prefix rule `Bash(npm test:*)`, whereas a `/regex/` says nothing a prefix rule can express.
+ */
+export interface ClauseMatcher {
+  /** The pattern exactly as the clause author wrote it, minus the `/…/flags` wrapper if any. */
+  raw: string;
+  /** True when it was written as a `/regex/flags` literal rather than a plain substring. */
+  isRegex: boolean;
+  re: RegExp;
+}
+
 export interface Clause {
   /** Stable, citable identity — the `id` field, a leading heading number, or a title slug. */
   clauseId: string;
@@ -66,7 +81,7 @@ export interface Clause {
   text: string;
   tags: string[];
   /** Compiled matchers from the `Match:` line. Empty means "not deterministically matchable". */
-  patterns: RegExp[];
+  patterns: ClauseMatcher[];
   sourceFile: string | null;
 }
 
@@ -115,20 +130,25 @@ function splitPatterns(value: string): string[] {
  * Compile one pattern. An unparseable regex is dropped rather than thrown: a malformed clause must
  * not take the whole policy file down with it, and the clause is still handed to the classifier.
  */
-function compile(pattern: string): RegExp | null {
+function compile(pattern: string): ClauseMatcher | null {
   const asRegex = REGEX_LITERAL.exec(pattern);
   try {
-    return asRegex ? new RegExp(asRegex[1], asRegex[2].includes('i') ? asRegex[2] : `${asRegex[2]}i`)
-      : substringMatcher(pattern);
+    return asRegex
+      ? {
+        raw: asRegex[1],
+        isRegex: true,
+        re: new RegExp(asRegex[1], asRegex[2].includes('i') ? asRegex[2] : `${asRegex[2]}i`),
+      }
+      : { raw: pattern, isRegex: false, re: substringMatcher(pattern) };
   } catch {
     return null;
   }
 }
 
 /** Lift the `Match:` lines out of an entry body, returning the remaining prose and the matchers. */
-function extractPatterns(text: string): { prose: string; patterns: RegExp[] } {
+function extractPatterns(text: string): { prose: string; patterns: ClauseMatcher[] } {
   const kept: string[] = [];
-  const patterns: RegExp[] = [];
+  const patterns: ClauseMatcher[] = [];
   for (const line of text.split('\n')) {
     const m = MATCH_LINE.exec(line.trim());
     if (!m) { kept.push(line); continue; }
@@ -193,9 +213,18 @@ export async function loadPractices(opts: LoadKnowledgeOptions): Promise<Clause[
   return rankClauses(bundle.entries.map(clauseFrom));
 }
 
+/** The first of the clause's matchers that appears in `haystack`, or null when none does. */
+export function matchingPattern(clause: Clause, haystack: string): ClauseMatcher | null {
+  for (const p of clause.patterns) {
+    p.re.lastIndex = 0;
+    if (p.re.test(haystack)) { return p; }
+  }
+  return null;
+}
+
 /** True when any of the clause's compiled patterns appears in `haystack`. */
 export function clauseMatches(clause: Clause, haystack: string): boolean {
-  return clause.patterns.some(p => { p.lastIndex = 0; return p.test(haystack); });
+  return matchingPattern(clause, haystack) !== null;
 }
 
 /**

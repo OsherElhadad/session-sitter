@@ -16,6 +16,7 @@
  * obvious cases.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.SHELL_TOOLS = void 0;
 exports.preClassify = preClassify;
 exports.actionLabel = actionLabel;
 exports.redAssessment = redAssessment;
@@ -39,7 +40,7 @@ const SAFE_TOOLS = new Set([
     'Read', 'Glob', 'Grep', 'NotebookRead', 'TodoWrite', 'BashOutput',
 ]);
 /** The shell tools, whose command argument decides the answer. Both call the argument `command`. */
-const SHELL_TOOLS = new Set(['execute_command', 'Bash']);
+exports.SHELL_TOOLS = new Set(['execute_command', 'Bash']);
 /**
  * Shell syntax that lets one command line run more than the command it starts with: separators and
  * chains, pipes, both substitution forms, redirects, and a background `&`.
@@ -92,7 +93,7 @@ function isSafeRead(session) {
     if (SAFE_TOOLS.has(name)) {
         return true;
     }
-    if (SHELL_TOOLS.has(name)) {
+    if (exports.SHELL_TOOLS.has(name)) {
         const cmd = p.arguments ? String(p.arguments.command ?? '') : '';
         // Both halves are required: the line must start with something safe AND be a single command.
         return SAFE_COMMAND.test(cmd) && !SHELL_COMPOSITION.test(cmd);

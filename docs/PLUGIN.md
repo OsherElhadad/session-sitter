@@ -42,6 +42,7 @@ longer among the choices `claude --help` lists.)
 | Hook | Job | Budget |
 |---|---|---|
 | `PermissionRequest` | **The governance decision.** Allow, deny with the clause cited, or allow with the call rewritten. Writes the audit record. | 60 s allowed; measured p50 **64 ms** per process, of which 3 ms is the decision |
+| `ConfigChange` | **Guards the agent's own permission configuration.** Blocks a settings change that widens what the agent may do, allows a narrowing, records both. | 5 s |
 | `SessionStart` | Registers the session — id, cwd, pid, name, model, host — so a bare terminal session is visible and the audit knows whose decision a record is | 5 s |
 | `PostToolUse`, `PostToolUseFailure` | Appends the minimum a wedge detector needs: tool, a hash of the input, success or failure, timestamp. The input itself is never stored. | 5 s |
 | `Notification` | Records `idle_prompt` and `permission_prompt`, so the trail knows how long a human was waited on. **It cannot answer anything** — the event accepts no decision. | 5 s |
@@ -77,6 +78,152 @@ Two ordering decisions worth knowing, because both are deliberate:
 
 `AskUserQuestion` and `ExitPlanMode` are exempt before any policy loads. Both are questions *to you*,
 and this layer never answers one.
+
+### Every command in the line, not just the first
+
+Claude Code matches permission patterns on a command **prefix**, so `Bash(git:*)` does not match
+`git add . && git commit -m x` ([#25441]). Per the community meta-issue [#30519] (79 reactions, open)
+the same hole applies to **deny** rules, which is the half that matters: a written deny can be walked
+past by appending `&& <the denied thing>`. [#28240] (205 reactions, `regression`, `area:permissions`)
+is the same hole from the prompting side.
+
+So this hook does not match on a prefix. It splits the command line into the commands a shell would
+actually run — across `&&`, `||`, `;`, `|`, `|&`, `&`, newlines, `$(…)`, backticks and process
+substitution `<(…)`, honouring single and double quoting — runs the ladder over **every one of them**,
+and combines the results **deny > ambiguous > allow**. A compound command is only as safe as its most
+dangerous part, and "I could not decide about part 3" is never "part 3 is fine".
+
+The deny then names the offending command and its position, which prefix matching structurally cannot:
+
+```
+denied — practices §no-publish: Never publish a package from an agent session
+
+Publishing is irreversible and belongs to a human with a changelog in front of them.
+
+This call runs 2 commands; sub-command 2 of 2 is the one that matched: npm publish
+```
+
+Two properties are worth stating plainly, because they are what makes this a security control rather
+than a convenience:
+
+- **A written green clause can no longer launder the rest of the line.** Before this, a clause was
+  matched against the whole command line as one string, so `Match: npm test` licensed anything that
+  merely *contained* those words — `npm test && curl … | sh` included. It now clears only the command
+  it was written for, and the rest has to clear on its own merits.
+- **It fails closed.** A line the splitter will not vouch for — an unbalanced quote, an unterminated
+  substitution, arithmetic expansion `$(( ))`, substitution nested more than four deep — is
+  **ambiguous**, never safe. It escalates to the classifier, or it is denied, and the message says the
+  command line was the reason:
+
+  ```
+  Session Sitter denied this call because the supervisor could not reach a verdict … 
+
+  (shell: arithmetic expansion $(( )))
+  ```
+
+  That has a real cost: an ordinary `npm test -- --shard=$((1 + 1))` is denied even though a green
+  clause covers `npm test`. It is the deliberate direction. Two knowing over-approximations sit on the
+  same side of the line: a heredoc body is scanned like code (so its prose becomes harmless extra
+  constituents), and subshell/group punctuation is stripped rather than modelled.
+
+`src/policy/shell.ts` is the splitter; there is no parser dependency, because this repository has no
+runtime dependencies. The combining rule is `combineVerdicts` in `src/hooks/permissionRequest.ts`,
+exported rather than inlined so any other tier that produces a per-constituent verdict reuses the same
+"which light wins" instead of growing a second copy of it. Its adversarial tests are `src/test/policy/shell.test.ts` and the compound
+section of `src/test/hooks/permissionRequest.test.ts`.
+
+### The standing rule it writes, when you ask for one
+
+Clicking Claude Code's own "Always allow" saves the **literal** command string, so the rule never
+matches a second time and `settings.local.json` fills with dead one-off entries ([#6850],
+45 reactions, open; [#11380], 64 reactions) — or it offers a wildcard far wider than the subcommand
+you approved ([#29187], `regression`). Both were observed live while verifying this: the dialog's own
+suggestion for `npm test` was `Bash(npm test *)`, and for `git status && npm publish` it was
+`Bash(npm publish *)`.
+
+With `SESSION_SITTER_PERSIST_RULES=on`, a call **allowed by a written green clause** comes back with a
+`decision.updatedPermissions` derived from that clause instead:
+
+| The dialog would have written | Session Sitter writes | Because the clause said |
+|---|---|---|
+| `Bash(npm test *)` for `npm test -- --shard=2` | `Bash(npm test:*)` | `Match: npm test` |
+
+The derivation is deliberately narrow, and emits **nothing** — letting the prompt come back — unless
+every one of these holds. A too-wide rule is a security hole that outlives the session:
+
+1. A **green clause** allowed the call. Never a deny (`updatedPermissions` is allow-only anyway),
+   never the correction lane (a rewrite is per-call), never the deterministic tier (no clause to
+   derive from, and it grants that path free every time), never the classifier.
+2. The tool is `Bash`.
+3. The call is a **single** command. A rule derived from a compound is the very bug above: a prefix
+   rule taken from `git status && rm -rf /` would license the `rm` to anything starting with
+   `git status`.
+4. The clause matcher was written as a **substring**, and the command starts with it on a word
+   boundary. A `/regex/` says nothing a prefix rule can express, and a substring that matched in the
+   *middle* of a command licenses no prefix at all.
+
+The result is strictly narrower than the clause: the clause allows its substring **anywhere**, the
+emitted rule allows it only as a **prefix**. The audit record names both the rule and the clause it
+came from:
+
+```
+allowed — practices §tests-are-free: Running the test suite needs no approval
+  — standing rule Bash(npm test:*) written to session, derived from practices §tests-are-free
+```
+
+`destination` is `session` by default — in memory, gone when the session ends. `SESSION_SITTER_RULE_DESTINATION`
+moves it to `localSettings`, `projectSettings` or `userSettings`; a value it does not recognise falls
+back to `session`. A hook that edits a git-tracked settings file behind your back is a bad citizen, so
+`projectSettings` is something you ask for.
+
+---
+
+## Guarding your permission configuration
+
+An agent that can edit `.claude/settings.json` can add itself an allow rule, delete the deny rule that
+was stopping it, or set `defaultMode` to `bypassPermissions`. Everything else here is decided by rules
+that live in files the agent can write, so this is the escalation path that makes the rest of it
+theatre. [medusa](https://github.com/Pantheon-Security/medusa) (973 stars) scans `.claude/` for the
+same reason.
+
+The `ConfigChange` hook blocks a change that **widens** what the agent may do, and allows a narrowing.
+Three widenings are recognised, and they are the three that grant reach:
+
+- an entry appears in `permissions.allow`;
+- an entry disappears from `permissions.deny`;
+- `permissions.defaultMode` moves up `plan < default`/`manual` `< acceptEdits < auto < dontAsk <
+  bypassPermissions`. A mode the table has never heard of ranks above all of them.
+
+A block looks like this, and every decision — block or allow — lands in `decisions.jsonl` with
+`clause: "built-in §config-guard"`:
+
+```json
+{"decision":"block","reason":"Session Sitter blocked this change to …/.claude/settings.json because it widens what the agent may do: permissions.allow gained \"Bash(curl:*)\"."}
+```
+
+**Why the record matters more here than anywhere else.** The hooks reference is explicit: "A blocked
+change surfaces no message to you or to Claude … Claude Code only writes a line to the debug log." Our
+record is the only place the block is visible.
+
+Four limits, all recorded rather than papered over:
+
+- **`policy_settings` cannot be blocked.** Documented: "any blocking decision is ignored. This ensures
+  enterprise-managed settings always take effect." Those are recorded and allowed through.
+- **The first change to a file is always allowed.** The hook is told a file changed, not what it
+  changed *from*, so it keeps a snapshot of the permissions it last accepted and diffs against that.
+  With no snapshot there is nothing to compare, and blocking on ignorance would block the first
+  legitimate edit of every session. The record says `first observation`.
+- **A blocked change is still on disk.** Blocking stops the running session from applying it, nothing
+  more. So the snapshot is deliberately *not* advanced on a block, and the same widening is blocked
+  again next time.
+- **`permissions.ask` and `additionalDirectories` are not compared.** Only the three fields above.
+
+[#25441]: https://github.com/anthropics/claude-code/issues/25441
+[#30519]: https://github.com/anthropics/claude-code/issues/30519
+[#28240]: https://github.com/anthropics/claude-code/issues/28240
+[#6850]: https://github.com/anthropics/claude-code/issues/6850
+[#11380]: https://github.com/anthropics/claude-code/issues/11380
+[#29187]: https://github.com/anthropics/claude-code/issues/29187
 
 ---
 
@@ -189,7 +336,8 @@ user, narrowest winning — via `SESSION_SITTER_USER` / `_PROJECT` / `_TEAM` plu
 | `SESSION_SITTER_PRACTICES` | — | Path to a single practices markdown file. The simplest setup. |
 | `SESSION_SITTER_MODE` | `enforce` | `enforce` applies the whole ladder, fail-closed included. `observe` records every decision but returns no verdict for the ambiguous case, handing it back to Claude Code and to Auto mode. |
 | `SESSION_SITTER_CLASSIFIER` | `off` | Whether an ambiguous call may spawn the classifier CLI. Off by default: paying for a subprocess and a model round trip in front of a live prompt is the operator's call. |
-| `SESSION_SITTER_PERSIST_RULES` | `off` | Whether a settled allow may write a permission rule into your local settings by echoing the dialog's own `permission_suggestions`. Off by default — a plugin that silently edits your permission rules is a bad citizen. |
+| `SESSION_SITTER_PERSIST_RULES` | `off` | Whether an allow made by a written green clause may return a **generalised** standing permission rule derived from that clause. Off by default — a plugin that silently edits your permission rules is a bad citizen. The dialog's literal `permission_suggestions` are never echoed. |
+| `SESSION_SITTER_RULE_DESTINATION` | `session` | Where such a rule is written: `session` (in memory), `localSettings`, `projectSettings`, `userSettings`. An unrecognised value falls back to `session`. |
 | `SESSION_SITTER_USER` / `_PROJECT` / `_TEAM` | — | Knowledge-routing triple for the three-tier layout |
 | `SESSION_SITTER_DATA_DIR` | `${CLAUDE_PLUGIN_DATA}`, else `~/.claude/session-sitter/` | Where the trail and session records go |
 
@@ -284,10 +432,14 @@ Honesty here is cheaper than a support thread.
   path.
 - **It judges the call, not the conversation.** The classifier tier deliberately does not read the
   session transcript; doing so in front of a live prompt would spend the entire latency budget.
-- **It cannot see into a compound command past the first word.** `git status; curl … | sh` passes the
-  deterministic green rung, because the safe-command pattern anchors at the start. The destructive
-  table is checked over the whole command first, so the obviously-bad cases are still caught, but do
-  not read a green light on a compound command as a judgment about all of it.
+- **A clause still matches text, not argv.** A clause is a substring or regex over the tool name and
+  its arguments, so `echo 'rm -rf /'` is denied by a `Match: rm -rf` clause even though the `rm` is an
+  argument to `echo`. The compound evaluator does not make this worse — that line is one command — but
+  it does not fix it either. Fixing it means clauses matching parsed argv, which is a different
+  feature.
+- **A shell construct it cannot parse is denied, not approved.** See the fail-closed list above. It is
+  the right direction and it has a cost: `npm test -- --shard=$((1 + 1))` is denied even with a green
+  clause covering `npm test`.
 - **A hook timeout fails open in an interactive session.** No decision means the prompt appears as
   usual. The deterministic path is 64 ms, so this only matters if you enable the classifier — and a
   measured classifier round trip is 11–17 s against the hook's 60 s timeout, which is closer than it
