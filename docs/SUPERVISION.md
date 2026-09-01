@@ -7,6 +7,11 @@ carelessly. Supervision is the layer for the moments you are not there.
 When an agent pauses for approval, the extension classifies **that specific pending action**
 against knowledge learned from your team's past sessions, and acts:
 
+<p align="center">
+  <img src="diagrams/traffic-lights.svg" width="880"
+       alt="The four supervision lights, as described in the table below.">
+</p>
+
 | Light | Meaning | What happens |
 |:---:|---|---|
 | 🟢 **Green** | the action is fine | Approve the prompt so the agent proceeds. Record it. No human contact. |

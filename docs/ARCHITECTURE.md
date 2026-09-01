@@ -1,5 +1,10 @@
 # Architecture: Session Sitter
 
+<p align="center">
+  <img src="diagrams/architecture.svg" width="900"
+       alt="One supervision engine under three front ends. Shipped: the VS Code panel, which is the session worklist and the activity feed, and the supervisor CLI for offline runs, replays and polling by hand. Designed but not built: a Claude Code plugin providing hooks in a bare terminal plus a session-sitter binary. Under them, the supervision engine in src/supervisor — the deterministic tier, the three knowledge tiers, the classifier, the record lifecycle and the outbox — pure Node, with no import of vscode and every dependency entering through OrchestratorOptions. It drives three things: the agent, through its own approval emitter; records/, one durable JSON file per decision; and your messaging channel, for decision cards and one-way updates.">
+</p>
+
 ## Overview
 
 The extension does two things.

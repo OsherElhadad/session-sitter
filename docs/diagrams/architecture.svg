@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img"
+     aria-label="One supervision engine under three front ends: the VS Code panel and the supervisor CLI today, a Claude Code plugin and a session-sitter binary by design. The engine drives the agent bridges, the decision records, and your messaging channel.">
+<rect width="1200" height="560" rx="18" fill="#0F1424"/>
+<text x="28" y="50" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="30" font-weight="700" fill="#F6F4EF">One engine, three front ends</text>
+<text x="28" y="82" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" fill="#8B97AF">No decision logic lives in a front end. Each one only adapts input and output.</text>
+<text x="28" y="132" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#37DCA6" letter-spacing="1.5">FRONT ENDS</text>
+<rect x="28" y="148" width="368" height="122" rx="12" fill="#181F33" stroke="#37DCA6" stroke-opacity="0.65"/>
+<text x="46" y="180" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#F6F4EF">VS Code panel</text>
+<text x="46" y="208" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">the session worklist and the</text>
+<text x="46" y="233" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">activity feed &#183; shipped</text>
+<rect x="416" y="148" width="368" height="122" rx="12" fill="#181F33" stroke="#37DCA6" stroke-opacity="0.65"/>
+<text x="434" y="180" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#F6F4EF">supervisor CLI</text>
+<text x="434" y="208" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">offline runs, replays, poll by</text>
+<text x="434" y="233" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">hand &#183; shipped</text>
+<rect x="804" y="148" width="368" height="122" rx="12" fill="#181F33" stroke="#F7B93E" stroke-opacity="0.65" stroke-dasharray="7 5"/>
+<text x="822" y="180" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#F6F4EF">Claude Code plugin</text>
+<text x="822" y="208" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">hooks in a bare terminal, plus a</text>
+<text x="822" y="233" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">session-sitter bin &#183; designed,</text>
+<text x="822" y="258" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">not built</text>
+<path d="M212 270 L212 300 L600 300 L600 322" fill="none" stroke="#2C3654" stroke-width="2"/>
+<path d="M600 270 L600 322" fill="none" stroke="#2C3654" stroke-width="2"/>
+<path d="M988 270 L988 300 L600 300" fill="none" stroke="#2C3654" stroke-width="2" stroke-dasharray="7 5"/>
+<path d="M594 322 L600 334 L606 322 Z" fill="#2C3654"/>
+<rect x="28" y="334" width="1144" height="108" rx="12" fill="#181F33" stroke="#37DCA6" stroke-opacity="0.65"/>
+<text x="46" y="366" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#F6F4EF">the supervision engine &#8212; src/supervisor/</text>
+<text x="46" y="394" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">Deterministic tier, the three knowledge tiers, the classifier, the record lifecycle, the outbox.</text>
+<text x="46" y="419" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="16" fill="#8B97AF">Pure Node: not one import of vscode, and every dependency enters through OrchestratorOptions.</text>
+<text x="28" y="480" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#37DCA6" letter-spacing="1.5">WHAT IT DRIVES</text>
+<rect x="28" y="492" width="368" height="46" rx="10" fill="#181F33" stroke="#2C3654"/>
+<text x="46" y="521" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#F6F4EF">the agent <tspan fill="#8B97AF" font-size="14">&#183; through its own approval emitter</tspan></text>
+<rect x="416" y="492" width="368" height="46" rx="10" fill="#181F33" stroke="#2C3654"/>
+<text x="434" y="521" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#F6F4EF">records/ <tspan fill="#8B97AF" font-size="14">&#183; one durable JSON file per decision</tspan></text>
+<rect x="804" y="492" width="368" height="46" rx="10" fill="#181F33" stroke="#2C3654"/>
+<text x="822" y="521" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#F6F4EF">your channel <tspan fill="#8B97AF" font-size="14">&#183; cards and one-way updates</tspan></text>
+</svg>
