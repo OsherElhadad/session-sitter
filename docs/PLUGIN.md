@@ -40,7 +40,7 @@ plugin — run with `--permission-mode default` to see it work.
 
 | Hook | Job | Budget |
 |---|---|---|
-| `PermissionRequest` | **The governance decision.** Allow, deny with the clause cited, or allow with the call rewritten. Writes the audit record. | 60 s allowed; the deterministic path measures 4 ms |
+| `PermissionRequest` | **The governance decision.** Allow, deny with the clause cited, or allow with the call rewritten. Writes the audit record. | 60 s allowed; measured p50 **64 ms** per process, of which 3 ms is the decision |
 | `SessionStart` | Registers the session — id, cwd, pid, name, model, host — so a bare terminal session is visible and the audit knows whose decision a record is | 5 s |
 | `PostToolUse`, `PostToolUseFailure` | Appends the minimum a wedge detector needs: tool, a hash of the input, success or failure, timestamp. The input itself is never stored. | 5 s |
 | `Notification` | Records `idle_prompt` and `permission_prompt`, so the trail knows how long a human was waited on. **It cannot answer anything** — the event accepts no decision. | 5 s |
@@ -48,7 +48,9 @@ plugin — run with `--permission-mode default` to see it work.
 
 ## The decision ladder
 
-`PermissionRequest` takes the first rung that holds. Rungs 1–5 spawn nothing and consult no model.
+`PermissionRequest` takes the first rung that holds. Rungs 1–5 spawn nothing and consult no model — measured p50 64 ms per hook process against
+11–17 s when the classifier runs (`node scripts/time-permission-hook.js`, and
+`docs/superpowers/plans/2026-09-01-plugin-verification.md` §5).
 
 1. **Deterministic green.** A read-only tool, or a safe non-mutating shell command. Allow.
 2. **The correction lane.** A correction rule rewrites the call into its safer form — `git push
@@ -218,7 +220,7 @@ the corpus importer uses (`src/corpus/mask.ts`) and truncated to 300 characters.
 | `decision` | `allow` · `deny` · `none` (no verdict returned — an exempt tool, or observe mode) |
 | `clause` | the citation, or `null` when no written clause applied |
 | `actor` | `deterministic` · `policy` · `model` · `human` · `timeout` |
-| `latencyMs` | the whole hook process. Single-digit on the deterministic path. |
+| `latencyMs` | time inside the hook: policy load, decision, audit append. Single-digit on the deterministic path. It excludes process startup — the wall clock Claude Code waits for is about 60 ms more, nearly all of it Node starting up. |
 | `rewritten` | true when the correction lane replaced the tool input |
 
 `actor` is the field that answers *who decided*. A run full of `timeout` denials is a policy gap, not
@@ -280,7 +282,9 @@ Honesty here is cheaper than a support thread.
   table is checked over the whole command first, so the obviously-bad cases are still caught, but do
   not read a green light on a compound command as a judgment about all of it.
 - **A hook timeout fails open in an interactive session.** No decision means the prompt appears as
-  usual. The deterministic path is 4 ms, so this only matters if you enable a slow classifier.
+  usual. The deterministic path is 64 ms, so this only matters if you enable the classifier — and a
+  measured classifier round trip is 11–17 s against the hook's 60 s timeout, which is closer than it
+  sounds.
 - **Installing a plugin means running its author's code.** Hooks run unsandboxed with your full
   environment. That is true of every plugin, including this one.
 
@@ -300,6 +304,10 @@ output is the smaller cost.
 `require` graph, not maintained by hand, and the copy refuses any module that imports `vscode`.
 `ci/check-plugin-lib.sh` rebuilds and runs `git diff --exit-code plugin/lib`, so a stale artifact
 fails the build instead of shipping a plugin a version behind the tests that vouch for it.
+
+`scripts/time-permission-hook.js` measures the hook's latency by spawning the shipped binary, and
+asserts each rung's verdict while it does — so re-running it both reproduces the numbers in the
+verification record and checks the ladder still behaves.
 
 ```bash
 make plugin            # rebuild plugin/lib and commit it
