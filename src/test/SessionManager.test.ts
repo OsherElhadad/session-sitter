@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { SessionManager, isSessionProcessAlive, type ProcessProbe } from '../SessionManager';
+import { SessionManager, liveSessionPids, type ProcessProbe } from '../SessionManager';
 
 // Minimal VS Code stubs — only what SessionManager's constructor touches.
 vi.mock('vscode', () => {
@@ -1434,7 +1434,7 @@ describe('SessionManager.exportFullTranscript (Chat)', () => {
 });
 
 
-describe('isSessionProcessAlive', () => {
+describe('liveSessionPids', () => {
   // A dead PID is a dead session on every platform; nothing below should reach the start-time check.
   const dead: ProcessProbe = {
     signal: () => { throw new Error('ESRCH'); },
@@ -1451,60 +1451,87 @@ describe('isSessionProcessAlive', () => {
   // `ps` prints local time, so a fixture for it is derived from the UTC instant Claude recorded
   // rather than written out — otherwise the test would only pass in one time zone.
   const psRenderingOf = (procStart: string) => `${new Date(`${procStart} UTC`).toString()}    `;
+  const noProc = { signal: () => {}, procStat: () => { throw new Error('ENOENT'); } };
 
-  it('keeps the Linux /proc start-time comparison', () => {
+  it('keeps the Linux /proc start-time comparison', async () => {
     const probe = (jiffies: string): ProcessProbe => ({
       signal: () => {},
       procStat: () => linuxStat(jiffies),
       psStart: () => { throw new Error('ps must not be consulted on Linux'); },
     });
-    expect(isSessionProcessAlive(42, 993_311, 'linux', probe('993311'))).toBe(true);
-    expect(isSessionProcessAlive(42, 993_311, 'linux', probe('884422'))).toBe(false);
-    expect(isSessionProcessAlive(42, 993_311, 'linux', dead)).toBe(false);
+    const one = [{ pid: 42, procStart: 993_311 }];
+    expect(await liveSessionPids(one, 'linux', probe('993311'))).toEqual(new Set([42]));
+    expect(await liveSessionPids(one, 'linux', probe('884422'))).toEqual(new Set());
+    expect(await liveSessionPids(one, 'linux', dead)).toEqual(new Set());
   });
 
-  it('treats an unreadable /proc on Linux as dead rather than guessing', () => {
-    expect(isSessionProcessAlive(42, 993_311, 'linux', {
-      signal: () => {},
-      procStat: () => { throw new Error('ENOENT'); },
+  it('treats an unreadable /proc on Linux as dead rather than guessing', async () => {
+    expect(await liveSessionPids([{ pid: 42, procStart: 993_311 }], 'linux', {
+      ...noProc,
       psStart: () => { throw new Error('unreachable'); },
-    })).toBe(false);
+    })).toEqual(new Set());
   });
 
-  it('accepts a macOS session whose ps start-time matches the recorded one', () => {
+  it('accepts a macOS session whose ps start-time matches the recorded one', async () => {
     const procStart = 'Mon Aug 31 10:04:57 2026';
-    const noProc = { signal: () => {}, procStat: () => { throw new Error('ENOENT'); } };
     // Claude records procStart in UTC while `ps` prints the local zone, so the two differ by the
     // machine's offset even for one and the same process.
-    expect(isSessionProcessAlive(1263, procStart, 'darwin', {
-      ...noProc, psStart: () => psRenderingOf(procStart),
-    })).toBe(true);
+    expect(await liveSessionPids([{ pid: 1263, procStart }], 'darwin', {
+      ...noProc, psStart: async () => new Map([[1263, psRenderingOf(procStart)]]),
+    })).toEqual(new Set([1263]));
     // And a host whose two clocks agree — the strings identical — must still come out alive.
-    expect(isSessionProcessAlive(1263, procStart, 'darwin', {
-      ...noProc, psStart: () => `${procStart}    `,
-    })).toBe(true);
+    expect(await liveSessionPids([{ pid: 1263, procStart }], 'darwin', {
+      ...noProc, psStart: async () => new Map([[1263, procStart]]),
+    })).toEqual(new Set([1263]));
   });
 
-  it('rejects a recycled macOS PID whose ps start-time disagrees', () => {
-    expect(isSessionProcessAlive(1263, 'Mon Aug 31 10:04:57 2026', 'darwin', {
-      signal: () => {},
-      procStat: () => { throw new Error('ENOENT'); },
-      psStart: () => psRenderingOf('Tue Sep  1 03:45:23 2026'),
-    })).toBe(false);
+  it('rejects a recycled macOS PID whose ps start-time disagrees', async () => {
+    expect(await liveSessionPids([{ pid: 1263, procStart: 'Mon Aug 31 10:04:57 2026' }], 'darwin', {
+      ...noProc,
+      psStart: async () => new Map([[1263, psRenderingOf('Tue Sep  1 03:45:23 2026')]]),
+    })).toEqual(new Set());
   });
 
-  it('trusts the signal alone when ps cannot be used', () => {
+  it('asks ps about every candidate at once, and only about the live ones', async () => {
+    const asked: number[][] = [];
+    const born = 'Mon Aug 31 10:04:57 2026';
+    const alive = await liveSessionPids(
+      [
+        { pid: 11, procStart: born },
+        { pid: 22, procStart: 'Tue Sep  1 03:45:23 2026' },  // recycled — ps disagrees
+        { pid: 33, procStart: born },
+        { pid: 44, procStart: born },                        // already gone
+      ],
+      'darwin',
+      {
+        signal: (pid) => { if (pid === 44) { throw new Error('ESRCH'); } },
+        procStat: () => { throw new Error('ENOENT'); },
+        psStart: async (pids) => {
+          asked.push(pids);
+          return new Map(pids.map(pid => [pid, psRenderingOf(born)]));
+        },
+      },
+    );
+    expect(asked).toEqual([[11, 22, 33]]);
+    expect(alive).toEqual(new Set([11, 33]));
+  });
+
+  it('trusts the signal alone when ps cannot be used', async () => {
     const procStart = 'Mon Aug 31 10:04:57 2026';
+    const candidates = [{ pid: 1263, procStart }];
     const noPs: ProcessProbe = {
-      signal: () => {},
-      procStat: () => { throw new Error('ENOENT'); },
-      psStart: () => { throw new Error('spawn ps ENOENT'); },
+      ...noProc,
+      psStart: () => Promise.reject(new Error('spawn ps ENOENT')),
     };
-    expect(isSessionProcessAlive(1263, procStart, 'darwin', noPs)).toBe(true);
-    // Same fallback when `ps` does run but prints something unparsable.
-    expect(isSessionProcessAlive(1263, procStart, 'darwin', { ...noPs, psStart: () => 'no date here' }))
-      .toBe(true);
+    expect(await liveSessionPids(candidates, 'darwin', noPs)).toEqual(new Set([1263]));
+    // Same fallback when `ps` does run but says nothing usable about the PID.
+    expect(await liveSessionPids(candidates, 'darwin', {
+      ...noPs, psStart: async () => new Map([[1263, 'no date here']]),
+    })).toEqual(new Set([1263]));
+    expect(await liveSessionPids(candidates, 'darwin', {
+      ...noPs, psStart: async () => new Map(),
+    })).toEqual(new Set([1263]));
     // The fallback is on the start-time cross-check only — a dead PID is still dead.
-    expect(isSessionProcessAlive(1263, procStart, 'darwin', dead)).toBe(false);
+    expect(await liveSessionPids(candidates, 'darwin', dead)).toEqual(new Set());
   });
 });

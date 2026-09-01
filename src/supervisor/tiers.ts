@@ -16,15 +16,17 @@ import { AssessmentInput, TrafficLight } from './models';
 import { NormalizedSession, originalRequest } from './transcript';
 
 /**
- * Read-only agent tools — safe to auto-approve without a model call. Both naming schemes appear
- * in practice: IBM Bob's snake_case tools and Claude Code's capitalised ones. Matched exactly and
+ * Tools that are safe to auto-approve without a model call. Almost all of them only read, but
+ * `TodoWrite` writes — to Claude's own scratch todo list, which is why the set is named for what
+ * it means (safe) rather than for what most of it does. Both naming schemes appear in practice:
+ * IBM Bob's snake_case tools and Claude Code's capitalised ones. Matched exactly and
  * case-sensitively, so Claude's mutating `Write` can never be mistaken for a read.
  *
  * Claude's `WebFetch` and `WebSearch` are deliberately absent. They mutate nothing, but they aim
  * outside the machine — what they send, and to whom, is exactly the kind of judgment the
  * classifier exists to make.
  */
-const READ_TOOLS: ReadonlySet<string> = new Set([
+const SAFE_TOOLS: ReadonlySet<string> = new Set([
   'read_file', 'list_files', 'search_files', 'list_code_definition_names',
   'glob', 'grep', 'codebase_search',
   'Read', 'Glob', 'Grep', 'NotebookRead', 'TodoWrite', 'BashOutput',
@@ -67,7 +69,7 @@ function isSafeRead(session: NormalizedSession): boolean {
   const p = session.pendingAction;
   if (p === null) { return false; }
   const name = (p.name ?? '').trim();
-  if (READ_TOOLS.has(name)) { return true; }
+  if (SAFE_TOOLS.has(name)) { return true; }
   if (SHELL_TOOLS.has(name)) {
     const cmd = p.arguments ? String(p.arguments.command ?? '') : '';
     return SAFE_COMMAND.test(cmd);
