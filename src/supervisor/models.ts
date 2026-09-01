@@ -8,6 +8,8 @@
  * reader keeps working.
  */
 
+import { redactSecrets } from '../corpus/mask';
+
 export const TrafficLight = {
   GREEN: 'green',
   YELLOW: 'yellow',
@@ -87,6 +89,43 @@ export interface RuleTrace {
 export interface RecordedCall {
   tool_name: string;
   input: Record<string, unknown> | null;
+}
+
+/**
+ * Build the record's call from a tool name and its arguments, masking the arguments on the way in.
+ *
+ * Both record writers go through here — the orchestrator's pending action and the deterministic
+ * tier's rule decision — so there is exactly one place where a tool input is redacted before it
+ * reaches disk. No tool name means no call: a call is never invented, and never reconstructed
+ * from an assessment's prose.
+ *
+ * The masking is load-bearing, not incidental: this is a NEW path along which a tool input reaches
+ * a durable file. Today's rules in `src/corpus/mask.ts` miss `sk-ant-`/`sk-proj-` keys containing
+ * an underscore *entirely* (the character sets are `[A-Za-z0-9-]` / `[A-Za-z0-9]`), so such a key
+ * in a command line is written to the record unmasked. Upstream PR #40 fixes exactly those two
+ * character sets; this field's masking is only as good as that. Fix it there, never here — a
+ * second masker would drift out of step with the first.
+ */
+export function recordedCall(
+  toolName: string | null | undefined,
+  args: Record<string, unknown> | null,
+): RecordedCall | null {
+  if (!toolName) { return null; }
+  return {
+    tool_name: toolName,
+    input: args === null ? null : redactDeep(args) as Record<string, unknown>,
+  };
+}
+
+/** Redact credentials in every string the input holds, at any depth. */
+function redactDeep(v: unknown): unknown {
+  if (typeof v === 'string') { return redactSecrets(v); }
+  if (Array.isArray(v)) { return v.map(redactDeep); }
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, redactDeep(x)]));
+  }
+  return v;
 }
 
 export interface EvidenceRef {
