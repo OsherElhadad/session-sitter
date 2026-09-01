@@ -829,7 +829,7 @@ button:focus-visible {
   overflow: hidden;
 }
 
-.activity-meta { opacity: 0.6; font-size: 11px; white-space: normal; word-break: break-word; }
+.activity-meta { opacity: 0.75; font-size: 11px; white-space: normal; word-break: break-word; }
 
 .activity-state {
   text-transform: uppercase;
@@ -846,11 +846,17 @@ button:focus-visible {
 }
 
 .activity-head { display: flex; align-items: center; gap: 6px; }
-.activity-light { font-weight: 700; letter-spacing: 0.05em; font-size: 11px; }
-.activity-item.activity-green  .activity-light { color: var(--vscode-charts-green, #3fb950); }
-.activity-item.activity-yellow .activity-light { color: var(--vscode-charts-yellow, #d29922); }
-.activity-item.activity-orange .activity-light { color: var(--vscode-charts-orange, #db6d28); }
-.activity-item.activity-red    .activity-light { color: var(--vscode-charts-red, var(--vscode-errorForeground, #f85149)); }
+
+/* The label is text, so it gets a text colour. `charts-*` are chart *fill* colours — picked to be
+   distinguishable from each other, not to be readable against a background — and on Light Modern
+   none of the four clears 4.5:1 against the panel (yellow 2.70, orange 2.77). The colour lives
+   where a fill belongs instead: the border-left above and the emoji dot beside it. */
+.activity-light {
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  font-size: 11px;
+  color: var(--vscode-editor-foreground);
+}
 
 /* Who decided: a deterministic rule, or the supervisor AI. Both are real interventions, so both
    are listed — this pill is what tells them apart at a glance. */
@@ -876,8 +882,12 @@ button:focus-visible {
 .activity-body { display: flex; flex-direction: column; gap: 3px; }
 .activity-summary { font-weight: 600; word-break: break-word; }
 .activity-line { word-break: break-word; opacity: 0.9; }
-.activity-line-label { opacity: 0.6; }
-.activity-you { color: var(--vscode-charts-blue, #4aa8ff); }
+.activity-line-label { opacity: 0.75; }
+.activity-you {
+  /* textLink, not charts-blue: the link colour is the palette's text-on-background blue and clears
+     4.5:1 on both themes, where the chart blue lands at 4.33 on Light Modern. */
+  color: var(--vscode-textLink-foreground, var(--vscode-charts-blue, #4aa8ff));
+}
 
 /* Which session, on which machine. Muted and one line: it identifies the card, it is not its
    content, and the name is clipped rather than allowed to wrap the whole card taller. */
@@ -886,10 +896,10 @@ button:focus-visible {
   gap: 6px;
   align-items: baseline;
   font-size: 11px;
-  opacity: 0.7;
+  opacity: 0.75;
 }
 .activity-session-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-session-host { margin-left: auto; white-space: nowrap; opacity: 0.85; }
+.activity-session-host { margin-left: auto; white-space: nowrap; }
 
 .activity-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .activity-chip {
@@ -904,13 +914,15 @@ button:focus-visible {
   margin-top: 3px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--vscode-charts-orange, #db6d28);
+  color: var(--vscode-editor-foreground);
 }
 
 /* ── Failed supervision: collapsible, debuggable detail ──────────────────── */
 .activity-item.activity-failed { border-left-color: var(--vscode-charts-red, var(--vscode-errorForeground, #f85149)); }
+/* Same reason as .activity-light: the red border-left above marks the card, the words stay
+   readable. */
 .activity-item.activity-failed .activity-light,
-.activity-item.activity-failed .activity-state { color: var(--vscode-charts-red, var(--vscode-errorForeground, #f85149)); }
+.activity-item.activity-failed .activity-state { color: var(--vscode-editor-foreground); }
 
 .activity-failure { margin-top: 3px; }
 .activity-fail-toggle {
