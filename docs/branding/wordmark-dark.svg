@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="300" viewBox="0 0 1000 300"><rect width="1000" height="300" fill="#080B14"/><g transform="translate(36,40) scale(0.4297)"><defs><linearGradient id="bga" x1="0" y1="0" x2="0.6" y2="1"><stop offset="0" stop-color="#242F52"/><stop offset="1" stop-color="#0F1424"/></linearGradient></defs><rect width="512" height="512" rx="116" fill="url(#bga)"/>
+<circle cx="152" cy="182" r="40" fill="#F6F4EF" opacity="0.85"/><circle cx="141" cy="176" r="7" fill="#141A2E"/><circle cx="163" cy="176" r="7" fill="#141A2E"/>
+<circle cx="360" cy="182" r="40" fill="#F6F4EF" opacity="0.85"/><circle cx="349" cy="176" r="7" fill="#141A2E"/><circle cx="371" cy="176" r="7" fill="#141A2E"/>
+<circle cx="256" cy="158" r="46" fill="#F6F4EF"/><circle cx="242" cy="152" r="8" fill="#141A2E"/><circle cx="270" cy="152" r="8" fill="#141A2E"/>
+<path d="M106 210A150 150 0 0 0 406 210Z" fill="#37DCA6"/>
+<rect x="106" y="200" width="300" height="22" rx="11" fill="#F6F4EF"/>
+<path d="M76 376Q256 430 436 376" fill="none" stroke="#F6F4EF" stroke-width="20"
+      stroke-linecap="round" opacity="0.85"/>
+<circle cx="192" cy="454" r="18" fill="#F4595E" opacity="1.0"/><circle cx="256" cy="454" r="18" fill="#F7B93E" opacity="1.0"/><circle cx="320" cy="454" r="18" fill="#37DCA6" opacity="1.0"/>
+</g><rect x="37" y="41" width="218" height="218" rx="50" fill="none" stroke="#F6F4EF" stroke-opacity="0.14" stroke-width="3"/><text x="298" y="188" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="96" font-weight="700" fill="#F6F4EF" letter-spacing="-2">Session Sitter</text></svg>

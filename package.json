@@ -2,8 +2,13 @@
   "name": "session-sitter",
   "displayName": "Session Sitter",
   "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "publisher": "eranra",
+  "icon": "resources/logo.png",
+  "galleryBanner": {
+    "color": "#141A2E",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/eranra/session-sitter"
