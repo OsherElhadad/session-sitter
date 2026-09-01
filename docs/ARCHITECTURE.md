@@ -547,7 +547,7 @@ opposite of what a worklist is for.
 and the first matching key wins — the same rule `sessionSitter.autoRespond` uses. The host resolves
 the fill *and* a contrast-checked label colour and attaches the pair to the row; a workspace with
 no rule gets no field at all, which is what leaves its pill on the theme's badge colour. An
-unparseable value is skipped rather than fatal, so a typo reads as "this project is not coloured"
+unparsable value is skipped rather than fatal, so a typo reads as "this project is not coloured"
 instead of a broken panel.
 
 ---

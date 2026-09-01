@@ -206,7 +206,7 @@ export function resolveWorkspaceColor(
   for (const [key, value] of Object.entries(rules as Record<string, unknown>)) {
     if (!keyMatches(key, name, fullPath)) { continue; }
     const background = parseColorValue(value, identity);
-    // An unparseable value is skipped rather than fatal: the next key still gets its turn, and a
+    // An unparsable value is skipped rather than fatal: the next key still gets its turn, and a
     // typo shows up as "this project is not coloured", not as a broken panel.
     if (background) { return { background, foreground: contrastingForeground(background) }; }
   }

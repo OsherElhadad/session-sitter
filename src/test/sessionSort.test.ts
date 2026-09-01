@@ -209,7 +209,7 @@ describe('sortSessions: bad input', () => {
     expect(ids(sortSessions(rows))).toEqual(['new', 'old']);
   });
 
-  it('treats an unparseable timestamp as the epoch instead of throwing', () => {
+  it('treats an unparsable timestamp as the epoch instead of throwing', () => {
     const rows = [
       session({ sessionId: 'broken', updatedAt: new Date('not a date') }),
       session({ sessionId: 'fine', updatedAt: new Date('2026-09-01T00:00:00Z') }),
