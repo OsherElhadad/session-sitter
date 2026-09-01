@@ -477,6 +477,39 @@ describe('the tier ladder in the orchestrator', () => {
     expect(rec.state).toBe(SupervisionState.GREEN_COMPLETED); // the slow tier's green, not the fast one's
   });
 
+  it('degrades quietly to the CLI when the gateway demands a header we do not send', async () => {
+    // The verbatim 401 from a real gateway that wants an extra auth header (measured against
+    // contextguru). Extra-header support is deliberately out of scope, so the ONLY thing that
+    // matters is that this path fails closed: the CLI decides, nothing is approved, nothing is
+    // raised to the user, and the token does not appear in the recorded error.
+    const { post } = fakePost({
+      status: 401,
+      body: '{"error":"no x-context-guru-token header, and this provider key sk-secret-token '
+        + 'is not accepted"}',
+    });
+    const logged: string[] = [];
+    const engine = new FakeEngine([JSON.stringify(assessment('orange'))]);
+    const rig = buildTestOrchestrator(tmp, engine, {
+      exported: ambiguous({ pendingRequestId: 'req-live-9' }),
+      fastClassifier: classifier(post),
+      log: (m: string) => logged.push(m),
+    });
+
+    const rec = await rig.orch.supervise(SESSION_ID);
+
+    expect(engine.callCount).toBe(1);                          // the CLI took the decision
+    expect(rec.assessment?.traffic_light).toBe('orange');
+    expect(rec.state).toBe(SupervisionState.ORANGE_AWAITING_USER);
+    // Nothing was approved on the way through: with a live prompt, an approval would show up here.
+    expect(rig.deliveries()).toHaveLength(0);
+
+    const ev = rec.events.find(e => e.type === 'fast_llm_fell_back');
+    expect(ev?.error).toContain('HTTP 401');
+    // Quiet: a log line, never a thrown error or a dialog. And no token, in the log or the record.
+    expect(logged.some(m => m.includes('falling back'))).toBe(true);
+    expect(JSON.stringify(rec) + logged.join('\n')).not.toContain('sk-secret-token');
+  });
+
   it('leaves the two existing tiers exactly as they were when it is off', async () => {
     const engine = new FakeEngine([JSON.stringify(assessment('yellow'))]);
     const rig = buildTestOrchestrator(tmp, engine, { exported: ambiguous() }); // no fastClassifier

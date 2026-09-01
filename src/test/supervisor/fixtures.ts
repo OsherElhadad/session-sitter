@@ -275,6 +275,7 @@ export function buildTestOrchestrator(
     exported?: Record<string, unknown> | null;
     knowledgeRoot?: string;
     fastClassifier?: FastClassifier;
+    log?: (msg: string) => void;
     configOverrides?: Partial<SupervisorConfig>;
   } = {},
 ): TestRig {
@@ -298,6 +299,7 @@ export function buildTestOrchestrator(
     agentController: new OutboxAgentController(outboxDir(config)),
     clock: clock.get,
     knowledgeFetch: localFetch(knowledgeRoot),
+    log: opts.log,
   });
 
   return {

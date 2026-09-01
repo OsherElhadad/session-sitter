@@ -280,7 +280,7 @@
           "sessionSitter.supervisor.fastClassifier": {
             "type": "boolean",
             "default": true,
-            "markdownDescription": "When on, an ambiguous action is first judged by the **fast** classifier: one HTTP call that reuses the agent's own paused conversation as a prompt-cached prefix, so it answers in a few seconds instead of the ten-plus an agent CLI needs. The CLI selected by `sessionSitter.supervisor.engine` stays as the fallback for timeouts, unparsable verdicts and low-confidence answers. Needs a gateway, a token and a model — see the three settings below; without them this silently stays off and the CLI classifies as before."
+            "markdownDescription": "When on, an ambiguous action is first judged by the **fast** classifier: one HTTP call that reuses the agent's own paused conversation as a prompt-cached prefix, so it answers in a few seconds instead of the ten-plus an agent CLI needs. The CLI selected by `sessionSitter.supervisor.engine` stays as the fallback for timeouts, unparsable verdicts and low-confidence answers.\n\n**Requires an API token and a gateway URL, which most Claude Code users do not have.** If you signed in with a Pro/Max/Team subscription, your credentials are held in the OS keychain via OAuth and there is no `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` to use — so this stays off, and ambiguous actions go to the agent CLI exactly as before. Nothing breaks; it simply has no effect. It applies when you run against an API key or a gateway (see the three settings below)."
           },
           "sessionSitter.supervisor.fastClassifierModel": {
             "type": "string",

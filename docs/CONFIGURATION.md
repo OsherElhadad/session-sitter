@@ -122,8 +122,13 @@ Measured against a real gateway, **98.9% of the prompt was a cache read** and on
 written per decision. `docs/superpowers/specs/2026-09-02-fast-supervisor.md` has the mechanism, the
 numbers and the command that produced them.
 
-It needs three things, and stays silently off without them — the agent CLI then classifies exactly
-as it did before:
+**Most Claude Code users will not get this, and that is expected.** A Pro/Max/Team subscription
+signs in through OAuth, with credentials in the OS keychain and no `ANTHROPIC_AUTH_TOKEN` or
+`ANTHROPIC_BASE_URL` set. The tier then stays off and ambiguous actions go to the agent CLI exactly
+as before — nothing breaks, it just has no effect. It applies when you run against an API key or a
+gateway.
+
+It needs three things, and stays silently off without them:
 
 - a gateway: `fastClassifierBaseUrl`, else `anthropicBaseUrl`, else `ANTHROPIC_BASE_URL`
 - a token: `anthropicAuthToken`, else `ANTHROPIC_AUTH_TOKEN`

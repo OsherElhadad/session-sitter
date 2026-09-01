@@ -2,6 +2,23 @@
 
 **Date:** 2026-09-02 · **Status:** implemented · **Code:** `src/supervisor/fastClassifier.ts`
 
+## Who this is available to — read this first
+
+**The tier needs an API token and a gateway URL, and most Claude Code users have neither.** A user
+on a Pro, Max or Team subscription authenticates through OAuth: their credentials live in the OS
+keychain, and `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are simply not set. For them this
+tier never runs, and supervision behaves exactly as it does today — the deterministic rules still
+settle most traffic in 3-4ms, and anything ambiguous still goes to the `bob` / `claude` CLI.
+
+So the speedup below is real but **not universal**: it applies to installs running against an API
+key or a gateway, which is the minority of the install base. The setting is on by default and stays
+inert without those two values, so nothing breaks for anyone — it just does nothing.
+
+An OAuth token *can* address the Messages API (`Authorization: Bearer` plus an
+`anthropic-beta: oauth-2025-04-20` header), so this is a solvable limitation rather than a
+permanent one. It needs per-request header support and keychain reading, both deliberately out of
+scope here.
+
 ## The problem
 
 Supervision had two tiers. The deterministic rules in `tiers.ts` settle the obvious cases in
@@ -24,6 +41,24 @@ So ~99% of the classifier path is the subprocess and its model call, and there w
 to win in our own code. The right framing for what this tier achieves is not 13.5s → 4s: a cached
 opus-5 judgement at **~4-5.5s median is below the subprocess's fixed startup cost alone.** The
 whole judgement now costs less than the old path spent before it started reading the prompt.
+
+## Who can actually use this
+
+**The tier needs an API token, and most Claude Code users do not have one.** Users on a Pro, Max
+or Team subscription authenticate through OAuth, and those credentials live in the OS keychain —
+there is no `ANTHROPIC_AUTH_TOKEN` and no `ANTHROPIC_BASE_URL` in their environment at all. For
+them this tier never engages and the CLI classifier answers exactly as it did before. So the
+speedup below is real, but it is available to users running against an API key or a gateway, which
+is the minority of the install base.
+
+It degrades quietly rather than loudly, which is deliberate. A gateway that authenticates the
+token but demands an extra header it was not given (`contextguru.vpc.cloud9.ibm.com/anthropic`
+returns `401 no x-context-guru-token header`) produces a non-200, which becomes a
+`FastClassifierError`, which `orchestrator.ts` catches and records as `fast_llm_fell_back` before
+handing the decision to the CLI. The error body is passed through `scrub()` first, so a token
+cannot reach a log. **No failure of this tier can produce an approval** — that is the one property
+that matters, and it holds for a missing token, a wrong gateway, a timeout, an unparsable verdict
+and a low-confidence answer alike.
 
 ## The fix, in one sentence
 
