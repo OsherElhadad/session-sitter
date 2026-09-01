@@ -217,3 +217,88 @@ describe('webview: the session list is named for what it holds', () => {
     expect(provider).not.toContain('aria-label="Claude Sessions"');
   });
 });
+
+// Accessibility of the panel chrome. No DOM here, so these assert the contract in the three files
+// that have to agree — which is also where each of these bugs lived: a rule with no attribute, an
+// attribute with no rule, a label that only ever existed as a tooltip.
+describe('webview: keyboard and screen-reader access', () => {
+  const dir = path.join(__dirname, '..', 'webview');
+  const main = fs.readFileSync(path.join(dir, 'main.js'), 'utf8');
+  const menu = fs.readFileSync(path.join(dir, 'toolbarMenu.js'), 'utf8');
+  const css = fs.readFileSync(path.join(dir, 'styles.css'), 'utf8');
+  const provider = fs.readFileSync(
+    path.join(__dirname, '..', 'SessionSitterViewProvider.ts'), 'utf8');
+
+  it('holds both infinite animations still when the OS asks for less motion', () => {
+    // One per row, so a full list is twenty of them at once.
+    const query = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/);
+    expect(query).not.toBeNull();
+    expect(query?.[0]).toContain('.status-waiting');
+    expect(query?.[0]).toContain('.status-active');
+    expect(query?.[0]).toContain('animation: none');
+  });
+
+  it('keeps the selected row and the status dots visible in forced colours', () => {
+    expect(css).toMatch(/@media \(forced-colors: active\)/);
+  });
+
+  it('names every status the dot can be in, idle included', () => {
+    expect(main).toContain("statusEl.setAttribute('aria-label', statusLabel)");
+    expect(main).toContain("'Idle'");
+  });
+
+  it('reveals the close button when the focus lands on it directly', () => {
+    expect(css).toMatch(/\.tab-close:focus-visible\s*\{[^}]*opacity: 1/);
+  });
+
+  it('gives both toolbar menus the same popup semantics', () => {
+    const buttons = provider.match(/<button id="(menu|sort)-btn"[\s\S]*?>/g) ?? [];
+    expect(buttons).toHaveLength(2);
+    buttons.forEach(button => {
+      expect(button).toContain('aria-haspopup="menu"');
+      expect(button).toContain('aria-expanded="false"');
+      expect(button).toContain('aria-label=');
+    });
+  });
+
+  it('labels the new-session buttons, not just their tooltips', () => {
+    expect(provider).toContain('aria-label="New Claude session"');
+    expect(provider).toContain('aria-label="New Bob session"');
+  });
+
+  it('shares one menu-keyboard implementation between the two dropdowns', () => {
+    expect(menu).toContain('function wireMenuKeys');
+    expect(menu).toContain('wireMenuKeys: wireMenuKeys');
+    // Escape has to put focus back on the button, or dismissing a menu drops the keyboard user at
+    // the top of the document.
+    expect(menu).toMatch(/Escape[\s\S]{0,200}trigger\.focus\(\)/);
+    expect(main).toContain('window.SessionSitterMenu.wireMenuKeys(menu, sortBtn, closeSortMenu)');
+  });
+
+  it('makes the about box a real modal', () => {
+    expect(provider).toContain('role="dialog"');
+    expect(provider).toContain('aria-modal="true"');
+    expect(provider).toContain('aria-labelledby="about-title"');
+    // Focus moves in, is trapped on the single control, and goes back where it came from.
+    expect(menu).toContain('aboutOpener = document.activeElement');
+    expect(menu).toContain('aboutOpener.focus()');
+    expect(menu).toMatch(/'Tab'[\s\S]{0,160}aboutClose\.focus\(\)/);
+  });
+
+  it('announces a supervision decision instead of letting it appear silently', () => {
+    expect(provider).toContain('id="activity-panel" aria-live="polite"');
+    // …but only when it actually changed: the host re-pushes the whole feed on every poll, and a
+    // live region re-reads everything it rebuilds.
+    expect(main).toContain('renderedActivityKey');
+  });
+
+  it('keeps muted text above the barely-visible range', () => {
+    // Every one of these stacked opacity on an already-muted colour.
+    for (const selector of ['.tab-time', '.preview-path', '.preview-time', '.about-built']) {
+      const rule = css.match(new RegExp(`\\${selector}\\s*\\{[^}]*\\}`))?.[0] ?? '';
+      const opacity = Number(rule.match(/opacity:\s*([\d.]+)/)?.[1] ?? '1');
+      expect(opacity, selector).toBeGreaterThanOrEqual(0.75);
+    }
+    expect(css).toMatch(/\.activity-timeago[^}]*opacity: 0\.8/);
+  });
+});

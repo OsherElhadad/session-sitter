@@ -362,7 +362,11 @@
   // seconds, and rebuilding the menu under the pointer would move the item being clicked.
   function refreshSortButton() {
     if (!sortBtn) { return; }
-    sortBtn.title = 'Sort sessions — ' + currentSortLabel();
+    const label = 'Sort sessions — ' + currentSortLabel();
+    sortBtn.title = label;
+    // `title` is not reliably announced and never shows on keyboard focus, so the name is set as
+    // well as the tooltip — and from the same string, so the two cannot drift.
+    sortBtn.setAttribute('aria-label', label);
   }
 
   /**
@@ -411,6 +415,10 @@
     document.body.appendChild(menu);
     sortMenuEl = menu;
     sortBtn.setAttribute('aria-expanded', 'true');
+    // Arrow keys and Escape-restores-focus, shared with the ☰ menu rather than written twice.
+    if (window.SessionSitterMenu && window.SessionSitterMenu.wireMenuKeys) {
+      window.SessionSitterMenu.wireMenuKeys(menu, sortBtn, closeSortMenu);
+    }
 
     // Anchor under the button (the menu is position: fixed).
     const rect = sortBtn.getBoundingClientRect();
@@ -486,9 +494,14 @@
 
     const statusEl = document.createElement('span');
     statusEl.className = 'status-indicator status-' + (session.status || 'idle');
-    statusEl.setAttribute('title',
+    // The dot carries the state in colour and animation alone, so it needs a name to carry it in
+    // words. Idle used to have an empty title, which announced — and showed on hover — nothing.
+    const statusLabel =
       session.status === 'active'  ? 'Running' :
-      session.status === 'waiting' ? 'Waiting for response' : '');
+      session.status === 'waiting' ? 'Waiting for response' : 'Idle';
+    statusEl.setAttribute('role', 'img');
+    statusEl.setAttribute('aria-label', statusLabel);
+    statusEl.setAttribute('title', statusLabel);
 
     const textEl = document.createElement('div');
     textEl.className = 'tab-text';
@@ -911,8 +924,16 @@
     return wrap;
   }
 
+  /** @type {string} — the feed as last rendered, so an unchanged push is not re-rendered */
+  let renderedActivityKey = '';
+
   function renderActivity() {
     if (!activityPanel) { return; }
+    // The host re-pushes the whole feed on every poll. Rebuilding it unchanged would re-announce
+    // the lot through the panel's aria-live region and collapse any open "why it failed" detail.
+    const key = JSON.stringify([messagingChannel, activityItems]);
+    if (key === renderedActivityKey && activityPanel.childElementCount) { return; }
+    renderedActivityKey = key;
     activityPanel.innerHTML = '';
     if (activityItems.length === 0) {
       const empty = document.createElement('span');

@@ -842,20 +842,23 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
 <body>
   <div id="tab-bar">
     <div id="toolbar">
-      <button id="menu-btn" title="Menu">&#x2630;</button>
-      <button id="sort-btn" title="Sort sessions" aria-haspopup="menu"
-              aria-expanded="false">&#x21C5;</button>
-      <button id="new-session-btn" title="New Claude Session">+</button>
-      <button id="new-bob-session-btn" title="New Bob Session">+B</button>
+      <button id="menu-btn" title="Menu" aria-label="Session Sitter menu"
+              aria-haspopup="menu" aria-expanded="false">&#x2630;</button>
+      <button id="sort-btn" title="Sort sessions" aria-label="Sort sessions"
+              aria-haspopup="menu" aria-expanded="false">&#x21C5;</button>
+      <button id="new-session-btn" title="New Claude Session"
+              aria-label="New Claude session">+</button>
+      <button id="new-bob-session-btn" title="New Bob Session"
+              aria-label="New Bob session">+B</button>
     </div>
     <div id="tab-strip" role="tablist" aria-label="Agent sessions"></div>
     <button id="history-toggle" aria-expanded="false">History &#x25B6;</button>
     <div id="history-panel" hidden></div>
     <button id="activity-toggle" aria-expanded="true">Supervision activity &#x25BC;</button>
-    <div id="activity-panel"></div>
+    <div id="activity-panel" aria-live="polite"></div>
   </div>
-  <div id="about-box" hidden>
-    <div class="about-name">Session Sitter</div>
+  <div id="about-box" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+    <div class="about-name" id="about-title">Session Sitter</div>
     <div class="about-version">v${BUILD_VERSION}</div>
     <div class="about-built">Built ${buildDisplay}</div>
     <button id="about-close">Close</button>
