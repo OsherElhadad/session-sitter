@@ -180,7 +180,9 @@ export function decideDeterministically(
   const toolName = input.tool_name ?? '';
   const toolInput = input.tool_input ?? null;
   const session = sessionFromPermissionRequest(input);
+  // Red clauses scan the payload too; green clauses must not. See haystackFor.
   const hay = haystackFor(toolName, toolInput);
+  const identityHay = haystackFor(toolName, toolInput, 'identity-only');
 
   // 1. Deterministic green — a read or a safe command.
   if (preClassify(session) === TrafficLight.GREEN) {
@@ -251,7 +253,9 @@ export function decideDeterministically(
   }
 
   // 4. A written green clause — the standing policy that makes an overnight run survivable.
-  const green = findMatchingClause(clauses, hay, 'green');
+  // Deliberately the identity haystack: a green clause must never be satisfied by the bytes a
+  // Write happens to contain.
+  const green = findMatchingClause(clauses, identityHay, 'green');
   if (green) {
     return {
       decision: { behavior: 'allow' },

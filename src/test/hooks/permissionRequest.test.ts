@@ -126,6 +126,36 @@ describe('decideDeterministically — rung 1, deterministic green', () => {
   });
 });
 
+describe('decideDeterministically — a payload can deny but never allow', () => {
+  // Found by driving real sessions: a NOTES.md summarising the work was denied twice for quoting
+  // the commands it described, and then a later draft was ALLOWED by the green test-suite clause
+  // because its prose contained the test command. A clause about tests permitted a file write.
+  it('does not let a green clause be satisfied by the bytes being written', () => {
+    const v = decideDeterministically(req('Write', {
+      file_path: '/tmp/repo/NOTES.md',
+      content: 'Ran npm test after the refactor and it passed.',
+    }), clauses);
+    // Not allowed by `tests-are-free`. Unmatched is the correct answer: it falls through to the
+    // classifier or to fail-closed, both of which are safe.
+    expect(v?.decision.behavior).not.toBe('allow');
+  });
+
+  it('still lets a red clause see the bytes being written', () => {
+    const v = decideDeterministically(req('Write', {
+      file_path: '/tmp/repo/deploy.sh',
+      content: '#!/bin/sh\nrm -rf /var/data\n',
+    }), clauses);
+    expect(v?.decision.behavior).toBe('deny');
+    expect(v?.clause).toBe('practices §no-recursive-delete');
+  });
+
+  it('a green clause still matches on the identifying arguments', () => {
+    const v = decideDeterministically(req('Bash', { command: 'npm test' }), clauses);
+    expect(v?.decision.behavior).toBe('allow');
+    expect(v?.clause).toBe('practices §tests-are-free');
+  });
+});
+
 describe('decideDeterministically — rung 2, the correction lane', () => {
   it('rewrites a force push and cites the built-in rule when no clause defines it', () => {
     // No practices file, so there is no `force-push` clause to cite. Citing one anyway would
