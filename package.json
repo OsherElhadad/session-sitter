@@ -2,7 +2,7 @@
   "name": "session-sitter",
   "displayName": "Session Sitter",
   "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "publisher": "eranra",
   "icon": "resources/logo.png",
   "galleryBanner": {
@@ -193,6 +193,35 @@
           "default": 120,
           "minimum": 0,
           "markdownDescription": "How recently a **Codex** or **VS Code Chat** session must have been updated to count as active in the Sessions list. Those sources expose no live-process signal, so recency is the only available proxy; Claude and Bob sessions are judged by what their extension hosts actually report as open. Set to `0` to keep them in History always."
+        },
+        "sessionSitter.sessionSort": {
+          "type": "string",
+          "enum": [
+            "recent",
+            "hostWorkspace",
+            "workspace",
+            "source",
+            "title",
+            "status"
+          ],
+          "enumDescriptions": [
+            "Recently updated — newest activity first. Rows move as sessions update.",
+            "Machine, then workspace, then title. Rows hold still.",
+            "Workspace, then title, regardless of machine. Rows hold still.",
+            "Agent (Claude, Bob, Codex, Chat), then workspace. Rows hold still.",
+            "Session title, A to Z. Rows hold still.",
+            "Needs you first: waiting, then running, then idle."
+          ],
+          "default": "recent",
+          "markdownDescription": "How the **Sessions** list and **History** are ordered. Also switchable from the panel's ⇅ toolbar button, which writes this setting.\n\n`recent` (the default) sorts by newest activity, so rows move every time a session updates — which is what makes it hard to keep your place. The other orders sort by properties of the session rather than by the clock, so a row only moves when a session appears or disappears:\n\n- `hostWorkspace` — machine, then workspace, then title. This machine's sessions lead.\n- `workspace` — workspace, then title, regardless of which machine it is on.\n- `source` — grouped by agent: Claude, Bob, Codex, Chat.\n- `title` — alphabetical by session title.\n- `status` — waiting on you first, then running, then idle (newest first inside each group; this one does move)."
+        },
+        "sessionSitter.workspaceColors": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Colour for the **workspace pill** on a session row, per workspace. Unlisted workspaces keep the theme's badge colour.\n\nEach key is a workspace **name** (`my-app`), a full workspace **path** (`/home/you/work/my-app`), or a glob over either (`*` = any run of characters, `?` = one; `*` alone matches every workspace). Keys are tried in the order you write them and the **first match wins**, so put a specific workspace above a broad glob.\n\nEach value is a hex colour (`#0f8`, `#1a2b3c`), one of the built-in names — `red`, `orange`, `amber`, `yellow`, `lime`, `green`, `teal`, `cyan`, `blue`, `indigo`, `violet`, `purple`, `magenta`, `pink`, `brown`, `slate`, `gray` — or `auto` to derive a stable colour from the workspace itself. The label colour is chosen for contrast automatically. A value that is not a colour is ignored, leaving that pill on the theme colour.\n\nExample:\n\n```json\n{\n  \"session-sitter\": \"green\",\n  \"/home/you/work/payments\": \"#c0392b\",\n  \"scratch-*\": \"slate\",\n  \"*\": \"auto\"\n}\n```"
         },
         "sessionSitter.supervisorStateDir": {
           "type": "string",

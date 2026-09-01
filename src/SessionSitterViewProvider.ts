@@ -11,6 +11,11 @@ import { getOpenClaudeSessionIds } from './agents/ClaudeInspector';
 import { BUILD_TIME, BUILD_VERSION } from './buildInfo';
 import { SupervisionActivity, type ActivityItem } from './SupervisionActivity';
 import { uploadSession } from './corpus/upload';
+import {
+  DEFAULT_SESSION_SORT, SESSION_SORT_MODES, sortSessions, toSessionSortMode,
+  type SessionSortMode,
+} from './sessionSort';
+import { resolveWorkspaceColor, type WorkspaceBadgeColor } from './workspaceColors';
 
 // The Sessions view is a live worklist: only sessions the user can currently act on.
 // Everything else goes to History. Both partitions stay sorted by recency and capped.
@@ -29,6 +34,23 @@ const DEFAULT_PROBELESS_ACTIVE_WINDOW_MINUTES = 120;
 // bound, one abandoned mid-turn transcript sits in the worklist forever, because its status
 // is read from a file that will never change again.
 const STALE_FALLBACK_WINDOW_MS = 120 * 60_000;
+
+/**
+ * A session as the webview receives it: the session itself plus whatever display decoration
+ * applies to it. Decoration is resolved here rather than in the webview because the settings it
+ * depends on are only readable from the extension host.
+ */
+type SessionRow = ClaudeSession & { workspaceColor?: WorkspaceBadgeColor };
+
+/**
+ * `sessionSitter.workspaceColors` as read from settings: pattern → colour. Values are validated in
+ * `workspaceColors.ts`, not here, because a hand-edited setting can hold anything.
+ *
+ * Spelled as its own alias so `ci/check-settings.mjs` can see the read: it matches the setting id
+ * inside a typed `get(...)` call, and a type argument containing its own angle brackets defeats
+ * that match — which would report the setting as declared but never read.
+ */
+type WorkspaceColorRules = Record<string, unknown>;
 
 function getNonce(): string {
   return randomBytes(16).toString('hex');
@@ -117,6 +139,18 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
       })
     );
 
+    // Repaint when the settings that shape the list change. Both are edited by hand as often as
+    // through the panel — a colour map especially — and a change you cannot see applied looks
+    // like a setting that does not work.
+    this._viewDisposables.push(
+      vscode.workspace.onDidChangeConfiguration(event => {
+        if (!event.affectsConfiguration('sessionSitter.sessionSort')
+          && !event.affectsConfiguration('sessionSitter.workspaceColors')) { return; }
+        void this._pushSessions();
+        if (this._historyOpen) { void this._pushHistory(); }
+      })
+    );
+
     // Refresh when Claude Code tabs open, close, or get renamed (tabGroups API added in VS Code 1.65)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tabGroups = (vscode.window as any).tabGroups as { onDidChangeTabs: vscode.Event<unknown> } | undefined;
@@ -156,6 +190,10 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
             const sessionId = message.sessionId as string | undefined;
             if (!sessionId) { break; }
             this._closeTabForSession(sessionId);
+            break;
+          }
+          case 'setSessionSort': {
+            await this._setSessionSort(message.mode);
             break;
           }
           case 'loadHistory': {
@@ -507,16 +545,45 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     return { active: all.filter(isActive), history: all.filter(s => !isActive(s)) };
   }
 
+  /** The order the user picked for the session list. */
+  private _sessionSort(): SessionSortMode {
+    return toSessionSortMode(
+      vscode.workspace.getConfiguration('sessionSitter')
+        .get<string>('sessionSort', DEFAULT_SESSION_SORT));
+  }
+
+  /**
+   * Prepare rows for display: cap first, then sort, then colour.
+   *
+   * The cap has to be applied to the recency-ordered list, before the display sort — sorting by
+   * title and *then* taking the first 20 would silently drop the sessions you touched most
+   * recently, which is the opposite of what a worklist is for.
+   */
+  private _forDisplay(sessions: ClaudeSession[], limit: number): SessionRow[] {
+    const rules = vscode.workspace.getConfiguration('sessionSitter')
+      .get<WorkspaceColorRules>('workspaceColors', {});
+    return sortSessions(sessions.slice(0, limit), this._sessionSort()).map(session => {
+      const workspaceColor = resolveWorkspaceColor(session, rules);
+      // Absent, not null: an uncoloured pill must keep the theme's badge colour, and the webview
+      // decides that by the field simply not being there.
+      return workspaceColor ? { ...session, workspaceColor } : { ...session };
+    });
+  }
+
   private async _pushSessions(): Promise<void> {
     if (!this._view) { return; }
     const { active } = await this._partitionSessions();
     void this._view.webview.postMessage({
       type: 'updateSessions',
-      sessions: active.slice(0, SESSIONS_LIMIT),
+      sessions: this._forDisplay(active, SESSIONS_LIMIT),
       // Sent with the sessions so the panel can name peers it could not reach, rather than
       // letting an unreachable machine look like a machine with nothing running.
       // Optional call: peer support is additive, and a session manager without it is still valid.
       peers: this._sessionManager.getPeerStatuses?.() ?? [],
+      // The sort menu is built from these, so the modes exist in exactly one place — here — and
+      // the panel cannot offer an order the sorter does not implement.
+      sortMode: this._sessionSort(),
+      sortModes: SESSION_SORT_MODES,
     });
   }
 
@@ -524,8 +591,31 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     if (!this._view) { return; }
     const { history } = await this._partitionSessions();
     void this._view.webview.postMessage({
-      type: 'updateHistory', sessions: history.slice(0, HISTORY_LIMIT),
+      type: 'updateHistory', sessions: this._forDisplay(history, HISTORY_LIMIT),
     });
+  }
+
+  /**
+   * Record the order the user picked from the panel's sort menu.
+   *
+   * Written to the global (user) settings so the choice survives a reload and applies in every
+   * window — the session list is the same list everywhere, so a per-workspace answer would mean
+   * the same rows sorted differently depending on which window you looked at them from.
+   */
+  private async _setSessionSort(mode: unknown): Promise<void> {
+    const next = toSessionSortMode(mode);
+    try {
+      await vscode.workspace.getConfiguration('sessionSitter')
+        .update('sessionSort', next, vscode.ConfigurationTarget.Global);
+    } catch (err) {
+      // A settings file that cannot be written (read-only, or managed by policy) would otherwise
+      // leave the panel showing an order it did not actually adopt. Say so, and re-push either
+      // way, so the list and the menu's check mark agree with what is really stored.
+      void vscode.window.showWarningMessage(
+        `Could not save the session order: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    await this._pushSessions();
+    if (this._historyOpen) { await this._pushHistory(); }
   }
 
   // Close the Claude Code editor tab whose label matches the session's title.
@@ -716,6 +806,8 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
   <div id="tab-bar">
     <div id="toolbar">
       <button id="menu-btn" title="Menu">&#x2630;</button>
+      <button id="sort-btn" title="Sort sessions" aria-haspopup="menu"
+              aria-expanded="false">&#x21C5;</button>
       <button id="new-session-btn" title="New Claude Session">+</button>
       <button id="new-bob-session-btn" title="New Bob Session">+B</button>
     </div>

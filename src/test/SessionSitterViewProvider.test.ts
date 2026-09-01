@@ -15,6 +15,7 @@ const {
   mockSetStatusBarMessage,
   mockShowInformationMessage,
   mockClipboardWriteText,
+  mockOnDidChangeConfiguration,
 } = vi.hoisted(() => ({
   mockExecuteCommand: vi.fn(),
   mockShowWarningMessage: vi.fn(),
@@ -24,6 +25,8 @@ const {
   mockSetStatusBarMessage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
   mockShowInformationMessage: vi.fn().mockResolvedValue(undefined),
   mockClipboardWriteText: vi.fn().mockResolvedValue(undefined),
+  // The listener is typed as a parameter so a test can pull it back out of `.mock.calls`.
+  mockOnDidChangeConfiguration: vi.fn((_listener: unknown) => ({ dispose: vi.fn() })),
 }));
 
 vi.mock('vscode', () => {
@@ -45,7 +48,11 @@ vi.mock('vscode', () => {
       getConfiguration: mockGetConfiguration,
       workspaceFolders: [],
       openTextDocument: mockOpenTextDocument,
+      // The panel repaints when a setting that shapes the list changes; the handler is captured
+      // so a test can fire it.
+      onDidChangeConfiguration: mockOnDidChangeConfiguration,
     },
+    ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     window: {
       tabGroups: { all: [], onDidChangeTabs: vi.fn(() => ({ dispose: vi.fn() })) },
       showWarningMessage: mockShowWarningMessage,
@@ -938,3 +945,211 @@ describe('webview message: copy transcript handlers', () => {
   });
 });
 
+
+// ── Tests: session order and workspace colours ───────────────────────────────
+//
+// Both features are settings the panel reads on every push, so what matters here is the wiring:
+// the rows the webview receives are ordered by the chosen mode, decorated with the colour the
+// setting asks for, and — the one non-obvious part — capped by RECENCY before being re-sorted, so
+// choosing an alphabetical order can never hide the sessions you just touched.
+describe('session order and workspace colours', () => {
+  function resolveWebviewCapturing(provider: SessionSitterViewProvider) {
+    const postMessage = vi.fn();
+    const webview = {
+      options: {},
+      html: '',
+      onDidReceiveMessage: vi.fn(),
+      postMessage,
+      asWebviewUri: (u: unknown) => u,
+      cspSource: 'vscode-webview:',
+    };
+    provider.resolveWebviewView(
+      { webview, onDidDispose: vi.fn(() => ({ dispose: vi.fn() })), visible: true } as unknown as import('vscode').WebviewView,
+      {} as import('vscode').WebviewViewResolveContext,
+      { isCancellationRequested: false, onCancellationRequested: vi.fn() } as unknown as import('vscode').CancellationToken,
+    );
+    const handler = (webview.onDidReceiveMessage as ReturnType<typeof vi.fn>).mock.calls[0][0] as (msg: unknown) => Promise<void>;
+    return { postMessage, handler };
+  }
+
+  interface PushedSessions {
+    type: string;
+    sessions: Array<import('../SessionManager').ClaudeSession & {
+      workspaceColor?: { background: string; foreground: string };
+    }>;
+    sortMode?: string;
+    sortModes?: Array<{ id: string; label: string }>;
+  }
+
+  /** The LAST message of a type, so a re-push after a settings change is what gets asserted. */
+  function lastPush(postMessage: ReturnType<typeof vi.fn>, type: string): PushedSessions | undefined {
+    const all = postMessage.mock.calls.map(c => c[0] as PushedSessions).filter(m => m.type === type);
+    return all[all.length - 1];
+  }
+
+  /** Recent + non-idle, which is what keeps a Claude session in the active partition. */
+  function activeSession(
+    sessionId: string,
+    over: Partial<import('../SessionManager').ClaudeSession> = {},
+  ): import('../SessionManager').ClaudeSession {
+    return {
+      sessionId,
+      projectPath: '/home/me/work/alpha',
+      projectName: 'alpha',
+      title: `t-${sessionId}`,
+      updatedAt: new Date(Date.now() - 60_000),
+      status: 'active',
+      source: 'claude',
+      ...over,
+    };
+  }
+
+  /** Point `getConfiguration` at a plain map of settings, with `update` recorded. */
+  function withSettings(values: Record<string, unknown>) {
+    const update = vi.fn().mockResolvedValue(undefined);
+    mockGetConfiguration.mockImplementation(() => ({
+      get: (key?: string, fallback?: unknown) =>
+        (key !== undefined && key in values ? values[key] : fallback),
+      update,
+    } as unknown as { get: (key?: string, fallback?: unknown) => unknown }));
+    return update;
+  }
+
+  beforeEach(() => {
+    mockReadLiveWindows.mockResolvedValue([]);
+  });
+
+  it('tells the panel which order is active, and every order it may offer', async () => {
+    withSettings({ sessionSort: 'title' });
+    const provider = makeProvider([activeSession('s1')]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    const pushed = lastPush(postMessage, 'updateSessions');
+    expect(pushed?.sortMode).toBe('title');
+    // The menu is built from this list, so it must arrive and must contain the default.
+    expect(pushed?.sortModes?.map(m => m.id)).toContain('recent');
+    expect(pushed?.sortModes?.length).toBeGreaterThan(1);
+  });
+
+  it('falls back to recency when the setting holds something unknown', async () => {
+    withSettings({ sessionSort: 'sideways' });
+    const provider = makeProvider([activeSession('s1')]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(lastPush(postMessage, 'updateSessions')?.sortMode).toBe('recent');
+  });
+
+  it('orders the pushed rows by the chosen mode, not by recency', async () => {
+    withSettings({ sessionSort: 'title' });
+    const provider = makeProvider([
+      activeSession('newest', { title: 'zebra', updatedAt: new Date() }),
+      activeSession('oldest', { title: 'apple', updatedAt: new Date(Date.now() - 600_000) }),
+    ]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(lastPush(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId))
+      .toEqual(['oldest', 'newest']);
+  });
+
+  it('caps by recency before sorting, so an alphabetical order cannot hide recent sessions', async () => {
+    withSettings({ sessionSort: 'title' });
+    // 21 sessions — one more than the list holds. The newest sorts LAST alphabetically, so a
+    // cap applied after the sort would be exactly the bug that drops it.
+    const all = Array.from({ length: 21 }, (_, i) => activeSession(`s${String(i).padStart(2, '0')}`, {
+      title: String.fromCharCode('z'.charCodeAt(0) - i),
+      updatedAt: new Date(Date.now() - i * 60_000),
+    }));
+    const provider = makeProvider(all);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    const ids = lastPush(postMessage, 'updateSessions')?.sessions.map(s => s.sessionId) ?? [];
+    expect(ids).toHaveLength(20);
+    expect(ids).toContain('s00');     // newest, alphabetically last — kept
+    expect(ids).not.toContain('s20'); // oldest — the one the cap drops
+  });
+
+  it('colours a workspace the setting names, and leaves the others alone', async () => {
+    withSettings({ workspaceColors: { alpha: 'green' } });
+    const provider = makeProvider([
+      activeSession('in-alpha'),
+      activeSession('in-beta', { projectName: 'beta', projectPath: '/home/me/work/beta' }),
+    ]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    const rows = lastPush(postMessage, 'updateSessions')?.sessions ?? [];
+    const alpha = rows.find(s => s.sessionId === 'in-alpha');
+    const beta = rows.find(s => s.sessionId === 'in-beta');
+    expect(alpha?.workspaceColor?.background).toBe('#2e7d32');
+    // A readable label colour travels with the fill, or the pill is unreadable on some themes.
+    expect(alpha?.workspaceColor?.foreground).toBe('#ffffff');
+    // Absent, not null: that is what leaves the pill on the theme's badge colour.
+    expect(beta?.workspaceColor).toBeUndefined();
+  });
+
+  it('colours History rows too, and sorts them the same way', async () => {
+    withSettings({ sessionSort: 'title', workspaceColors: { '*': 'blue' } });
+    const provider = makeProvider([
+      activeSession('h-z', { title: 'zebra', status: 'idle', updatedAt: new Date(0) }),
+      activeSession('h-a', { title: 'apple', status: 'idle', updatedAt: new Date(0) }),
+    ]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushHistory(): Promise<void> })._pushHistory();
+
+    const rows = lastPush(postMessage, 'updateHistory')?.sessions ?? [];
+    expect(rows.map(s => s.sessionId)).toEqual(['h-a', 'h-z']);
+    expect(rows[0].workspaceColor?.background).toBe('#1f70c1');
+  });
+
+  it('leaves rows undecorated when the colour setting is malformed', async () => {
+    withSettings({ workspaceColors: 'not an object' });
+    const provider = makeProvider([activeSession('s1')]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(lastPush(postMessage, 'updateSessions')?.sessions[0].workspaceColor).toBeUndefined();
+  });
+
+  it('setSessionSort records the choice in the user settings and re-pushes the list', async () => {
+    const update = withSettings({ sessionSort: 'recent' });
+    const provider = makeProvider([activeSession('s1')]);
+    const { postMessage, handler } = resolveWebviewCapturing(provider);
+    await handler({ type: 'setSessionSort', mode: 'hostWorkspace' });
+
+    // Global (ConfigurationTarget.Global === 1), so the order holds across a reload and across
+    // windows — the session list is the same list in every window.
+    expect(update).toHaveBeenCalledWith('sessionSort', 'hostWorkspace', 1);
+    expect(lastPush(postMessage, 'updateSessions')).toBeDefined();
+  });
+
+  it('setSessionSort refuses a mode the sorter does not implement', async () => {
+    const update = withSettings({ sessionSort: 'recent' });
+    const provider = makeProvider([activeSession('s1')]);
+    const { handler } = resolveWebviewCapturing(provider);
+    await handler({ type: 'setSessionSort', mode: 'rm -rf' });
+
+    expect(update).toHaveBeenCalledWith('sessionSort', 'recent', 1);
+  });
+
+  it('repaints when either setting changes, and ignores unrelated setting changes', async () => {
+    withSettings({});
+    const provider = makeProvider([activeSession('s1')]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    const listener = mockOnDidChangeConfiguration.mock.calls.at(-1)?.[0] as unknown as
+      (e: { affectsConfiguration(k: string): boolean }) => void;
+    expect(listener).toBeTypeOf('function');
+
+    const before = postMessage.mock.calls.length;
+    listener({ affectsConfiguration: (k: string) => k === 'sessionSitter.workspaceColors' });
+    await vi.waitFor(() => expect(postMessage.mock.calls.length).toBeGreaterThan(before), { timeout: 2000 });
+
+    const after = postMessage.mock.calls.length;
+    listener({ affectsConfiguration: () => false });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(postMessage.mock.calls.length).toBe(after);
+  });
+});

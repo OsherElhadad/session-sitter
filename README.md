@@ -215,6 +215,11 @@ invisible. Keep rule decisions out of Telegram — while still recording them �
 
 - **Four sources in one panel** — Claude Code, IBM Bob IDE, Codex CLI, VS Code Chat.
 - **Live status** per row, refreshed every 5 s.
+- **Sort the list your way** — the ⇅ button picks recency, machine + workspace, workspace, agent,
+  title, or needs-you-first. The non-recency orders keep rows still while sessions update, so you
+  do not lose your place.
+- **A colour per workspace** — give each project its own workspace pill colour, or `auto` to have
+  one derived for every project.
 - **Cross-window switching** — clicking a session owned by another window brings that window
   forward.
 - **Hover preview** of the last few messages.

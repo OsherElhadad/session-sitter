@@ -82,6 +82,25 @@ button:focus-visible {
   background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
 }
 
+/* Sort picker, sitting next to the hamburger: same fixed-width icon button. */
+#sort-btn {
+  flex-shrink: 0;
+  width: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.5;
+  transition: opacity 0.1s, background-color 0.1s;
+}
+
+#sort-btn:hover,
+#sort-btn[aria-expanded="true"] {
+  opacity: 1;
+  background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
 #new-session-btn,
 #new-bob-session-btn {
   flex: 1 1 auto;
@@ -288,6 +307,13 @@ button:focus-visible {
 .tab-badge--empty {
   font-style: italic;
   opacity: 0.6;
+}
+
+/* A workspace the user assigned a colour to (sessionSitter.workspaceColors). The fill and the
+   text colour are set inline per row — only the extension host can read the setting — so all this
+   rule does is stop the shared .tab-badge dimming from washing the chosen colour out. */
+.tab-badge--colored {
+  opacity: 1;
 }
 
 /* Inline relative time on the Sessions row (e.g. "5 minutes ago") */
@@ -588,6 +614,24 @@ button:focus-visible {
   transform: translateY(-50%);
   font-size: 10px;
   opacity: 0.6;
+}
+
+/* Sort menu items: a fixed check column so the labels line up whichever mode is active —
+   otherwise the whole list shifts sideways every time you change the order. */
+.session-sort-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.session-sort-check {
+  flex: 0 0 10px;
+  font-size: 10px;
+  opacity: 0.9;
+}
+
+.session-sort-item--active {
+  font-weight: 600;
 }
 
 /* ── Supervision Activity Toggle ─────────────────────────────────────────── */
