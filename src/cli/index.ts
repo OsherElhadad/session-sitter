@@ -8,6 +8,7 @@
  * supervision decisions, an overnight digest, and a linter for the practices file.
  *
  *     session-sitter status              every session, and which of them need you
+ *     session-sitter log                 the audit trail of supervision decisions
  *
  * Exit codes are uniform across every command: 0 answered, 1 something it needed was missing or
  * unreadable, 2 the arguments were wrong.
@@ -16,6 +17,7 @@
 import { BUILD_TIME, BUILD_VERSION } from '../buildInfo';
 import { CliError } from './args';
 import { processIo, type Io } from './render';
+import * as log from './log';
 import * as status from './status';
 
 interface Command {
@@ -25,6 +27,7 @@ interface Command {
 
 const COMMANDS: Readonly<Record<string, Command>> = {
   status: { summary: 'every agent session, and which of them need you', run: status.run },
+  log: { summary: 'query the audit trail of supervision decisions', run: log.run },
 };
 
 const USAGE = `session-sitter — agent governance in the terminal
