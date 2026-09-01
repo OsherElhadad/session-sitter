@@ -216,8 +216,11 @@ An unanswered card denies. It never approves.</pre>
 
     <details class="provenance">
       <summary>Where the numbers on this page come from</summary>
-      <p>Measured on 2026-09-02 on one developer machine. Latencies are wall-clock and vary with
-        your host, your network and your model choice; they are not a service level.</p>
+      <p>Measured on 2026-09-02 on one developer machine. <strong>Cost is the robust number here,
+        not speed</strong> — 7.8× cheaper per judgement reproduces; the latency win is a noisy
+        2.5–3.5× on the median with a tail that sometimes loses the race outright. Latencies are
+        wall-clock and vary with your host, your network and your model choice; they are not a
+        service level.</p>
       <table>
         <tbody>
           <tr>
@@ -228,10 +231,18 @@ An unanswered card denies. It never approves.</pre>
               here. This is the number the demo shows.</td>
           </tr>
           <tr>
+            <th scope="row">Cost per judgement</th>
+            <td>Uncached → cached: <code>claude-opus-5</code>
+              <strong>$0.042799 → $0.005463</strong> (7.8× cheaper) ·
+              <code>claude-sonnet-5</code> $0.017234 → $0.002302 ·
+              <code>claude-haiku-4-5</code> $0.006122 → $0.000261 (23×).</td>
+          </tr>
+          <tr>
             <th scope="row">Model tier</th>
             <td>When a call needs judgment, a direct API call with a warm prompt cache:
               <strong>5,559 ms median</strong> for <code>claude-opus-5</code> (n=12, min 3,977 ms,
-              <strong>max 15,180 ms</strong>) · 3,117 ms for <code>claude-haiku-4-5</code>. The
+              <strong>max 15,180 ms</strong>) · 3,117 ms median for <code>claude-haiku-4-5</code>
+              (n=5, min 2,825 ms, <strong>max 13,385 ms</strong>). The
               median is not a guarantee: the tail is real, and roughly <strong>1 in 12</strong>
               samples exceeded the tier's 10 s timeout and fell through to the subprocess below,
               paying its full cost. <code>claude-sonnet-5</code> measured 10,033 ms median — above
@@ -241,7 +252,9 @@ An unanswered card denies. It never approves.</pre>
             <th scope="row">What that replaced</th>
             <td>Shelling out to a <code>claude -p</code> subprocess per judgement:
               <strong>~13.5 s</strong> (range 11.2–16.7 s, n=3), of which fixed boot, auth and
-              round trip alone was ~7.5 s median (n=6).</td>
+              round trip alone was ~7.5 s median (n=6). So the honest speedup is
+              <strong>roughly 2.5–3.5× on the median — not an order of magnitude.</strong> Process
+              boot was never the whole cost.</td>
           </tr>
           <tr>
             <th scope="row">Prompt cache</th>
@@ -250,13 +263,6 @@ An unanswered card denies. It never approves.</pre>
               <strong>98.9%</strong> cache hit. This only applies to sessions long enough to cache:
               the minimum cacheable prefix is model-dependent (~2,048 tokens on Haiku) and a shorter
               one silently caches nothing at all, with no error.</td>
-          </tr>
-          <tr>
-            <th scope="row">Cost per judgement</th>
-            <td>Uncached → cached: <code>claude-opus-5</code>
-              <strong>$0.042799 → $0.005463</strong> (7.8× cheaper) ·
-              <code>claude-sonnet-5</code> $0.017234 → $0.002302 ·
-              <code>claude-haiku-4-5</code> $0.006122 → $0.000261 (23×).</td>
           </tr>
           <tr>
             <th scope="row">904 tests · zero dependencies</th>
