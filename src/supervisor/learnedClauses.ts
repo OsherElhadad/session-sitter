@@ -43,24 +43,23 @@ import { KnowledgeEntry, TIER_PRECEDENCE, Tier, parseBottomLine } from './knowle
 export type ClauseOrigin = 'human' | 'learned';
 
 /**
- * The lifecycle a clause moves through. Wider than MADR's state machine because three different
- * histories must stay tellable apart:
+ * The lifecycle a clause moves through. Six values, and each is a history a reviewer must be able
+ * to tell apart from the others:
  *
- *   - `rejected` / `declined` — never accepted. (Two names for one state: `10-schema.md` §2.4 says
- *     `rejected`, `14-runtime-and-dashboard.md`'s contract says `declined`. Both are accepted here
- *     rather than making one design's vocabulary a load error in the other's corpus.)
+ *   - `declined` — never accepted. (`rejected` is not a value: decline is the governance verb.)
  *   - `superseded` — replaced by a named better clause about the same subject.
- *   - `retired` / `deprecated` — was accepted, then removed as dead weight or disarmed by a human.
+ *   - `retired` — was accepted, then left service. *Why* is `retired_reason`, which is why there is
+ *     no `deprecated`: a human deliberately disarming a red and an ablation retiring dead weight
+ *     are one state reached two ways, and a second enum value would be two names for one thing.
  *
  * Only `accepted` is enforceable. `audit` is matched deterministically and never rendered.
  */
 export type ClauseStatus =
-  | 'proposed' | 'audit' | 'accepted'
-  | 'rejected' | 'declined'
-  | 'superseded' | 'retired' | 'deprecated';
+  | 'proposed' | 'audit' | 'accepted' | 'declined' | 'superseded' | 'retired';
 
-const CLAUSE_STATUSES: readonly ClauseStatus[] = [
-  'proposed', 'audit', 'accepted', 'rejected', 'declined', 'superseded', 'retired', 'deprecated',
+/** The canonical vocabulary. Exported so a test can pin it — it has drifted apart once already. */
+export const CLAUSE_STATUSES: readonly ClauseStatus[] = [
+  'proposed', 'audit', 'accepted', 'declined', 'superseded', 'retired',
 ];
 
 /** Why a clause left service. Required whenever the status is `retired`. */
@@ -149,19 +148,6 @@ export interface ParsedLearnedClause {
 
 export function hasErrors(findings: readonly Finding[]): boolean {
   return findings.some(f => f.severity === 'error');
-}
-
-/** Raised when a learned corpus does not load. Carries every finding, not just the first. */
-export class LearnedClauseError extends Error {
-  readonly findings: Finding[];
-
-  constructor(findings: Finding[]) {
-    const errs = findings.filter(f => f.severity === 'error');
-    super(`${errs.length} error(s) in learned clauses:\n`
-      + errs.map(f => `  ${f.file}${f.line === null ? '' : `:${f.line}`}: ${f.message}`).join('\n'));
-    this.name = 'LearnedClauseError';
-    this.findings = findings;
-  }
 }
 
 // --------------------------------------------------------------------------- status semantics
@@ -478,15 +464,35 @@ export function parseLearnedClause(
     }
   }
 
-  // ---- evidence
+  const learnedFrom: LearnedFrom = {
+    sessions: frontmatter.nested.lists.sessions ?? [],
+    decisions: frontmatter.nested.lists.decisions ?? [],
+  };
+  for (const key of [...Object.keys(frontmatter.nested.lists), ...Object.keys(frontmatter.nested.scalars)]) {
+    if (key !== 'sessions' && key !== 'decisions') {
+      warn(at(`learned_from.${key}`), `unknown \`learned_from.${key}\` — the block carries `
+        + '`sessions` and `decisions`');
+    }
+  }
+  const hasEvidenceTrail = learnedFrom.sessions.length > 0 || learnedFrom.decisions.length > 0;
+
+  // ---- evidence, required exactly when there is an extraction to describe.
+  //
+  // `evidence` says how a *machine* derived the clause, so it is required whenever `learned_from`
+  // names sources — and forbidden when it does not. A hand-parked clause had no extraction, so no
+  // enum value is truthful for it, and demanding one would make the field lie in exactly the case a
+  // reviewer most needs to trust it.
   const evidenceRaw = scalar('evidence');
   let evidence: Evidence | null = null;
-  if (evidenceRaw === null) {
-    err(at('evidence'), 'missing `evidence`: a learned clause must say how it was derived '
-      + `(${EVIDENCE_TAGS.join(', ')})`);
-  } else if (!(EVIDENCE_TAGS as readonly string[]).includes(evidenceRaw)) {
+  if (evidenceRaw !== null && !(EVIDENCE_TAGS as readonly string[]).includes(evidenceRaw)) {
     err(at('evidence'), `unknown \`evidence: ${evidenceRaw}\` (expected ${EVIDENCE_TAGS.join(', ')})`);
-  } else {
+  } else if (evidenceRaw !== null && !hasEvidenceTrail) {
+    err(at('evidence'), `\`evidence: ${evidenceRaw}\` with no \`learned_from\` sources: evidence `
+      + 'describes an extraction, and there is none to describe');
+  } else if (evidenceRaw === null && hasEvidenceTrail) {
+    err(at('learned_from'), 'missing `evidence`: a clause with `learned_from` sources must say how '
+      + `it was derived (${EVIDENCE_TAGS.join(', ')})`);
+  } else if (evidenceRaw !== null) {
     evidence = evidenceRaw as Evidence;
   }
 
@@ -519,17 +525,6 @@ export function parseLearnedClause(
   } else if (fixFrom !== null || fixTo !== null) {
     err(at(fixFrom === null ? 'fix_to' : 'fix_from'),
       '`fix_from` and `fix_to` are both-or-neither: one without the other cannot rewrite anything');
-  }
-
-  const learnedFrom: LearnedFrom = {
-    sessions: frontmatter.nested.lists.sessions ?? [],
-    decisions: frontmatter.nested.lists.decisions ?? [],
-  };
-  for (const key of [...Object.keys(frontmatter.nested.lists), ...Object.keys(frontmatter.nested.scalars)]) {
-    if (key !== 'sessions' && key !== 'decisions') {
-      warn(at(`learned_from.${key}`), `unknown \`learned_from.${key}\` — the block carries `
-        + '`sessions` and `decisions`');
-    }
   }
 
   // ---- retirement: three fields set together, and only together (§4.4).
@@ -595,7 +590,7 @@ export function parseLearnedClause(
 
   // ---- the hand-parked case. Keyed on empty evidence, *not* on the body: parking a clause under
   // `learned/` to give it lower precedence is legitimate, so it can only ever be an info.
-  if (learnedFrom.sessions.length === 0 && learnedFrom.decisions.length === 0) {
+  if (!hasEvidenceTrail) {
     findings.push({
       severity: 'info', file: sourceFile, line: at('learned_from'),
       message: 'no `learned_from` evidence — a hand-written clause belongs in `bottom-line.md`, '
@@ -701,22 +696,13 @@ export function readLearnedDir(corpusRoot: string, tier: Tier, slug: string): Le
     }
     const parsed = parseLearnedClause(text, tier, rel);
     result.findings.push(...parsed.findings);
-    if (parsed.clause) { result.clauses.push(parsed.clause); }
+    // A malformed file is skipped and named; every other clause in the tier still loads. Failing
+    // the whole tier would remove the *other* reds too, which is worse than losing the broken file
+    // — and the compile refuses to emit an artifact while any error stands, so nothing ships half
+    // a corpus.
+    if (parsed.clause && !hasErrors(parsed.findings)) { result.clauses.push(parsed.clause); }
   }
   return result;
-}
-
-/**
- * Read one tier's learned clauses, or fail.
- *
- * Failing loud is the fail-closed direction here even though it *removes* clauses: a corpus that
- * does not parse must produce no policy at all, because the alternative is a red clause the author
- * believes is protecting them and a loader that quietly dropped it.
- */
-export function loadLearnedClauses(corpusRoot: string, tier: Tier, slug: string): LearnedClauseFile[] {
-  const { clauses, findings } = readLearnedDir(corpusRoot, tier, slug);
-  if (hasErrors(findings)) { throw new LearnedClauseError(findings); }
-  return clauses;
 }
 
 // --------------------------------------------------------------------------- the write boundary
