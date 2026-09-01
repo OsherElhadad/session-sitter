@@ -60,6 +60,17 @@ deprecation.
 
 ## VS Code settings
 
+The Settings UI groups them under the same headings this section uses. Two groups are also marked
+**machine-scoped**, which keeps Settings Sync from copying them between machines:
+
+- the **path** settings — `supervisorStateDir`, `supervisorRepoPath`, `dataRepoPath`,
+  `knowledge.registryPath`, `supervisor.bobCliPath`, `supervisor.claudeCliPath`. A path is only
+  meaningful on the machine that has it. These stay overridable per workspace, so a checkout can
+  still point at its own corpus.
+- the three **credentials** — `supervisor.bobApiKey`, `supervisor.anthropicAuthToken`,
+  `supervisor.telegramBotToken`. These are user-settings only: a workspace `settings.json` is often
+  committed, and a token does not belong in a commit.
+
 ### The session panel
 
 | Setting | Default | Purpose |
@@ -120,6 +131,12 @@ A slug left empty means that tier is not configured: its file is reported missin
 still load. With **no** user configured at all, supervision still runs — the classifier judges the
 pending action without BDI to weigh it against. A missing setting never fails a decision, because
 the agent is blocked on it. Nothing is ever guessed.
+
+### Developer
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `sessionSitter.debugCommands` | `false` | Show the **Probe …**, **Install … Hook**, **Capture …** and **Test … Send** commands in the Command Palette. See [below](#the-developer-commands). |
 
 ### Removed
 
@@ -393,9 +410,19 @@ All under the **Session Sitter** category:
 | Upload Session to Corpus | Uploads the selected session (also on the row's right-click menu). |
 | Export Session for Supervision | Writes a full transcript export by hand, for a manual classify. |
 | Supervise the Blocked Session Now | Classifies the currently-blocked prompt on demand. |
-| Test Bob Send / Test Claude Send | Sends a test message into the most recent session of that source. |
-| Test Claude List Approvals | Lists Claude's pending permission prompts. |
-| Probe … / Install … Hook / Capture … | Read-only internals probes for debugging the agent bridges. |
+
+### The developer commands
+
+Twelve of the eighteen commands are developer probes: **Test Bob Send** / **Test Claude Send**
+(send a fixed message into the most recent session of that source), **Test Claude List Approvals**
+(list Claude's pending permission prompts), and the **Probe …** / **Install … Hook** / **Capture …**
+family (read-only inspection of the agent bridges — which panels are open, what a pending approval
+looks like — printing to the Session Sitter output channel).
+
+They share the user-facing **Session Sitter** category, so typing "Session" in the palette used to
+list mostly debug entries. They are now gated behind `sessionSitter.debugCommands`, which is `false`
+by default. Nothing about them changed except whether the palette offers them: turn the setting on
+and all twelve work exactly as before.
 
 ---
 
