@@ -95,7 +95,8 @@ check_json "p.contributes.viewsContainers.secondarySidebar[0].title"     "Sessio
 check_json "p.contributes.views['session-sitter'][0].id"                 "sessionSitter.view"
 check_json "[...new Set(p.contributes.commands.map(c=>c.category))].join()" "Session Sitter"
 check_json "[...new Set(p.contributes.commands.map(c=>c.command.split('.')[0]))].join()" "sessionSitter"
-check_json "[...new Set(Object.keys(p.contributes.configuration.properties).map(k=>k.split('.')[0]))].join()" "sessionSitter"
+# `configuration` is an array of titled sections, so every section's properties are checked.
+check_json "[...new Set([].concat(p.contributes.configuration).flatMap(s=>Object.keys(s.properties)).map(k=>k.split('.')[0]))].join()" "sessionSitter"
 
 if [ "$fail" -eq 0 ]; then
   echo

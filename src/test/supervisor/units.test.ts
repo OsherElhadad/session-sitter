@@ -137,6 +137,28 @@ describe('the deterministic tier', () => {
     }
   });
 
+  it("auto-approves Claude Code's read-only tools and safe Bash commands", () => {
+    for (const name of ['Read', 'Glob', 'Grep', 'NotebookRead', 'TodoWrite', 'BashOutput']) {
+      expect(preClassify(session(name, { file_path: 'a.ts' })), name).toBe(TrafficLight.GREEN);
+    }
+    for (const command of ['git status', 'ls -la', 'cat a.ts', 'rg needle src']) {
+      expect(preClassify(session('Bash', { command })), command).toBe(TrafficLight.GREEN);
+    }
+  });
+
+  it("leaves Claude Code's writes and its outward-facing tools to the model", () => {
+    expect(preClassify(session('Write', { file_path: 'src/app.ts', content: 'X' }))).toBeNull();
+    expect(preClassify(session('Edit', { file_path: 'src/app.ts', new_string: 'X' }))).toBeNull();
+    expect(preClassify(session('Bash', { command: 'npm install lodash' }))).toBeNull();
+    // Non-mutating, but aimed outside the machine — the classifier judges those.
+    expect(preClassify(session('WebFetch', { url: 'https://example.com' }))).toBeNull();
+    expect(preClassify(session('WebSearch', { query: 'how to rm -r' }))).toBeNull();
+  });
+
+  it('still blocks a destructive command run through Claude Code', () => {
+    expect(preClassify(session('Bash', { command: 'rm -rf /' }))).toBe(TrafficLight.RED);
+  });
+
   it('treats a mutation as ambiguous', () => {
     expect(preClassify(session('write_to_file', { path: 'src/app.ts', content: 'X' }))).toBeNull();
     expect(preClassify(session('execute_command', { command: 'npm install lodash' }))).toBeNull();

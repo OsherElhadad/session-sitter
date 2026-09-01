@@ -16,6 +16,9 @@
 
   let historyOpen = false;
 
+  /** @type {string | null} — the session the host reports you are currently in, or null */
+  let currentSessionId = null;
+
   /** @type {string} — id of the active sort order; the extension host owns the real value */
   let sortMode = 'recent';
 
@@ -28,6 +31,11 @@
   /** @type {Array<object>} — supervision activity feed (newest first) */
   let activityItems = [];
   let activityOpen = true;
+
+  /** @type {string} — where decision cards go; 'stub' (a file) unless the host says otherwise */
+  let messagingChannel = 'stub';
+  /** @type {string} — `<stateDir>/notifications`, for naming where a stub card was written */
+  let notificationsDir = '';
 
   /** @type {string | null} — sessionId whose preview we've requested (hover or "Show details") */
   let pendingPreviewSessionId = null;
@@ -354,7 +362,11 @@
   // seconds, and rebuilding the menu under the pointer would move the item being clicked.
   function refreshSortButton() {
     if (!sortBtn) { return; }
-    sortBtn.title = 'Sort sessions — ' + currentSortLabel();
+    const label = 'Sort sessions — ' + currentSortLabel();
+    sortBtn.title = label;
+    // `title` is not reliably announced and never shows on keyboard focus, so the name is set as
+    // well as the tooltip — and from the same string, so the two cannot drift.
+    sortBtn.setAttribute('aria-label', label);
   }
 
   /**
@@ -403,6 +415,10 @@
     document.body.appendChild(menu);
     sortMenuEl = menu;
     sortBtn.setAttribute('aria-expanded', 'true');
+    // Arrow keys and Escape-restores-focus, shared with the ☰ menu rather than written twice.
+    if (window.SessionSitterMenu && window.SessionSitterMenu.wireMenuKeys) {
+      window.SessionSitterMenu.wireMenuKeys(menu, sortBtn, closeSortMenu);
+    }
 
     // Anchor under the button (the menu is position: fixed).
     const rect = sortBtn.getBoundingClientRect();
@@ -432,17 +448,20 @@
    */
   const SPIN_PERIOD_MS = 700;
 
-  // Uniform metadata rows shared by buildTab and buildHistoryItem — appends
-  // the source badge (Claude/Bob/Codex/Chat) and the workspace pill (or
-  // "(no workspace)" fallback) as separate children so `.tab-text` (flex
-  // column) stacks them on their own lines.
-  function appendSessionMetaRows(textEl, session) {
+  // The metadata line shared by buildTab and buildHistoryItem: the source badge
+  // (Claude/Bob/Codex/Chat), the machine pill and the workspace pill, all on ONE wrapping line.
+  // They used to be a child each of `.tab-text`, which is a flex column — so a row was four or
+  // five lines tall and twenty sessions were a very long scroll in a narrow sidebar.
+  // Returns the line, so the caller can put the timestamp on the end of it.
+  function appendSessionMeta(textEl, session) {
+    const metaEl = document.createElement('div');
+    metaEl.className = 'tab-meta';
     const label = SOURCE_LABELS[session.source];
     if (label) {
       const sourceBadge = document.createElement('span');
       sourceBadge.className = 'tab-badge tab-badge--' + session.source;
       sourceBadge.textContent = label;
-      textEl.appendChild(sourceBadge);
+      metaEl.appendChild(sourceBadge);
     }
 
     // A session on another machine gets the machine's name, because "which box is this on" is
@@ -454,11 +473,11 @@
       // Show the host, not user@host: the username is noise once you know the machine.
       peerBadge.textContent = String(session.peer).split('@').pop().split('.')[0];
       peerBadge.title = 'on ' + session.peer;
-      textEl.appendChild(peerBadge);
+      metaEl.appendChild(peerBadge);
     }
 
     const workspaceBadge = document.createElement('span');
-    workspaceBadge.className = 'tab-badge tab-badge--workspace';
+    workspaceBadge.className = 'tab-badge';
     workspaceBadge.textContent = session.projectName || '(no workspace)';
     if (!session.projectName) {
       workspaceBadge.classList.add('tab-badge--empty');
@@ -471,7 +490,10 @@
       workspaceBadge.style.backgroundColor = session.workspaceColor.background;
       workspaceBadge.style.color = session.workspaceColor.foreground || '#ffffff';
     }
-    textEl.appendChild(workspaceBadge);
+    metaEl.appendChild(workspaceBadge);
+
+    textEl.appendChild(metaEl);
+    return metaEl;
   }
 
   /**
@@ -483,7 +505,11 @@
     tab.className = 'tab';
     tab.dataset.sessionId = session.sessionId;
     tab.setAttribute('role', 'tab');
-    tab.setAttribute('tabindex', '0');
+    // Which row is the session you are in. The host sends the id; every other row is explicitly
+    // false, because a `role="tab"` with no aria-selected reads as "not a tab in a tablist".
+    tab.setAttribute('aria-selected', session.sessionId === currentSessionId ? 'true' : 'false');
+    // Overwritten by applyRovingTabindex() once the whole list is built — see the note there.
+    tab.setAttribute('tabindex', '-1');
     tab.setAttribute('title', (session.title || '(untitled)') + ' — ' + formatRelativeTime(session.updatedAt));
 
     const statusEl = buildStatusIndicator(session);
@@ -496,12 +522,12 @@
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
 
-    appendSessionMetaRows(textEl, session);
+    const metaEl = appendSessionMeta(textEl, session);
 
     const timeEl = document.createElement('span');
     timeEl.className = 'tab-time';
     timeEl.textContent = formatRelativeTime(session.updatedAt);
-    textEl.appendChild(timeEl);
+    metaEl.appendChild(timeEl);
 
     tab.appendChild(statusEl);
     tab.appendChild(textEl);
@@ -527,7 +553,20 @@
         if (event.target && event.target.classList && event.target.classList.contains('tab-close')) { return; }
         event.preventDefault();
         vscodeApi.postMessage({ type: 'switchSession', sessionId: session.sessionId });
+        return;
       }
+      const rows = tabStrip ? Array.prototype.slice.call(tabStrip.querySelectorAll('.tab')) : [];
+      const here = rows.indexOf(tab);
+      let next = -1;
+      if (event.key === 'ArrowDown') { next = here + 1; }
+      else if (event.key === 'ArrowUp') { next = here - 1; }
+      else if (event.key === 'Home') { next = 0; }
+      else if (event.key === 'End') { next = rows.length - 1; }
+      else { return; }
+      // Deliberately does not wrap: the ends of the list are where History and the toolbar are,
+      // and silently jumping to the other end loses your place.
+      event.preventDefault();
+      focusRow(rows, next);
     });
 
     tab.addEventListener('contextmenu', function (event) {
@@ -563,12 +602,12 @@
     titleEl.textContent = session.title || '(untitled)';
     textEl.appendChild(titleEl);
 
-    appendSessionMetaRows(textEl, session);
+    const metaEl = appendSessionMeta(textEl, session);
 
     const timeEl = document.createElement('span');
     timeEl.className = 'history-time';
     timeEl.textContent = formatRelativeTime(session.updatedAt);
-    textEl.appendChild(timeEl);
+    metaEl.appendChild(timeEl);
 
     item.appendChild(textEl);
 
@@ -612,7 +651,35 @@
       return;
     }
     sessions.forEach(session => tabStrip.appendChild(buildTab(session)));
+    applyRovingTabindex();
     appendPeerWarning();
+  }
+
+  /**
+   * One tab stop for the whole list, not one per row.
+   *
+   * A `role="tab"` list is reached once and then walked with the arrow keys (see the row's keydown
+   * handler); giving 20 rows `tabindex="0"` each instead means 20 presses of Tab before you reach
+   * History. The reachable row is the selected one, or the first when the host reports none.
+   */
+  function applyRovingTabindex() {
+    const rows = tabStrip ? tabStrip.querySelectorAll('.tab') : [];
+    let chosen = -1;
+    rows.forEach(function (row, i) {
+      if (chosen < 0 && row.getAttribute('aria-selected') === 'true') { chosen = i; }
+    });
+    if (rows.length && chosen < 0) { chosen = 0; }
+    rows.forEach(function (row, i) {
+      row.setAttribute('tabindex', i === chosen ? '0' : '-1');
+    });
+  }
+
+  /** Move focus to another row, carrying the single tab stop with it. */
+  function focusRow(rows, index) {
+    if (index < 0 || index >= rows.length) { return; }
+    rows.forEach(function (r) { r.setAttribute('tabindex', '-1'); });
+    rows[index].setAttribute('tabindex', '0');
+    rows[index].focus();
   }
 
   // Name the peers that could not be reached this pass.
@@ -854,7 +921,16 @@
     if (awaiting) {
       const wait = document.createElement('div');
       wait.className = 'activity-awaiting-badge';
-      wait.textContent = '⏳ awaiting your decision on Telegram';
+      // Name where the card actually went. The default channel is `stub`, which writes it to a
+      // file under the state dir — telling you to check Telegram then points at nothing.
+      if (messagingChannel === 'telegram') {
+        wait.textContent = '⏳ awaiting your decision on Telegram';
+      } else {
+        wait.textContent = '⏳ awaiting your decision — see notifications/';
+        wait.title = 'Decision card written to '
+          + (notificationsDir || '<stateDir>/notifications')
+          + (item.requestId ? '/' + item.requestId + '.txt' : '');
+      }
       body.appendChild(wait);
     }
     if (item.state === 'failed') {
@@ -923,8 +999,16 @@
     return wrap;
   }
 
+  /** @type {string} — the feed as last rendered, so an unchanged push is not re-rendered */
+  let renderedActivityKey = '';
+
   function renderActivity() {
     if (!activityPanel) { return; }
+    // The host re-pushes the whole feed on every poll. Rebuilding it unchanged would re-announce
+    // the lot through the panel's aria-live region and collapse any open "why it failed" detail.
+    const key = JSON.stringify([messagingChannel, activityItems]);
+    if (key === renderedActivityKey && activityPanel.childElementCount) { return; }
+    renderedActivityKey = key;
     activityPanel.innerHTML = '';
     if (activityItems.length === 0) {
       const empty = document.createElement('span');
@@ -967,6 +1051,7 @@
     switch (message.type) {
       case 'updateSessions':
         sessions = Array.isArray(message.sessions) ? message.sessions : [];
+        currentSessionId = typeof message.currentSessionId === 'string' ? message.currentSessionId : null;
         peerStatuses = Array.isArray(message.peers) ? message.peers : [];
         // The host sorted the rows already; these only drive the menu's check mark and tooltip.
         if (Array.isArray(message.sortModes)) { sortModes = message.sortModes; }
@@ -980,6 +1065,8 @@
         break;
       case 'updateActivity':
         activityItems = Array.isArray(message.items) ? message.items : [];
+        if (typeof message.channel === 'string') { messagingChannel = message.channel; }
+        if (typeof message.notificationsDir === 'string') { notificationsDir = message.notificationsDir; }
         renderActivity();
         break;
       case 'sessionPreview': {

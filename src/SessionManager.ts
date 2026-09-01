@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
+import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { promisify } from 'util';
 import { queryBobDb } from './BobDatabase';
 import { bobRowToSession } from './sessionRows';
 import { discoverPeers } from './remote/PeerDiscovery';
@@ -25,6 +27,8 @@ import {
  * network work, and with ControlMaster keeping the connection warm this is still responsive.
  */
 const REMOTE_POLL_MS = 20_000;
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Whether to pull sessions from peer machines (`sessionSitter.remotePeers`).
@@ -105,10 +109,92 @@ export interface ClaudeSession {
 }
 
 
+/**
+ * The platform-specific process lookups the liveness check needs, behind one seam so both
+ * branches below can be driven from a test without a real process to point at.
+ */
+export interface ProcessProbe {
+  /** Signal 0: throws when the PID is not running. */
+  signal(pid: number): void;
+  /** Raw `/proc/<pid>/stat`. Throws on the platforms that have no /proc. */
+  procStat(pid: number): string;
+  /** Start times for every PID at once, keyed by PID. Rejects when `ps` cannot be run. */
+  psStart(pids: number[]): Promise<Map<number, string>>;
+}
+
+const realProcessProbe: ProcessProbe = {
+  signal: (pid) => { process.kill(pid, 0); },
+  procStat: (pid) => fs.readFileSync(`/proc/${pid}/stat`, 'utf8'),
+  // One spawn for the whole worklist, because this runs on the 5-second poll. `ps` prints the
+  // rows in its own order, hence asking for the PID alongside the start time.
+  psStart: async (pids) => {
+    const { stdout } = await execFileAsync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')]);
+    const rows = stdout.split('\n').map(line => /^\s*(\d+)\s+(\S.*\S)/.exec(line));
+    return new Map(rows.filter(m => m !== null).map(m => [Number(m![1]), m![2]]));
+  },
+};
+
+/** One session file's claim about the process that wrote it. */
+interface SessionProcess {
+  pid: number;
+  procStart: string | number | undefined;
+}
+
+/**
+ * Whether a start time `ps` reported describes the same process start as the recorded `procStart`.
+ *
+ * Claude writes `procStart` in UTC while `ps` prints the machine's local zone, so on a host that
+ * is not on UTC the two strings never match literally — comparing them as text is what made every
+ * macOS session look dead. Both readings of the recorded string are therefore accepted. The cost
+ * is that a recycled PID would also pass if its real start time were exactly the UTC offset away
+ * from the recorded one, to the second; that coincidence is not worth more code to exclude.
+ */
+function startTimesAgree(procStart: string, psMs: number): boolean {
+  const asLocal = Date.parse(procStart);
+  const asUtc = Date.parse(`${procStart} UTC`);
+  return [asLocal, asUtc].some(ms => !Number.isNaN(ms) && Math.abs(ms - psMs) < 2000);
+}
+
+/**
+ * Which of these PIDs are still the processes that recorded them — running, and not a different
+ * process that happens to have inherited the PID.
+ *
+ * Takes the whole worklist rather than one PID at a time so the `ps` cross-check costs a single
+ * spawn per poll. Exported for the tests; `platform` and `probe` are injected there.
+ */
+export async function liveSessionPids(
+  candidates: readonly SessionProcess[],
+  platform: NodeJS.Platform = process.platform,
+  probe: ProcessProbe = realProcessProbe,
+): Promise<Set<number>> {
+  const running = candidates.filter(c => {
+    try { probe.signal(c.pid); return true; } catch { return false; }
+  });
+  if (platform === 'linux') {
+    // Field 21 of /proc/<pid>/stat is the kernel start time; a recycled PID gets a different one.
+    return new Set(running.filter(c => {
+      try { return String(c.procStart) === probe.procStat(c.pid).split(' ')[21]; } catch { return false; }
+    }).map(c => c.pid));
+  }
+  // No /proc here (macOS, Windows), so `ps` carries the only start time on offer. When it cannot
+  // be run, or says nothing usable about a PID, fall back to the signal alone: losing the
+  // PID-recycling guard is far better than losing every session, which is what reading /proc did.
+  let starts = new Map<number, string>();
+  if (running.length > 0) {
+    try {
+      starts = await probe.psStart(running.map(c => c.pid));
+    } catch { /* no usable `ps` on this host */ }
+  }
+  return new Set(running.filter(c => {
+    const psMs = Date.parse(starts.get(c.pid)?.trim() ?? '');
+    return Number.isNaN(psMs) || startTimesAgree(String(c.procStart), psMs);
+  }).map(c => c.pid));
+}
+
 // Read ~/.claude/sessions/*.json and return session IDs whose Claude process
-// is still running. Each file stores the PID and the kernel start-time
-// (procStart) of the Claude process so we can distinguish a live session
-// from a recycled PID.  Only interactive VS Code sessions are included.
+// is still running. Each file stores the PID and the start-time (procStart) of
+// the Claude process so we can distinguish a live session from a recycled PID.
+// Only interactive VS Code sessions are included.
 export async function getActiveSessionIds(): Promise<Set<string>> {
   const active = new Set<string>();
   const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
@@ -121,6 +207,9 @@ export async function getActiveSessionIds(): Promise<Set<string>> {
   const DAY_MS = 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - DAY_MS;
 
+  // Collected first, then checked in one pass: the `ps` cross-check below is a process spawn, and
+  // this whole function runs on the 5-second poll.
+  const candidates: (SessionProcess & { sessionId: string })[] = [];
   for (const file of files) {
     try {
       const raw = await fs.promises.readFile(path.join(sessionsDir, file), 'utf8');
@@ -137,20 +226,14 @@ export async function getActiveSessionIds(): Promise<Set<string>> {
       // background sessions from a previous VS Code session that was never
       // properly closed, not sessions the user opened today.
       if (typeof data.startedAt === 'number' && data.startedAt < cutoff) { continue; }
-      try {
-        process.kill(data.pid, 0); // throws if process is dead
-        // Verify the PID hasn't been recycled by comparing kernel start-times.
-        const stat = await fs.promises.readFile(`/proc/${data.pid}/stat`, 'utf8');
-        const actualStart = stat.split(' ')[21];
-        if (String(data.procStart) === actualStart) {
-          active.add(data.sessionId);
-        }
-      } catch {
-        // Dead or unreadable — skip
-      }
+      candidates.push({ pid: data.pid, procStart: data.procStart, sessionId: data.sessionId });
     } catch {
       // Malformed session file — skip
     }
+  }
+  const live = await liveSessionPids(candidates);
+  for (const c of candidates) {
+    if (live.has(c.pid)) { active.add(c.sessionId); }
   }
   return active;
 }

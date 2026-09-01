@@ -22,11 +22,29 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-const declared = Object.keys(pkg.contributes?.configuration?.properties ?? {});
+
+/**
+ * `contributes.configuration` is either one object or an array of titled sections — VS Code
+ * accepts both, and this extension uses the array form so the Settings UI groups 29 settings
+ * under headings instead of one alphabetical wall. Flatten before comparing, so the shape of the
+ * manifest never changes what this guard checks.
+ */
+function declaredProperties(configuration) {
+  const sections = Array.isArray(configuration) ? configuration : [configuration ?? {}];
+  return Object.keys(Object.assign({}, ...sections.map(s => s?.properties ?? {})));
+}
+
+const declared = declaredProperties(pkg.contributes?.configuration);
 const namespaces = new Set(declared.map(k => k.split('.')[0]));
 
-/** Settings a user sets but no TypeScript reads directly. Keep this list empty if you can. */
-const UI_ONLY = new Set();
+/**
+ * Settings a user sets but no TypeScript reads directly. Keep this list empty if you can.
+ *
+ *  - `sessionSitter.debugCommands` — read by VS Code itself, not by us: it is the `enablement`
+ *    expression on the developer probe commands (`config.sessionSitter.debugCommands`), so the
+ *    palette hides them unless it is on. No extension code ever needs its value.
+ */
+const UI_ONLY = new Set(['sessionSitter.debugCommands']);
 
 /**
  * Namespaces owned by ANOTHER extension that we deliberately read. Session Sitter drives other
