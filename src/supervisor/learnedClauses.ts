@@ -109,7 +109,15 @@ export interface LearnedClauseFile {
   adoptedAt: string | null;
   expires: string | null;
   supersedes: string[];
-  /** Set when the tier was at its clause ceiling and this clause pushed another out. */
+  /**
+   * Set when the tier was at its clause ceiling and this clause pushed another out.
+   *
+   * TODO (`policy compile`): evicting a `red` or `orange` clause is a **widening** and takes the full
+   * widening approval bar even when the displacing clause narrows — otherwise the ceiling becomes a
+   * way to disarm safety rules one eviction at a time. Loading is unaffected; the check is the
+   * compile's, alongside `10-schema.md` §6.6's own (the target must be `retired` for
+   * `displacement`, naming this clause in `retired_by`).
+   */
   displaces: string[];
   fix: ClauseFix | null;
   learnedFrom: LearnedFrom;
@@ -550,6 +558,9 @@ export function parseLearnedClause(
         `\`retired_reason: ${retiredReason}\` requires \`retired_by\` naming what justified it`);
     }
     if (retiredAt === null && scalar('retired_at') === null) {
+      // Warn here, error at the compile: the split follows the one already settled for a malformed
+      // file — a load keeps the rest of the tier, and the compile is what refuses to emit an
+      // artifact. TODO (`policy compile`): make this an error there.
       warn(null, '`status: retired` with no `retired_at` — the retirement is absent from churn reporting');
     }
   } else if (retiredReasonRaw !== null || retiredByRaw !== null || retiredAt !== null) {
