@@ -217,12 +217,18 @@ export function decideDeterministically(
         settled: false,
       };
     }
+    // A correction rule names the clause it enforces, but the clause only exists if the team
+    // actually wrote one with that id. Citing `practices §force-push` at a file that defines no
+    // such clause points the reader at nothing — and a citation you cannot follow is worse than
+    // an honest admission that this was a shipped default rather than your own rule.
+    const cited = clauses.find(c => c.clauseId === correction.clauseId);
+    const citation = cited ? cited.citation : `built-in §${correction.ruleId}`;
     return {
       decision: { behavior: 'allow', updatedInput: correction.updatedInput },
       light: TrafficLight.YELLOW,
-      clause: `practices §${correction.clauseId}`,
+      clause: citation,
       actor: 'policy',
-      note: `corrected — practices §${correction.clauseId}: ${correction.note}`,
+      note: `corrected — ${citation}: ${correction.note}`,
       settled: false, // a rewrite is per-call; it must never become a standing rule
     };
   }

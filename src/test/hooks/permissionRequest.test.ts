@@ -127,13 +127,24 @@ describe('decideDeterministically — rung 1, deterministic green', () => {
 });
 
 describe('decideDeterministically — rung 2, the correction lane', () => {
-  it('rewrites a force push and cites the clause', () => {
+  it('rewrites a force push and cites the built-in rule when no clause defines it', () => {
+    // No practices file, so there is no `force-push` clause to cite. Citing one anyway would
+    // point the reader at nothing.
     const v = decideDeterministically(req('Bash', { command: 'git push --force origin dev' }), []);
     expect(v?.decision.behavior).toBe('allow');
     expect(v?.decision.updatedInput).toEqual({ command: 'git push --force-with-lease origin dev' });
-    expect(v?.clause).toBe('practices §force-push');
+    expect(v?.clause).toBe('built-in §force-push-to-lease');
     expect(v?.light).toBe('yellow');
     expect(v?.actor).toBe('policy');
+  });
+
+  it("cites the team's own clause when their practices define the id", () => {
+    // The fixture above defines `id | force-push`, so the citation must be theirs, not ours.
+    const v = decideDeterministically(
+      req('Bash', { command: 'git push --force origin dev' }), clauses);
+    expect(v?.decision.behavior).toBe('allow');
+    expect(v?.clause).toBe('practices §force-push');
+    expect(v?.note).toContain('practices §force-push');
   });
 
   it('refuses the rewrite when a red clause still forbids the safer form', () => {
@@ -363,7 +374,7 @@ describe('handle — the audit record', () => {
       inputSummary: 'git push --force origin dev',
       light: 'yellow',
       decision: 'allow',
-      clause: 'practices §force-push',
+      clause: 'built-in §force-push-to-lease',
       actor: 'policy',
       rewritten: true,
     });
