@@ -67,6 +67,9 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
   private _activity: SupervisionActivity | undefined;
   private _lastActivity: ActivityItem[] = [];
   private readonly _recordsDir: string;
+  private readonly _notificationsDir: string;
+  /** Where a decision card is delivered — see `setMessagingChannel`. */
+  private _messagingChannel = 'stub';
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -75,6 +78,7 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     stateDir = '',
   ) {
     this._recordsDir = stateDir ? path.join(stateDir, 'records') : '';
+    this._notificationsDir = stateDir ? path.join(stateDir, 'notifications') : '';
     this._focusWatcher = this._startFocusRequestWatcher();
     void this._publishWindowEntry();
     this._registryTimer = setInterval(() => { void this._publishWindowEntry(); }, 60_000);
@@ -83,10 +87,33 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     if (stateDir) {
       this._activity = new SupervisionActivity(stateDir, items => {
         this._lastActivity = items;
-        void this._view?.webview.postMessage({ type: 'updateActivity', items });
+        this._postActivity(items);
       });
       this._activity.start();
     }
+  }
+
+  /**
+   * Which channel a decision card is delivered on (`sessionSitter.supervisor.messagingChannel`).
+   *
+   * The panel has to name where a card awaiting your answer actually went, and only the effective
+   * supervisor config knows — the setting layers over `.env`. Extension activation builds that
+   * config after the view provider, so it is handed over here rather than read here.
+   */
+  public setMessagingChannel(channel: string): void {
+    this._messagingChannel = (channel || 'stub').toLowerCase();
+    if (this._lastActivity.length) { this._postActivity(this._lastActivity); }
+  }
+
+  private _postActivity(items: ActivityItem[]): void {
+    void this._view?.webview.postMessage({
+      type: 'updateActivity',
+      items,
+      // The panel used to say a card was awaiting you "on Telegram" whatever the channel was. With
+      // the default `stub` it is a file under the state dir, so that sent you to check nothing.
+      channel: this._messagingChannel,
+      notificationsDir: this._notificationsDir,
+    });
   }
 
   /**
@@ -225,11 +252,7 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
           }
           case 'ready': {
             void this._pushSessions();
-            if (this._lastActivity.length) {
-              void this._view?.webview.postMessage({
-                type: 'updateActivity', items: this._lastActivity,
-              });
-            }
+            if (this._lastActivity.length) { this._postActivity(this._lastActivity); }
             this._activity?.pushNow();
             break;
           }
@@ -825,7 +848,7 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
       <button id="new-session-btn" title="New Claude Session">+</button>
       <button id="new-bob-session-btn" title="New Bob Session">+B</button>
     </div>
-    <div id="tab-strip" role="tablist" aria-label="Claude Sessions"></div>
+    <div id="tab-strip" role="tablist" aria-label="Agent sessions"></div>
     <button id="history-toggle" aria-expanded="false">History &#x25B6;</button>
     <div id="history-panel" hidden></div>
     <button id="activity-toggle" aria-expanded="true">Supervision activity &#x25BC;</button>

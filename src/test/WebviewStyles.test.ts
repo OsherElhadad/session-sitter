@@ -130,3 +130,90 @@ describe('webview: the current session is marked on its row', () => {
     expect(main).toContain("'End'");
   });
 });
+
+// The activity feed's four traffic lights were fixed GitHub-dark hexes, so the yellow was
+// unreadable on a light theme. The brand badges (Claude terracotta, Bob blue, …) are fixed on
+// purpose and stay that way — this asserts only that the lights are theme tokens.
+describe('webview styles.css: the panel follows the theme', () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'styles.css'),
+    'utf8',
+  );
+
+  it('paints the four traffic lights from theme tokens', () => {
+    for (const light of ['green', 'yellow', 'orange']) {
+      expect(css).toMatch(
+        new RegExp(`\\.activity-${light}\\s*\\{[^}]*var\\(--vscode-charts-${light}`),
+      );
+    }
+    expect(css).toMatch(/\.activity-red\s*\{[^}]*var\(--vscode-charts-red/);
+  });
+
+  it('leaves no bare GitHub-dark hex as a light colour', () => {
+    // Still allowed as the last fallback inside a var(), never as the whole value.
+    for (const hex of ['#3fb950', '#d29922', '#db6d28', '#f85149']) {
+      expect(css).not.toMatch(new RegExp(`color:\\s*${hex}`, 'i'));
+    }
+  });
+
+  it('keeps the brand badges deliberately fixed', () => {
+    expect(css).toMatch(/\.tab-badge--claude\s*\{[^}]*#cc785c/);
+    expect(css).toMatch(/\.tab-badge--bob\s*\{[^}]*#1f70c1/);
+  });
+
+  it('draws separators and shadows with the widget tokens', () => {
+    expect(css).not.toMatch(/border-bottom:[^;]*rgba\(128, 128, 128, 0\.14\)\s*;/);
+    expect(css).toMatch(/border-bottom: 1px solid var\(--vscode-widget-border/);
+    // Every shadow goes through the token; the black is only its last-resort fallback.
+    const shadows = css.match(/box-shadow:[^;]+;/g) ?? [];
+    expect(shadows.length).toBeGreaterThan(0);
+    shadows.forEach(rule => expect(rule).toContain('var(--vscode-widget-shadow'));
+  });
+
+  it('declares .activity-item and .activity-summary once each', () => {
+    // Both were declared twice — a redesign appended instead of edited — which is how you end up
+    // debugging a rule that never applied.
+    expect(css.match(/^\.activity-item\s*\{/gm)?.length).toBe(1);
+    expect(css.match(/^\.activity-summary\s*\{/gm)?.length).toBe(1);
+  });
+});
+
+// The default messaging channel is `stub`, which writes the decision card to
+// `<stateDir>/notifications/`. The panel used to say "awaiting your decision on Telegram" whatever
+// the channel was, sending a first-time user — whom the README points at `stub` — to check nothing.
+describe('webview: an awaiting card names where it went', () => {
+  const main = fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'main.js'), 'utf8');
+  const provider = fs.readFileSync(
+    path.join(__dirname, '..', 'SessionSitterViewProvider.ts'), 'utf8');
+  const extension = fs.readFileSync(
+    path.join(__dirname, '..', 'extension.ts'), 'utf8');
+
+  it('says Telegram only when the channel is telegram', () => {
+    expect(main).toMatch(/messagingChannel === 'telegram'/);
+    expect(main).toContain('notifications/');
+  });
+
+  it('gets the channel from the host over the existing activity push', () => {
+    expect(main).toContain('message.channel');
+    expect(main).toContain('message.notificationsDir');
+    expect(provider).toContain('channel: this._messagingChannel');
+    expect(provider).toContain('notificationsDir: this._notificationsDir');
+  });
+
+  it('is told the channel the supervisor config actually resolved', () => {
+    expect(extension).toContain('provider.setMessagingChannel(supervisorConfig.messagingChannel)');
+  });
+});
+
+// The list holds Claude, Bob, Codex and Chat rows, so "Claude Sessions" was the wrong accessible
+// name for it.
+describe('webview: the session list is named for what it holds', () => {
+  const provider = fs.readFileSync(
+    path.join(__dirname, '..', 'SessionSitterViewProvider.ts'), 'utf8');
+
+  it('does not call the list Claude-only', () => {
+    expect(provider).toContain('aria-label="Agent sessions"');
+    expect(provider).not.toContain('aria-label="Claude Sessions"');
+  });
+});

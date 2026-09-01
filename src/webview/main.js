@@ -32,6 +32,11 @@
   let activityItems = [];
   let activityOpen = true;
 
+  /** @type {string} — where decision cards go; 'stub' (a file) unless the host says otherwise */
+  let messagingChannel = 'stub';
+  /** @type {string} — `<stateDir>/notifications`, for naming where a stub card was written */
+  let notificationsDir = '';
+
   /** @type {string | null} — sessionId whose preview we've requested (hover or "Show details") */
   let pendingPreviewSessionId = null;
 
@@ -447,7 +452,7 @@
     }
 
     const workspaceBadge = document.createElement('span');
-    workspaceBadge.className = 'tab-badge tab-badge--workspace';
+    workspaceBadge.className = 'tab-badge';
     workspaceBadge.textContent = session.projectName || '(no workspace)';
     if (!session.projectName) {
       workspaceBadge.classList.add('tab-badge--empty');
@@ -828,7 +833,16 @@
     if (awaiting) {
       const wait = document.createElement('div');
       wait.className = 'activity-awaiting-badge';
-      wait.textContent = '⏳ awaiting your decision on Telegram';
+      // Name where the card actually went. The default channel is `stub`, which writes it to a
+      // file under the state dir — telling you to check Telegram then points at nothing.
+      if (messagingChannel === 'telegram') {
+        wait.textContent = '⏳ awaiting your decision on Telegram';
+      } else {
+        wait.textContent = '⏳ awaiting your decision — see notifications/';
+        wait.title = 'Decision card written to '
+          + (notificationsDir || '<stateDir>/notifications')
+          + (item.requestId ? '/' + item.requestId + '.txt' : '');
+      }
       body.appendChild(wait);
     }
     if (item.state === 'failed') {
@@ -955,6 +969,8 @@
         break;
       case 'updateActivity':
         activityItems = Array.isArray(message.items) ? message.items : [];
+        if (typeof message.channel === 'string') { messagingChannel = message.channel; }
+        if (typeof message.notificationsDir === 'string') { notificationsDir = message.notificationsDir; }
         renderActivity();
         break;
       case 'sessionPreview': {
