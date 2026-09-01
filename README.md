@@ -52,17 +52,23 @@
 
 The agent asked to force-push. It was not blocked — it was corrected, and told why:
 
-<!--
-  CAPTURE — MUST BE REPLACED BEFORE MERGE. Run the supervisor against a real `git push --force`
-  prompt and paste the genuine record from records/ into the block below, trimmed to the fields
-  that matter. Do not hand-write it, and do not merge with the marker still in place: invented
-  terminal output in the README of a project whose selling point is evidence would be the worst
-  possible thing to ship.
--->
+```json
+{"tool":"Bash","inputSummary":"git push --force origin main",
+ "light":"yellow","decision":"allow","clause":"practices §force-push","actor":"policy",
+ "latencyMs":4,"rewritten":true,
+ "note":"corrected — practices §force-push: --force replaced with --force-with-lease so the
+ push refuses rather than overwriting commits pushed by someone else"}
+```
 
-```
-<!-- CAPTURE: paste the real record here. Placeholder — do not merge. -->
-```
+That is a real record, from a real session — not an illustration. The push it corrected was not a
+no-op either: another clone had already pushed a commit our repo had never fetched, so the original
+`--force` would have destroyed it. The lease refused instead —
+`! [rejected] main -> main (stale info)` — and the other commit is still on the remote. The agent
+worked out what had happened on its own: *"`(stale info)` is not an error plain `git push --force`
+produces… something between me and git converted the force push into a lease-checked one."*
+
+**4 ms in the hook, no model call.** The full transcripts, the verbatim hook input and output, and
+the other thirteen decisions ship as `docs/EVIDENCE.md` alongside the plugin itself.
 
 Every decision names the practice it applied. That is the whole difference between a governance
 layer and a classifier: `Blocked by classifier` is not something you can hand to your security
@@ -270,6 +276,8 @@ Both layers run at once, and the supervision half of this extension is off until
 - **Six live states, not three** — working, waiting for your approval, waiting for your answer,
   finished-unread, finished-read, dormant. An agent that is stuck is not an agent that is busy.
 - **Copy transcript** as handoff-clean markdown — prose only, tool calls stripped, all four sources.
+- **Telegram remote control** (off by default) — every session becomes a topic in a Telegram forum
+  group; read it, and type into it, from your phone. → [above](#telegram-remote-control-optional)
 
 ---
 
