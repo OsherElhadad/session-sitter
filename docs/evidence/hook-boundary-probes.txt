@@ -1,0 +1,23 @@
+Direct hook invocations: the event JSON piped straight into the shipped hook binary.
+Real hook code and real output, but NOT from a live session — see docs/EVIDENCE.md §6.
+
+### A red clause written as a plain substring blocks its own correction
+$ echo '{"session_id":"probe","cwd":"/tmp/ss-e2e/repo","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' | SESSION_SITTER_PRACTICES=/tmp/ss-e2e/practices-doc-example.md SESSION_SITTER_MODE=enforce node plugin/lib/hooks/permissionRequest.js
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"denied — practices §team-git-002: Never force-push to a shared branch. The safer form of this call is still forbidden by that clause, so it was not rewritten."}}}
+
+### The same call, with the clause written as a negative-lookahead regex
+$ echo '{"session_id":"probe","cwd":"/tmp/ss-e2e/repo","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' | SESSION_SITTER_PRACTICES=/tmp/ss-e2e/practices.md SESSION_SITTER_MODE=enforce node plugin/lib/hooks/permissionRequest.js
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{"command":"git push --force-with-lease origin main"}}}}
+
+### Rung 7, fail closed: an ambiguous Write with no classifier
+$ echo '{"session_id":"probe","cwd":"/tmp/ss-e2e/repo","hook_event_name":"PermissionRequest","tool_name":"Write","tool_input":{"file_path":"/tmp/ss-e2e/repo/x.md","content":"hello"}}' | SESSION_SITTER_PRACTICES=/tmp/ss-e2e/practices.md SESSION_SITTER_MODE=enforce node plugin/lib/hooks/permissionRequest.js
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Session Sitter denied this call because the supervisor could not reach a verdict, and silence is not approval. Nothing here says the call is unsafe — only that nothing said it was safe. To resolve it: write a practices clause covering this call, enable the classifier (SESSION_SITTER_CLASSIFIER=on), or run in observe mode (SESSION_SITTER_MODE=observe) to hand the decision back to Claude Code."}}}
+
+### The same call in observe mode: no verdict, handed back to Claude Code
+$ echo '{"session_id":"probe","cwd":"/tmp/ss-e2e/repo","hook_event_name":"PermissionRequest","tool_name":"Write","tool_input":{"file_path":"/tmp/ss-e2e/repo/x.md","content":"hello"}}' | SESSION_SITTER_PRACTICES=/tmp/ss-e2e/practices.md SESSION_SITTER_MODE=observe node plugin/lib/hooks/permissionRequest.js
+{}
+
+### enforce mode with the practices file missing: denies, and names the cause
+$ echo '{"session_id":"probe","cwd":"/tmp/ss-e2e/repo","hook_event_name":"PermissionRequest","tool_name":"Write","tool_input":{"file_path":"/tmp/ss-e2e/repo/x.md","content":"hello"}}' | SESSION_SITTER_PRACTICES=/tmp/ss-e2e/does-not-exist.md SESSION_SITTER_MODE=enforce node plugin/lib/hooks/permissionRequest.js
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Session Sitter denied this call because the supervisor could not reach a verdict, and silence is not approval. Nothing here says the call is unsafe — only that nothing said it was safe. To resolve it: write a practices clause covering this call, enable the classifier (SESSION_SITTER_CLASSIFIER=on), or run in observe mode (SESSION_SITTER_MODE=observe) to hand the decision back to Claude Code.\n\n(practices: Error: ENOENT: no such file or directory, open '/tmp/ss-e2e/does-not-exist.md')"}}}
+

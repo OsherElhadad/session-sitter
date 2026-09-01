@@ -1,0 +1,2 @@
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{"command":"chmod 755 add.js","description":"chmod 777 add.js"}}}}
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}

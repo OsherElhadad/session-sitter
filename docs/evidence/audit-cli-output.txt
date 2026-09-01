@@ -1,0 +1,104 @@
+$ session-sitter log --since 24h
+2026-09-01T15:17:37.120Z  FIX    Bash        practices §force-push             4ms  git push --force origin main
+2026-09-01T15:22:09.928Z  FIX    Bash        practices §least-privilege        4ms  chmod 777 add.js
+2026-09-01T15:22:15.065Z  ALLOW  Bash        practices §team-ci-001            4ms  node --test
+2026-09-01T15:26:16.879Z  DENY   Bash        practices §team-fs-004            5ms  rm -rf ./build
+2026-09-01T15:26:27.556Z  ALLOW  Bash        (deterministic)                   4ms  env | wc -l
+2026-09-01T15:32:00.626Z  ALLOW  Bash        practices §team-ci-001            5ms  node --test
+2026-09-01T15:32:01.815Z  FIX    Bash        practices §least-privilege        4ms  chmod 777 sub.js && ls -l sub.js
+2026-09-01T15:32:13.645Z  ALLOW  Bash        (deterministic)                   3ms  echo "--- remotes ---"; git remote -v; echo "--- branch tracking ---"; git status -sb | head -5; echo "--- local vs remote ---"; git rev-parse HEAD origin/main 2>&1 | head -5; echo "--- ahead/behind ---"; git rev-list --left-right --count origin/main...HEAD 2>&1
+2026-09-01T15:32:13.926Z  ALLOW  Bash        (deterministic)                   4ms  echo "--- build/ contents ---"; find ./build -type f | head -50; echo "--- count/size ---"; find ./build -type f | wc -l; du -sh ./build; echo "--- ignored? ---"; git check-ignore -v build 2>&1 || echo "NOT ignored by .gitignore"
+2026-09-01T15:32:51.870Z  DENY   Bash        practices §team-fs-004            4ms  rm -rf ./build && echo "exit 0 — ./build removed"; ls -d ./build 2>&1
+2026-09-01T15:32:59.570Z  ALLOW  Bash        (deterministic)                   4ms  env | grep -c PATH
+2026-09-01T15:33:19.473Z  DENY   Write       practices §team-git-002           4ms  /private/tmp/ss-e2e/repo/NOTES.md
+2026-09-01T15:33:36.404Z  DENY   Write       practices §team-fs-004            5ms  /private/tmp/ss-e2e/repo/NOTES.md
+2026-09-01T15:33:49.801Z  ALLOW  Write       practices §team-ci-001            4ms  /private/tmp/ss-e2e/repo/NOTES.md
+
+$ session-sitter log --since 24h --denied
+2026-09-01T15:26:16.879Z  DENY   Bash        practices §team-fs-004            5ms  rm -rf ./build
+2026-09-01T15:32:51.870Z  DENY   Bash        practices §team-fs-004            4ms  rm -rf ./build && echo "exit 0 — ./build removed"; ls -d ./build 2>&1
+2026-09-01T15:33:19.473Z  DENY   Write       practices §team-git-002           4ms  /private/tmp/ss-e2e/repo/NOTES.md
+2026-09-01T15:33:36.404Z  DENY   Write       practices §team-fs-004            5ms  /private/tmp/ss-e2e/repo/NOTES.md
+
+$ session-sitter digest --since 24h
+session 0a1b2b1f-cd6a-4656-aa07-94872d642432  (/private/tmp/ss-e2e/repo)
+  1 decisions — 1 allowed, 0 denied, 1 corrected
+  0 needed the classifier; median latency 4ms
+  window 2026-09-01T15:17:37.120Z → 2026-09-01T15:17:37.120Z
+  clauses applied:
+       1  practices §force-push
+
+session 8bcf17dd-05c7-4e7f-9621-3f2e63777c74  (/private/tmp/ss-e2e/repo)
+  2 decisions — 2 allowed, 0 denied, 1 corrected
+  0 needed the classifier; median latency 4ms
+  window 2026-09-01T15:22:09.928Z → 2026-09-01T15:22:15.065Z
+  clauses applied:
+       1  practices §least-privilege
+       1  practices §team-ci-001
+
+session 56a6f0e1-843a-40af-8a91-ec4ab89ca3db  (/private/tmp/ss-e2e/repo)
+  2 decisions — 1 allowed, 1 denied, 0 corrected
+  0 needed the classifier; median latency 5ms
+  window 2026-09-01T15:26:16.879Z → 2026-09-01T15:26:27.556Z
+  clauses applied:
+       1  practices §team-fs-004
+  denied:
+    Bash: rm -rf ./build
+
+session b6b86ec8-5b37-4480-ab62-4ea47d9549c4  (/private/tmp/ss-e2e/repo)
+  9 decisions — 6 allowed, 3 denied, 1 corrected
+  0 needed the classifier; median latency 4ms
+  window 2026-09-01T15:32:00.626Z → 2026-09-01T15:33:49.801Z
+  clauses applied:
+       2  practices §team-ci-001
+       2  practices §team-fs-004
+       1  practices §least-privilege
+       1  practices §team-git-002
+  denied:
+    Bash: rm -rf ./build && echo "exit 0 — ./build removed"; ls -d ./build 2>&1
+    Write: /private/tmp/ss-e2e/repo/NOTES.md
+    Write: /private/tmp/ss-e2e/repo/NOTES.md
+
+
+$ session-sitter status
+0a1b2b1f-cd6a-4656-aa07-94872d642432  ended 2026-09-01T15:18:13.724Z
+  /private/tmp/ss-e2e/repo
+  1 decisions, 0 denied, 1 corrected
+56a6f0e1-843a-40af-8a91-ec4ab89ca3db  ended 2026-09-01T15:29:35.214Z
+  /private/tmp/ss-e2e/repo
+  2 decisions, 1 denied, 0 corrected
+8a570a13-2e06-4b3c-80c5-87c102f270c8  ended 2026-09-01T15:40:23.277Z
+  /private/tmp/ss-e2e/repo
+  0 decisions, 0 denied, 0 corrected
+8bcf17dd-05c7-4e7f-9621-3f2e63777c74  ended 2026-09-01T15:24:23.780Z
+  /private/tmp/ss-e2e/repo
+  2 decisions, 0 denied, 1 corrected
+b6b86ec8-5b37-4480-ab62-4ea47d9549c4  ended 2026-09-01T15:36:36.200Z
+  /private/tmp/ss-e2e/repo
+  9 decisions, 3 denied, 1 corrected
+c5cf9c32-f13e-4228-80d1-8e841b82af9e  ended 2026-09-01T15:21:25.228Z
+  /private/tmp/ss-e2e/repo
+  0 decisions, 0 denied, 0 corrected
+
+trail: /tmp/ss-e2e/data/decisions.jsonl
+activity: /tmp/ss-e2e/data/activity.jsonl
+
+$ session-sitter log --since 24h --json | (first record)
+[
+  {
+    "ts": "2026-09-01T15:17:37.120Z",
+    "sessionId": "0a1b2b1f-cd6a-4656-aa07-94872d642432",
+    "cwd": "/private/tmp/ss-e2e/repo",
+    "tool": "Bash",
+    "inputSummary": "git push --force origin main",
+    "light": "yellow",
+    "decision": "allow",
+    "clause": "practices §force-push",
+    "actor": "policy",
+    "latencyMs": 4,
+    "rewritten": true,
+    "note": "corrected — practices §force-push: --force replaced with --force-with-lease so the push refuses rather than overwriting commits pushed by someone else"
+  },
+  {
+    "ts": "2026-09-01T15:22:09.928Z",
+    "sessionId": "8
