@@ -267,7 +267,9 @@ function decideOne(toolName, toolInput, clauses) {
         };
     }
     // 4. A written green clause — the standing policy that makes an overnight run survivable.
-    const green = (0, practices_1.findMatchingClause)(clauses, hay, 'green');
+    // Deliberately the identity haystack: a green clause must never be satisfied by the bytes a
+    // Write happens to contain. See haystackFor.
+    const green = (0, practices_1.findMatchingClause)(clauses, (0, session_1.haystackFor)(toolName, toolInput, 'identity-only'), 'green');
     if (green) {
         return {
             decision: { behavior: 'allow' },
@@ -396,12 +398,18 @@ function decideDeterministically(input, clauses) {
                 allowedBy: null,
             };
         }
+        // A correction rule names the clause it enforces, but the clause only exists if the team
+        // actually wrote one with that id. Citing `practices §force-push` at a file that defines no
+        // such clause points the reader at nothing — and a citation you cannot follow is worse than
+        // an honest admission that this was a shipped default rather than your own rule.
+        const cited = clauses.find(c => c.clauseId === correction.clauseId);
+        const citation = cited ? cited.citation : `built-in §${correction.ruleId}`;
         return {
             decision: { behavior: 'allow', updatedInput: correction.updatedInput },
             light: models_1.TrafficLight.YELLOW,
-            clause: `practices §${correction.clauseId}`,
+            clause: citation,
             actor: 'policy',
-            note: `corrected — practices §${correction.clauseId}: ${correction.note}`,
+            note: `corrected — ${citation}: ${correction.note}`,
             settled: false, // a rewrite is per-call; it must never become a standing rule
             allowedBy: null, // and it must never become a standing permission rule either
         };

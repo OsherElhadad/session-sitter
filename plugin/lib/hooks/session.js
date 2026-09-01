@@ -20,9 +20,37 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.haystackFor = haystackFor;
 exports.sessionFromPermissionRequest = sessionFromPermissionRequest;
-/** Everything the deterministic and clause matchers scan: the tool name plus its arguments. */
-function haystackFor(toolName, toolInput) {
-    return `${toolName} ${toolInput ? JSON.stringify(toolInput) : ''}`;
+/**
+ * Argument keys whose value is a *payload* — the bytes being written — rather than something
+ * identifying what the call does. A `Write`'s `content` is the file itself.
+ */
+const PAYLOAD_KEYS = new Set([
+    'content', 'old_string', 'new_string', 'new_source', 'edits',
+]);
+/**
+ * Everything the deterministic and clause matchers scan: the tool name plus its arguments.
+ *
+ * `payload` decides whether the bytes being written are included, and the two callers want
+ * different answers. Matching is substring matching over serialised arguments, which cannot tell
+ * "do this" from "this was done" — so a file that *describes* a command reads exactly like the
+ * command. Observed for real: a NOTES.md summarising a session was denied by a clause about
+ * rewriting git history because it quoted the command, and then a later draft was **allowed** by a
+ * green clause about running the test suite because it contained the words `node --test`. A clause
+ * about tests permitted a file write.
+ *
+ * A false deny is an annoyance; a false allow is a hole, and red-outranks-green does not save you
+ * when only the wrong green matches. So the rule is that payload may make a decision **more**
+ * restrictive and never less: red clauses scan it, green clauses do not. The cost is that a green
+ * clause cannot be written about a file's contents, which is the right way round.
+ */
+function haystackFor(toolName, toolInput, payload = 'with-payload') {
+    if (!toolInput) {
+        return `${toolName} `;
+    }
+    const args = payload === 'with-payload'
+        ? toolInput
+        : Object.fromEntries(Object.entries(toolInput).filter(([k]) => !PAYLOAD_KEYS.has(k)));
+    return `${toolName} ${JSON.stringify(args)}`;
 }
 /**
  * Build the minimal `NormalizedSession` the engine's tiers and prompt builder need.
