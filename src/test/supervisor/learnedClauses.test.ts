@@ -14,7 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   LadderClause,
-  LearnedClauseError,
+  CLAUSE_STATUSES,
   RATIONALE_MIN_CHARS,
   assertWritable,
   auditVerdicts,
@@ -25,7 +25,6 @@ import {
   isMatched,
   learnedClausePath,
   learnedDir,
-  loadLearnedClauses,
   parseFrontmatter,
   parseLearnedClause,
   readLearnedDir,
@@ -87,6 +86,15 @@ Match: \`git push --force\`
 
 ${body}
 `;
+}
+
+/**
+ * A hand-parked clause: no `learned_from` sources, and therefore no `evidence` either — `evidence`
+ * describes an extraction, and a human parking a clause did not do one.
+ */
+function parkedClause(opts: ClauseOpts = {}): string {
+  return clauseFile({ ...opts, learnedFrom: '  sessions: []\n  decisions: []' })
+    .replace(/^evidence: .*\n/m, '');
 }
 
 /** Write one learned clause into a temp corpus and return the corpus root. */
@@ -189,7 +197,7 @@ describe('parseLearnedClause — required fields', () => {
   it.each([
     ['id', /^id: .*\n/m, 'missing `id`'],
     ['status', /^status: .*\n/m, 'missing `status`'],
-    ['evidence', /^evidence: .*\n/m, 'missing `evidence`'],
+    ['evidence (with learned_from sources)', /^evidence: .*\n/m, 'missing `evidence`'],
   ])('T10: a missing %s is an error naming the field and the file', (_field, strip, needle) => {
     const { findings } = parse(clauseFile().replace(strip, ''));
     const errs = findings.filter(f => f.severity === 'error');
@@ -201,6 +209,30 @@ describe('parseLearnedClause — required fields', () => {
     const { clause } = parse(clauseFile().replace(/^status: .*\n/m, ''));
     expect(clause?.status).toBe('proposed');
     expect(isEnforceable(clause!.status)).toBe(false);
+  });
+
+  it('requires `evidence` when `learned_from` names sources', () => {
+    const { findings } = parse(clauseFile().replace(/^evidence: .*\n/m, ''));
+    expect(errors(findings).join()).toContain('missing `evidence`');
+  });
+
+  it('rejects `evidence` when `learned_from` is empty — there is no extraction to describe', () => {
+    const { findings } = parse(clauseFile({ learnedFrom: '  sessions: []\n  decisions: []' }));
+    expect(errors(findings).join()).toContain('with no `learned_from` sources');
+  });
+
+  it('a hand-parked clause with neither is clean, and evidence stays null', () => {
+    const { clause, findings } = parse(parkedClause());
+    expect(errors(findings)).toEqual([]);
+    expect(clause?.evidence).toBeNull();
+  });
+
+  it('requires evidence when only sessions, or only decisions, are named', () => {
+    for (const learnedFrom of ['  sessions: [20260812_a-b-c1d2e3f4]\n  decisions: []',
+      '  sessions: []\n  decisions: [d-8f21e0]']) {
+      const text = clauseFile({ learnedFrom }).replace(/^evidence: .*\n/m, '');
+      expect(errors(parse(text).findings).join(), learnedFrom).toContain('missing `evidence`');
+    }
   });
 
   it('rejects an unknown status, level and evidence by name', () => {
@@ -338,12 +370,12 @@ describe('the rationale is mandatory under learned/ (§2.5)', () => {
 
   // T39.
   it('T39: the rationale check does not key on learned_from — hand-parked with no rationale fails', () => {
-    const { findings } = parse(clauseFile({ learnedFrom: '  sessions: []\n  decisions: []', body: '' }));
+    const { findings } = parse(parkedClause({ body: '' }));
     expect(errors(findings).join()).toContain('no rationale');
   });
 
   it('T39: hand-parked *with* a rationale parses, and produces exactly one info', () => {
-    const { clause, findings } = parse(clauseFile({ learnedFrom: '  sessions: []\n  decisions: []' }));
+    const { clause, findings } = parse(parkedClause());
     expect(errors(findings)).toEqual([]);
     const infos = findings.filter(f => f.severity === 'info');
     expect(infos).toHaveLength(1);
@@ -427,7 +459,6 @@ describe('the learned/ walk', () => {
     expect(result.clauses).toEqual([]);
     expect(result.findings).toEqual([]);
     expect(result.exists).toBe(false);
-    expect(loadLearnedClauses(tmp, 'team', TEAM)).toEqual([]);
   });
 
   it('reads zero clauses from a corpus with no data/knowledge at all', () => {
@@ -458,9 +489,9 @@ describe('the learned/ walk', () => {
     corpusWith({ 'team-rule.md': clauseFile({ id: 'team-rule' }) }, 'team', TEAM);
     corpusWith({ 'proj-rule.md': clauseFile({ id: 'proj-rule' }) }, 'project', 'demo-project');
     corpusWith({ 'user-rule.md': clauseFile({ id: 'user-rule' }) }, 'user', 'alice');
-    expect(loadLearnedClauses(tmp, 'team', TEAM).map(c => c.id)).toEqual(['team-rule']);
-    expect(loadLearnedClauses(tmp, 'project', 'demo-project').map(c => c.tier)).toEqual(['project']);
-    expect(loadLearnedClauses(tmp, 'user', 'alice').map(c => c.tier)).toEqual(['user']);
+    expect(readLearnedDir(tmp, 'team', TEAM).clauses.map(c => c.id)).toEqual(['team-rule']);
+    expect(readLearnedDir(tmp, 'project', 'demo-project').clauses.map(c => c.tier)).toEqual(['project']);
+    expect(readLearnedDir(tmp, 'user', 'alice').clauses.map(c => c.tier)).toEqual(['user']);
   });
 
   it('collects findings across every file rather than stopping at the first', () => {
@@ -474,15 +505,19 @@ describe('the learned/ walk', () => {
     expect([...files].sort()).toEqual(['bad-one.md', 'bad-two.md']);
   });
 
-  it('fails loud rather than loading a corpus with an error in it', () => {
-    const root = corpusWith({ 'broken.md': clauseFile({ id: 'broken', body: '' }) });
-    expect(() => loadLearnedClauses(root, 'team', TEAM)).toThrow(LearnedClauseError);
-    // The message carries every error, with its file, so one run tells you everything to fix.
-    try {
-      loadLearnedClauses(root, 'team', TEAM);
-    } catch (e) {
-      expect((e as LearnedClauseError).findings.some(f => f.severity === 'error')).toBe(true);
-      expect(String(e)).toContain('broken.md');
+  it('skips a malformed file and keeps every other clause in the tier', () => {
+    // Failing the whole tier would remove the other reds too, which is worse than losing the
+    // broken file. The compile is what refuses to emit an artifact while an error stands.
+    const root = corpusWith({
+      'good.md': clauseFile({ id: 'good' }),
+      'also-good.md': clauseFile({ id: 'also-good' }),
+      'broken.md': clauseFile({ id: 'broken', body: '' }),
+      'unparseable.md': 'no frontmatter here\n',
+    });
+    const { clauses, findings } = readLearnedDir(root, 'team', TEAM);
+    expect(clauses.map(c => c.id)).toEqual(['also-good', 'good']);
+    for (const bad of ['broken.md', 'unparseable.md']) {
+      expect(findings.some(f => f.severity === 'error' && f.file.endsWith(bad)), bad).toBe(true);
     }
   });
 });
@@ -492,7 +527,7 @@ describe('the learned/ walk', () => {
 describe('status semantics', () => {
   it('only `accepted` is enforceable', () => {
     expect(isEnforceable('accepted')).toBe(true);
-    for (const s of ['proposed', 'audit', 'rejected', 'declined', 'superseded', 'retired', 'deprecated'] as const) {
+    for (const s of ['proposed', 'audit', 'declined', 'superseded', 'retired'] as const) {
       expect(isEnforceable(s)).toBe(false);
     }
   });
@@ -500,7 +535,7 @@ describe('status semantics', () => {
   it('`accepted` and `audit` are matched; nothing else is', () => {
     expect(isMatched('accepted')).toBe(true);
     expect(isMatched('audit')).toBe(true);
-    for (const s of ['proposed', 'rejected', 'declined', 'superseded', 'retired', 'deprecated'] as const) {
+    for (const s of ['proposed', 'declined', 'superseded', 'retired'] as const) {
       expect(isMatched(s)).toBe(false);
     }
   });
@@ -509,14 +544,30 @@ describe('status semantics', () => {
     expect(rendersIntoPrompt('accepted')).toBe(true);
     // A clause the model can read influences the outcome, which is the opposite of audit.
     expect(rendersIntoPrompt('audit')).toBe(false);
-    for (const s of ['proposed', 'rejected', 'declined', 'superseded', 'retired', 'deprecated'] as const) {
+    for (const s of ['proposed', 'declined', 'superseded', 'retired'] as const) {
       expect(rendersIntoPrompt(s)).toBe(false);
     }
   });
 
-  it('accepts both `rejected` and `declined` spellings of never-accepted', () => {
-    expect(parse(clauseFile({ status: 'rejected' })).clause?.status).toBe('rejected');
-    expect(parse(clauseFile({ status: 'declined' })).clause?.status).toBe('declined');
+  // T50. The vocabulary drifted apart across three design documents once already; this pins it.
+  it('T50: the enum is exactly six values, and `rejected`/`deprecated` are not among them', () => {
+    expect([...CLAUSE_STATUSES]).toEqual(
+      ['proposed', 'audit', 'accepted', 'declined', 'superseded', 'retired']);
+    for (const dropped of ['rejected', 'deprecated']) {
+      expect(CLAUSE_STATUSES).not.toContain(dropped);
+      // and the loader refuses them rather than quietly accepting an old spelling
+      expect(errors(parse(clauseFile({ status: dropped })).findings).join())
+        .toContain(`unknown \`status: ${dropped}\``);
+    }
+  });
+
+  it('a human disarming a red is `retired` + `retired_reason: manual`, not a second enum value', () => {
+    const { clause, findings } = parse(clauseFile({
+      status: 'retired', extraFrontmatter: 'retired_at: 2026-11-14\nretired_reason: manual\n',
+    }));
+    expect(errors(findings)).toEqual([]);
+    expect(clause?.status).toBe('retired');
+    expect(isEnforceable(clause!.status)).toBe(false);
   });
 });
 
@@ -586,7 +637,7 @@ describe('the four-rung precedence ladder (§3.3)', () => {
   });
 
   // T1 / T2 / T41.
-  it.each([['proposed'], ['rejected'], ['declined'], ['superseded'], ['retired'], ['deprecated']])(
+  it.each([['proposed'], ['declined'], ['superseded'], ['retired']])(
     'T1/T2/T41: a `%s` clause never affects a decision', status => {
       const proposal = clause('would-deny-everything', 'human', 'red', 'user', status);
       // The verdict is identical with and without it.
@@ -828,9 +879,7 @@ describe('a hand-written file under learned/ (§3.3.2)', () => {
   // T36.
   it('T36: loads as `learned`, and therefore loses to a contradicting bottom-line.md clause', () => {
     const root = corpusWith({
-      'my-own-rule.md': clauseFile({
-        id: 'my-own-rule', level: 'red', learnedFrom: '  sessions: []\n  decisions: []',
-      }),
+      'my-own-rule.md': parkedClause({ id: 'my-own-rule', level: 'red' }),
     });
     const { clauses, findings } = readLearnedDir(root, 'team', TEAM);
     expect(hasErrors(findings)).toBe(false);
@@ -850,13 +899,13 @@ describe('a hand-written file under learned/ (§3.3.2)', () => {
 
   it('T36: produces exactly one info finding, not an error', () => {
     const root = corpusWith({
-      'my-own-rule.md': clauseFile({ id: 'my-own-rule', learnedFrom: '  sessions: []\n  decisions: []' }),
+      'my-own-rule.md': parkedClause({ id: 'my-own-rule' }),
     });
     const { findings } = readLearnedDir(root, 'team', TEAM);
     expect(findings.filter(f => f.severity === 'error')).toEqual([]);
     expect(findings.filter(f => f.severity === 'info')).toHaveLength(1);
     // Parking is legitimate — a reviewer who is not yet sure can deliberately give a clause the
     // lower precedence — so it can never be an error.
-    expect(loadLearnedClauses(root, 'team', TEAM)).toHaveLength(1);
+    expect(readLearnedDir(root, 'team', TEAM).clauses).toHaveLength(1);
   });
 });
