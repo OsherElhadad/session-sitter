@@ -67,6 +67,9 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
   private _activity: SupervisionActivity | undefined;
   private _lastActivity: ActivityItem[] = [];
   private readonly _recordsDir: string;
+  private readonly _notificationsDir: string;
+  /** Where a decision card is delivered — see `setMessagingChannel`. */
+  private _messagingChannel = 'stub';
 
   constructor(
     private readonly _extensionUri: vscode.Uri,
@@ -75,6 +78,7 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     stateDir = '',
   ) {
     this._recordsDir = stateDir ? path.join(stateDir, 'records') : '';
+    this._notificationsDir = stateDir ? path.join(stateDir, 'notifications') : '';
     this._focusWatcher = this._startFocusRequestWatcher();
     void this._publishWindowEntry();
     this._registryTimer = setInterval(() => { void this._publishWindowEntry(); }, 60_000);
@@ -83,10 +87,33 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     if (stateDir) {
       this._activity = new SupervisionActivity(stateDir, items => {
         this._lastActivity = items;
-        void this._view?.webview.postMessage({ type: 'updateActivity', items });
+        this._postActivity(items);
       });
       this._activity.start();
     }
+  }
+
+  /**
+   * Which channel a decision card is delivered on (`sessionSitter.supervisor.messagingChannel`).
+   *
+   * The panel has to name where a card awaiting your answer actually went, and only the effective
+   * supervisor config knows — the setting layers over `.env`. Extension activation builds that
+   * config after the view provider, so it is handed over here rather than read here.
+   */
+  public setMessagingChannel(channel: string): void {
+    this._messagingChannel = (channel || 'stub').toLowerCase();
+    if (this._lastActivity.length) { this._postActivity(this._lastActivity); }
+  }
+
+  private _postActivity(items: ActivityItem[]): void {
+    void this._view?.webview.postMessage({
+      type: 'updateActivity',
+      items,
+      // The panel used to say a card was awaiting you "on Telegram" whatever the channel was. With
+      // the default `stub` it is a file under the state dir, so that sent you to check nothing.
+      channel: this._messagingChannel,
+      notificationsDir: this._notificationsDir,
+    });
   }
 
   /**
@@ -225,11 +252,7 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
           }
           case 'ready': {
             void this._pushSessions();
-            if (this._lastActivity.length) {
-              void this._view?.webview.postMessage({
-                type: 'updateActivity', items: this._lastActivity,
-              });
-            }
+            if (this._lastActivity.length) { this._postActivity(this._lastActivity); }
             this._activity?.pushNow();
             break;
           }
@@ -508,8 +531,15 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
    *    `sessionSitter.probelessActiveWindowMinutes`.
    *
    * Both partitions stay sorted by recency.
+   *
+   * `current` is the session the panel marks as the one you are in. Claude's manager reports its
+   * focused session id, so that is the answer for a Claude panel; no other source exposes such a
+   * signal, which is why a focused Bob, Codex or Chat session leaves the list with no marked row
+   * rather than a guessed one.
    */
-  private async _partitionSessions(): Promise<{ active: ClaudeSession[]; history: ClaudeSession[] }> {
+  private async _partitionSessions(): Promise<{
+    active: ClaudeSession[]; history: ClaudeSession[]; current: string | null;
+  }> {
     const localClaude = await getOpenClaudeSessionIds(this._log);
     const localBobIds = await getOpenBobTaskIds(this._log);
     // `readLiveWindows` is local by construction: it reads this machine's registry directory and
@@ -542,7 +572,11 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     };
 
     const all = this._sortedByRecency();
-    return { active: all.filter(isActive), history: all.filter(s => !isActive(s)) };
+    return {
+      active: all.filter(isActive),
+      history: all.filter(s => !isActive(s)),
+      current: localClaude.active,
+    };
   }
 
   /** The order the user picked for the session list. */
@@ -572,10 +606,13 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
 
   private async _pushSessions(): Promise<void> {
     if (!this._view) { return; }
-    const { active } = await this._partitionSessions();
+    const { active, current } = await this._partitionSessions();
     void this._view.webview.postMessage({
       type: 'updateSessions',
       sessions: this._forDisplay(active, SESSIONS_LIMIT),
+      // Which row the panel marks as the session you are in. A panel whose whole job is switching
+      // between sessions has to say which one you are looking at.
+      currentSessionId: current,
       // Sent with the sessions so the panel can name peers it could not reach, rather than
       // letting an unreachable machine look like a machine with nothing running.
       // Optional call: peer support is additive, and a session manager without it is still valid.
@@ -805,20 +842,23 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
 <body>
   <div id="tab-bar">
     <div id="toolbar">
-      <button id="menu-btn" title="Menu">&#x2630;</button>
-      <button id="sort-btn" title="Sort sessions" aria-haspopup="menu"
-              aria-expanded="false">&#x21C5;</button>
-      <button id="new-session-btn" title="New Claude Session">+</button>
-      <button id="new-bob-session-btn" title="New Bob Session">+B</button>
+      <button id="menu-btn" title="Menu" aria-label="Session Sitter menu"
+              aria-haspopup="menu" aria-expanded="false">&#x2630;</button>
+      <button id="sort-btn" title="Sort sessions" aria-label="Sort sessions"
+              aria-haspopup="menu" aria-expanded="false">&#x21C5;</button>
+      <button id="new-session-btn" title="New Claude Session"
+              aria-label="New Claude session">+</button>
+      <button id="new-bob-session-btn" title="New Bob Session"
+              aria-label="New Bob session">+B</button>
     </div>
-    <div id="tab-strip" role="tablist" aria-label="Claude Sessions"></div>
+    <div id="tab-strip" role="tablist" aria-label="Agent sessions"></div>
     <button id="history-toggle" aria-expanded="false">History &#x25B6;</button>
     <div id="history-panel" hidden></div>
     <button id="activity-toggle" aria-expanded="true">Supervision activity &#x25BC;</button>
-    <div id="activity-panel"></div>
+    <div id="activity-panel" aria-live="polite"></div>
   </div>
-  <div id="about-box" hidden>
-    <div class="about-name">Session Sitter</div>
+  <div id="about-box" role="dialog" aria-modal="true" aria-labelledby="about-title" hidden>
+    <div class="about-name" id="about-title">Session Sitter</div>
     <div class="about-version">v${BUILD_VERSION}</div>
     <div class="about-built">Built ${buildDisplay}</div>
     <button id="about-close">Close</button>
