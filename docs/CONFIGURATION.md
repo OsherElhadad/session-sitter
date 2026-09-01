@@ -182,8 +182,14 @@ Full walk-through: [`TELEGRAM.md`](TELEGRAM.md).
 | `sessionSitter.knowledge.project` | `""` | Routes to `data/knowledge/projects/<project>/bottom-line.md`. |
 | `sessionSitter.knowledge.team` | `""` | Routes to `data/knowledge/teams/<team>/bottom-line.md` — lowest precedence. |
 | `sessionSitter.knowledge.registryPath` | `""` | Optional registry markdown. When set the triple is validated against it and the documented fallbacks apply; when empty the three slugs are used as given. See [`KNOWLEDGE.md`](KNOWLEDGE.md#routing-which-files-apply-to-this-session). |
-| `sessionSitter.supervisor.knowledgeRepo` | `""` | Git URL of the knowledge repo. Used only when no local checkout is configured. |
+| `sessionSitter.supervisor.knowledgeRepo` | `""` | Git URL of the knowledge repo. Used only when no local checkout is configured — a clone is slower than a local read even with the 5-minute cache, so prefer `sessionSitter.dataRepoPath`. |
 | `sessionSitter.supervisor.knowledgeRef` | `main` | Ref to read the knowledge repo at, when fetching by URL. |
+
+When knowledge is fetched by URL rather than read from a local checkout, the three tier files are
+shallow-cloned and then **cached in-process for 5 minutes** per repo, ref and routing triple.
+Before that cache the clone ran on *every* classification — 1-5s in front of every decision, for
+three markdown files that change perhaps weekly. Someone editing a local checkout still sees the
+edit on the next decision: the local path is three file reads and is deliberately not cached.
 
 A slug left empty means that tier is not configured: its file is reported missing and the others
 still load. With **no** user configured at all, supervision still runs — the classifier judges the
