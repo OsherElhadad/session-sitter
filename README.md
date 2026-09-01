@@ -7,8 +7,10 @@
 
 <p align="center">
   <b>Agent governance for the terminal.</b><br>
-  Your coding agents run unattended under your team's written rules — every decision citing the
-  rule it applied, unsafe calls rewritten into safe ones, and one durable record per action.
+  Permission rules that never match <code>git add &amp;&amp; git commit</code>. An "always allow" that saves
+  the whole command line and so never matches again. Unattended runs that stall, or are denied with
+  nothing said. Session Sitter answers each prompt from your team's written practices instead —
+  citing the clause it applied, and keeping one durable record per decision.
 </p>
 
 <p align="center"><em>Silence is never approval.</em></p>
@@ -131,6 +133,7 @@ waved through. Session Sitter is the layer that answers, in writing, and keeps t
 |---|---|---|
 | **An overnight run** | stalls at the first prompt, or runs under `--dangerously-skip-permissions` and you hope | keeps going on the actions your rules already allow |
 | **A safe, boring prompt** | you approve `read_file` for the ninetieth time | resolved by rule, before any model call |
+| **"Always allow", clicked** | the literal command line is saved, so it never matches again | the practice that settled it is the standing answer |
 | **An unsafe action** | approved, or blocked with nothing to act on | blocked, and the agent is handed the safe alternatives instead |
 | **A judgment call** | it waits until you look | a decision card on your phone with a countdown — and on timeout it is **denied**, never approved |
 | **"What did it actually do?"** | scroll four transcripts | one durable JSON record per decision, plus the activity feed |
@@ -240,20 +243,26 @@ part that has to be yours, because the policy is yours:
 
 Both layers run at once, and the supervision half of this extension is off until you turn it on.
 
+Two of those rows are why `settings.json` is not enough on its own: a `Bash(git:*)` rule does not
+match `git add x && git commit -m y` — which defeats **deny** rules, not just allow ones — and an
+"always allow" click saves the command line it saw rather than the rule you meant. Judging the whole
+command line against your practices, and writing an approval back as the rule the clause implies,
+are in the open pull requests behind the Claude Code plugin, not in the released extension.
+
 ---
 
 ## Features
 
 - **Practices as policy, with the clause cited** — every decision names the rule it applied, not a
   fixed string.
-- **The correction lane** — an unsafe call is rewritten into the safe one and re-checked against
-  your deny rules, so a blocked agent gets a way forward instead of a wall.
-- **Deny on timeout, always** — an escalated decision with no answer is denied. Silence never
-  writes an approval.
+- **Deny on timeout, always** — an escalated decision with no answer is denied, and the denial says
+  which clause denied it. Silence never writes an approval, and never stalls a run without a reason.
 - **A durable record per decision** — which light, who decided (🧠 AI or ⚙ rule), what was asked,
   what happened. JSON on disk, plus an activity feed that expands failures to their recorded error.
 - **A deterministic tier in front of the classifier** — read-only actions never cost a model call,
   so governance stays off the critical path.
+- **The correction lane** — an unsafe call is rewritten into the safe one and re-checked against
+  your deny rules, so a blocked agent gets a way forward instead of a wall.
 - **Four agents, one policy** — Claude Code, IBM Bob IDE, Codex CLI, VS Code Chat, by reading only
   what they already write to disk. → [how](docs/ARCHITECTURE.md)
 - **Across windows and across machines** — peers are discovered from the remote windows your IDE
