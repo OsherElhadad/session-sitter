@@ -12,6 +12,7 @@ import {
   ruleAssessment,
   ruleLight,
   ruleOutcomeLabel,
+  ruleCall,
   ruleTrace,
   withSessionIdentity,
   type RuleDecision,
@@ -144,6 +145,41 @@ describe('ruleTrace', () => {
       response: null,
       tool_name: 'read_file',
     });
+  });
+});
+
+describe('ruleCall', () => {
+  it('records the call the rule acted on, arguments parsed', () => {
+    expect(ruleCall(approval())).toEqual({
+      tool_name: 'read_file',
+      input: { path: 'src/app.ts' },
+    });
+  });
+
+  it('masks a credential in the arguments', () => {
+    const secret = 'ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+    const call = ruleCall(approval({
+      toolName: 'execute_command',
+      argsText: JSON.stringify({ command: `git push https://${secret}@example.test/x.git` }),
+    }));
+    expect(JSON.stringify(call?.input)).not.toContain(secret);
+  });
+
+  it('drops arguments that do not parse rather than storing the raw string', () => {
+    expect(ruleCall(approval({ argsText: 'not json at all' })))
+      .toEqual({ tool_name: 'read_file', input: null });
+  });
+
+  it('has no call for a text rule, or an approval with no tool name', () => {
+    expect(ruleCall({
+      sessionId: 'task-1', source: 'bob', kind: 'text', pattern: 'ready\\?', response: 'yes',
+    })).toBeNull();
+    expect(ruleCall(approval({ toolName: undefined }))).toBeNull();
+  });
+
+  it('reaches the persisted record', async () => {
+    const record = await recorder(new FakeChannel()).report(approval());
+    expect(record?.call).toEqual({ tool_name: 'read_file', input: { path: 'src/app.ts' } });
   });
 });
 
