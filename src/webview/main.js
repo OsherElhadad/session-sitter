@@ -16,6 +16,12 @@
 
   let historyOpen = false;
 
+  /** @type {string} — id of the active sort order; the extension host owns the real value */
+  let sortMode = 'recent';
+
+  /** @type {Array<{id: string, label: string, description: string, stable: boolean}>} */
+  let sortModes = [];
+
   /** @type {Array<{peer: string, reachable: boolean, error?: string, sessionCount?: number}>} */
   let peerStatuses = [];
 
@@ -43,6 +49,10 @@
   let previewEl;
   let activityToggle;
   let activityPanel;
+  let sortBtn;
+
+  /** @type {HTMLElement | null} — visible sort menu element, or null */
+  let sortMenuEl = null;
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -146,8 +156,8 @@
    * @param {HTMLElement} anchorEl
    */
   function scheduleHoverPreview(session, anchorEl) {
-    // Don't compete with the context menu for screen space.
-    if (contextMenuEl) { return; }
+    // Don't compete with an open menu for screen space.
+    if (contextMenuEl || sortMenuEl) { return; }
     clearTimeout(previewTimer);
     previewTimer = setTimeout(function () {
       pendingPreviewSessionId = session.sessionId;
@@ -324,6 +334,87 @@
     if (firstItem) { firstItem.focus(); }
   }
 
+  // ── Sort menu ─────────────────────────────────────────────────────────────
+
+  function closeSortMenu() {
+    if (sortMenuEl) { sortMenuEl.remove(); sortMenuEl = null; }
+    if (sortBtn) { sortBtn.setAttribute('aria-expanded', 'false'); }
+  }
+
+  /** The label of the active mode, for the toolbar button's tooltip. */
+  function currentSortLabel() {
+    for (let i = 0; i < sortModes.length; i++) {
+      if (sortModes[i].id === sortMode) { return sortModes[i].label; }
+    }
+    return sortMode;
+  }
+
+  // The tooltip names the active order, so "how is this list sorted" is answerable without
+  // opening the menu. Deliberately does not touch an open menu: sessions refresh every few
+  // seconds, and rebuilding the menu under the pointer would move the item being clicked.
+  function refreshSortButton() {
+    if (!sortBtn) { return; }
+    sortBtn.title = 'Sort sessions — ' + currentSortLabel();
+  }
+
+  /**
+   * The sort picker. Items come from the extension host (`sortModes`), so the panel can only
+   * offer orders the sorter actually implements — there is no second list to keep in step.
+   */
+  function openSortMenu() {
+    closeSortMenu();
+    if (!sortBtn) { return; }
+
+    const menu = document.createElement('div');
+    menu.className = 'session-context-menu';
+    menu.setAttribute('role', 'menu');
+
+    const modes = sortModes.length ? sortModes : [{ id: 'recent', label: 'Recently updated' }];
+    modes.forEach(function (mode) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'session-context-menu-item session-sort-item';
+      btn.setAttribute('role', 'menuitemradio');
+      const active = mode.id === sortMode;
+      btn.setAttribute('aria-checked', active ? 'true' : 'false');
+      if (active) { btn.classList.add('session-sort-item--active'); }
+
+      const check = document.createElement('span');
+      check.className = 'session-sort-check';
+      // A fixed-width column either way, so the labels line up whichever mode is active.
+      check.textContent = active ? '✓' : '';
+      btn.appendChild(check);
+      btn.appendChild(document.createTextNode(mode.label));
+      if (mode.description) { btn.title = mode.description; }
+
+      btn.addEventListener('click', function () {
+        closeSortMenu();
+        if (mode.id === sortMode) { return; }
+        // The host owns the ordering: it records the choice in settings — which is what makes it
+        // survive a reload — and pushes the re-sorted rows straight back. Showing the new mode
+        // here first only keeps the button's tooltip honest in the meantime.
+        sortMode = mode.id;
+        refreshSortButton();
+        vscodeApi.postMessage({ type: 'setSessionSort', mode: mode.id });
+      });
+      menu.appendChild(btn);
+    });
+
+    document.body.appendChild(menu);
+    sortMenuEl = menu;
+    sortBtn.setAttribute('aria-expanded', 'true');
+
+    // Anchor under the button (the menu is position: fixed).
+    const rect = sortBtn.getBoundingClientRect();
+    const width = menu.getBoundingClientRect().width;
+    menu.style.left = Math.max(4, Math.min(rect.left, window.innerWidth - width - 4)) + 'px';
+    menu.style.top = rect.bottom + 'px';
+
+    const checked = menu.querySelector('.session-sort-item--active') ||
+      menu.querySelector('.session-context-menu-item');
+    if (checked) { checked.focus(); }
+  }
+
   // ── Tab builder ───────────────────────────────────────────────────────────
 
   // Uniform metadata rows shared by buildTab and buildHistoryItem — appends
@@ -357,6 +448,14 @@
     workspaceBadge.textContent = session.projectName || '(no workspace)';
     if (!session.projectName) {
       workspaceBadge.classList.add('tab-badge--empty');
+    }
+    // A workspace the user gave a colour to (sessionSitter.workspaceColors). The extension host
+    // resolves the pair — it owns the setting — and sends nothing at all for an uncoloured
+    // workspace, which is what leaves that pill on the theme's badge colour.
+    if (session.workspaceColor && session.workspaceColor.background) {
+      workspaceBadge.classList.add('tab-badge--colored');
+      workspaceBadge.style.backgroundColor = session.workspaceColor.background;
+      workspaceBadge.style.color = session.workspaceColor.foreground || '#ffffff';
     }
     textEl.appendChild(workspaceBadge);
   }
@@ -795,6 +894,10 @@
       case 'updateSessions':
         sessions = Array.isArray(message.sessions) ? message.sessions : [];
         peerStatuses = Array.isArray(message.peers) ? message.peers : [];
+        // The host sorted the rows already; these only drive the menu's check mark and tooltip.
+        if (Array.isArray(message.sortModes)) { sortModes = message.sortModes; }
+        if (typeof message.sortMode === 'string') { sortMode = message.sortMode; }
+        refreshSortButton();
         renderTabs();
         break;
       case 'updateHistory':
@@ -834,6 +937,15 @@
     previewEl      = document.getElementById('session-preview');
     activityToggle = document.getElementById('activity-toggle');
     activityPanel  = document.getElementById('activity-panel');
+    sortBtn        = document.getElementById('sort-btn');
+
+    if (sortBtn) {
+      refreshSortButton();
+      sortBtn.addEventListener('click', function (event) {
+        event.stopPropagation();
+        if (sortMenuEl) { closeSortMenu(); } else { openSortMenu(); }
+      });
+    }
 
     const newBtn = document.getElementById('new-session-btn');
     if (newBtn) {
@@ -852,14 +964,18 @@
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         if (contextMenuEl) { closeContextMenu(); }
+        if (sortMenuEl) { closeSortMenu(); }
         if (previewEl && !previewEl.hidden) { hidePreview(); }
       }
     });
 
-    // Dismiss context menu / preview when clicking outside of them.
+    // Dismiss context menu / sort menu / preview when clicking outside of them.
     document.addEventListener('mousedown', (event) => {
       if (contextMenuEl && !contextMenuEl.contains(event.target)) {
         closeContextMenu();
+      }
+      if (sortMenuEl && !sortMenuEl.contains(event.target) && event.target !== sortBtn) {
+        closeSortMenu();
       }
       if (previewEl && !previewEl.hidden && !previewEl.contains(event.target)) {
         hidePreview();

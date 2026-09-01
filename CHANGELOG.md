@@ -3,6 +3,65 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.8.0
+
+### The session list can hold still, and it sorts six ways
+
+The list was always sorted by recency, so every status change reshuffled it. Reading a list of a
+dozen sessions across five checkouts meant the row you were aiming at moved under the cursor — and
+recency tells you nothing about *which* session a row is, which is the question you actually have
+when several of them look alike.
+
+A **⇅** button in the toolbar now picks the order, and the choice is written to
+`sessionSitter.sessionSort`, so it survives a reload and applies in every window:
+
+| Order | Rows hold still |
+|---|---|
+| `recent` — newest activity first (the default, unchanged) | no |
+| `hostWorkspace` — machine, then workspace, then title | yes |
+| `workspace` — workspace, then title, across machines | yes |
+| `source` — agent (Claude, Bob, Codex, Chat), then workspace | yes |
+| `title` — A to Z | yes |
+| `status` — waiting on you, then running, then idle | no |
+
+"Holds still" is a property of the comparators, not a hope: every one of them is total, falling
+through to the session id, because a comparator that ties leaves those rows in whatever sequence
+the scan produced — and that sequence changes between passes. The modes live in one place
+(`sessionSort.ts`) and the panel builds its menu from the list the extension host sends, so the
+panel cannot offer an order the sorter does not implement.
+
+The cap on the list (20 rows, 50 in History) is still applied by **recency**, before the display
+sort. Sorting by title and then taking the first 20 would drop the sessions you touched most
+recently, which is the opposite of what a worklist is for.
+
+### Each workspace can have its own colour
+
+Every workspace pill was the theme's badge colour — one colour for every project, which is no help
+at all when the panel lists sessions from five checkouts. `sessionSitter.workspaceColors` maps a
+workspace to a colour:
+
+```jsonc
+"sessionSitter.workspaceColors": {
+  "session-sitter": "green",
+  "/home/you/work/payments": "#c0392b",
+  "scratch-*": "slate",
+  "*": "auto"
+}
+```
+
+A key is a workspace name, a full path, or a glob over either, and the first matching key wins — the
+same rule `sessionSitter.autoRespond` already uses. A value is a hex colour, one of seventeen built-in
+names, or `auto`, which hashes the workspace into the palette: the same project gets the same colour
+in every window and on every machine, with nothing to configure. The label colour is picked for
+contrast automatically, so a light fill still reads.
+
+The default is unchanged: a workspace with no rule keeps the theme colour. A value that is not a
+colour is ignored rather than fatal, so a typo shows up as "this project is not coloured" instead of
+a broken panel.
+
+Both settings are read by the extension host on every push and take effect as soon as you edit them
+— including for peer sessions, so the same project looks the same wherever it is running.
+
 ## 0.7.3
 
 ### The project has a logo

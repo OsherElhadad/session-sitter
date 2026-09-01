@@ -66,6 +66,8 @@ deprecation.
 |---|---|---|
 | `sessionSitter.autoRespond` | `[]` | Auto-reply and auto-approve rules. See [below](#auto-respond-rules). |
 | `sessionSitter.probelessActiveWindowMinutes` | `120` | How recently a **Codex** or **VS Code Chat** session must have been updated to count as active. Those sources expose no live-process signal, so recency is the only proxy; Claude and Bob are judged by what their extension hosts report as open. `0` keeps them in History always. |
+| `sessionSitter.sessionSort` | `"recent"` | How the Sessions list and History are ordered. See [below](#sorting-the-session-list). |
+| `sessionSitter.workspaceColors` | `{}` | Colour for each workspace's pill on a session row. See [below](#workspace-colours). |
 
 ### Supervision
 
@@ -175,6 +177,75 @@ input.
 | `KNOWLEDGE_REPO` | — | Git URL, used only when no local checkout is set. Also accepted as `KB_SITTER_KNOWLEDGE_REPO`. |
 | `KNOWLEDGE_REF` | `main` | Ref to clone when reading remotely. |
 | `KNOWLEDGE_REGISTRY_PATH` | — | Registry markdown, for the CLI. |
+
+---
+
+## Sorting the session list
+
+`sessionSitter.sessionSort` picks the order of the **Sessions** list and **History**. Switch it from
+the panel's **⇅** toolbar button — the menu writes this setting, so the choice survives a reload and
+applies in every window.
+
+The default sorts by newest activity, which means the rows move every time a session updates. That
+is fine for "what did I touch last" and painful for "where is the session I was just reading". The
+other orders sort by properties of the session rather than by the clock, so a row only moves when a
+session appears or disappears.
+
+| Value | Order | Rows hold still |
+|---|---|---|
+| `recent` *(default)* | Newest activity first. | no |
+| `hostWorkspace` | Machine, then workspace, then title. This machine leads, then peers by host name. | yes |
+| `workspace` | Workspace, then title — regardless of which machine the session is on. | yes |
+| `source` | Agent (Claude, Bob, Codex, Chat), then workspace, then title. | yes |
+| `title` | Session title, A to Z. | yes |
+| `status` | Waiting on you first, then running, then idle — newest first inside each group. | no |
+
+Sessions with no workspace sort last in the workspace-grouped orders, and an unknown value in the
+setting falls back to `recent` rather than failing.
+
+The list is still **capped by recency** before it is sorted (20 rows in Sessions, 50 in History), so
+picking an alphabetical order never hides the sessions you touched most recently.
+
+---
+
+## Workspace colours
+
+`sessionSitter.workspaceColors` gives each workspace its own colour for the **workspace pill** on a
+session row. Unlisted workspaces keep the theme's badge colour, which is what every pill used to be.
+
+Keys are tried in the order you write them and the **first match wins**, so put a specific workspace
+above a broad glob. A key may be:
+
+| Key | Matches |
+|---|---|
+| `my-app` | the workspace whose folder name is `my-app` |
+| `/home/you/work/my-app` | that exact workspace path (case-insensitive, trailing slash optional) |
+| `scratch-*` | any name or path matching the glob — `*` is any run of characters, `?` is exactly one |
+| `*` | every workspace — the catch-all |
+
+Values are a hex colour, a built-in name, or `auto`:
+
+| Value | Meaning |
+|---|---|
+| `#0f8`, `#1a2b3c` | that colour |
+| `red` `orange` `amber` `yellow` `lime` `green` `teal` `cyan` `blue` `indigo` `violet` `purple` `magenta` `pink` `brown` `slate` `gray` | a built-in colour, picked to stay legible on light and dark themes |
+| `auto` | derive a stable colour from the workspace itself — same project, same colour, in every window and on every machine |
+
+The label colour is chosen automatically for contrast against the fill, so a light colour still
+reads. A value that is not a colour is ignored and that pill stays on the theme colour, rather than
+being painted something arbitrary.
+
+```jsonc
+"sessionSitter.workspaceColors": {
+  "session-sitter": "green",            // one project, by name
+  "/home/you/work/payments": "#c0392b", // one checkout, by path
+  "scratch-*": "slate",                 // a family of throwaway workspaces
+  "*": "auto"                           // everything else gets its own colour
+}
+```
+
+Colours apply to History rows as well, and to sessions on other machines — the same project has the
+same colour wherever it is running.
 
 ---
 

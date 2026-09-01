@@ -33,6 +33,9 @@ session-sitter/
 │   ├── extension.ts                    # activate() — wires everything together
 │   ├── SessionManager.ts               # the four session stores; scanning + transcripts
 │   ├── SessionSitterViewProvider.ts  # the sidebar webview + the activity feed
+│   ├── sessionRows.ts                  # Bob rows -> sessions, shared local + remote
+│   ├── sessionSort.ts                  # the session-list orders (pure, total comparators)
+│   ├── workspaceColors.ts              # per-workspace pill colour (pure)
 │   ├── WindowRegistry.ts               # cross-window focus + published open-session ids
 │   ├── BobDatabase.ts                  # the one read-only SQLite shim (see below)
 │   ├── AutoResponder.ts                # text rules, approval rules, supervisor handoff
@@ -228,6 +231,7 @@ Implements `WebviewViewProvider`. Wires `SessionManager` events and the VS Code 
 | `removeTab` | Close the Claude Code editor tab via `tabGroups.close()` |
 | `loadHistory` | Query sessions not in the live set, push `updateHistory` |
 | `addFromHistory` | `claude-vscode.primaryEditor.open(sessionId)` |
+| `setSessionSort` | Validate the mode, write `sessionSitter.sessionSort` (global), re-push both lists |
 
 **Session list logic:**
 ```
@@ -514,6 +518,37 @@ session that was never found.
 Codex and Chat have no liveness signal at all, so recency is the only honest proxy: they count as
 active while updated within `sessionSitter.probelessActiveWindowMinutes` (default 120,
 `0` to keep them in History always). The rule is named and configurable rather than hidden.
+
+---
+
+## Reading the list: order and colour
+
+Membership (above) and presentation are separate problems, decided in that order. Both settings
+that shape presentation are read by the extension host on every push, never by the webview — the
+webview cannot read settings, and resolving them in one place keeps a peer's row rendering exactly
+like a local one.
+
+**Order** — `sessionSort.ts` holds one comparator per mode and `sessionSitter.sessionSort` picks
+it. The panel's ⇅ menu is built from the mode list the host sends with `updateSessions`, so the
+modes exist in exactly one place and the panel cannot offer an order the sorter does not
+implement.
+
+Every comparator is **total**: each one falls through to `sessionId`. That is what makes a "stable"
+mode actually stable — a comparator that ties leaves those rows in whatever sequence the scan
+produced, and that sequence changes between passes, which is the moving-rows problem the stable
+modes exist to solve. Recency is still the default, and it moves rows by design.
+
+The cap is applied **before** the display sort, to the recency-ordered list. Sorting by title and
+then taking the first 20 would silently drop the sessions you touched most recently, which is the
+opposite of what a worklist is for.
+
+**Colour** — `workspaceColors.ts` maps a session's workspace to a pill colour from
+`sessionSitter.workspaceColors`. Keys may be a workspace name, a full path, or a glob over either,
+and the first matching key wins — the same rule `sessionSitter.autoRespond` uses. The host resolves
+the fill *and* a contrast-checked label colour and attaches the pair to the row; a workspace with
+no rule gets no field at all, which is what leaves its pill on the theme's badge colour. An
+unparsable value is skipped rather than fatal, so a typo reads as "this project is not coloured"
+instead of a broken panel.
 
 ---
 

@@ -45,3 +45,57 @@ describe('webview: the activity row names its session and machine', () => {
     expect(css).toMatch(/\.activity-session-host\s*\{/);
   });
 });
+
+// The webview is plain JS with no DOM under test, so what is checkable here is the contract
+// between the three files that have to agree: the extension host renders the button, main.js
+// looks it up by that exact id and posts the message the host handles, and styles.css styles the
+// classes main.js puts on the elements. A rename on any one side is silent at runtime — the
+// button simply does nothing, or the pill silently ignores its colour.
+describe('webview: the sort control', () => {
+  const dir = path.join(__dirname, '..', 'webview');
+  const main = fs.readFileSync(path.join(dir, 'main.js'), 'utf8');
+  const css = fs.readFileSync(path.join(dir, 'styles.css'), 'utf8');
+  const provider = fs.readFileSync(
+    path.join(__dirname, '..', 'SessionSitterViewProvider.ts'), 'utf8');
+
+  it('renders the toolbar button main.js looks for', () => {
+    expect(provider).toContain('id="sort-btn"');
+    expect(main).toContain("getElementById('sort-btn')");
+  });
+
+  it('posts the message the extension host handles, under the name it handles it by', () => {
+    expect(main).toContain("type: 'setSessionSort'");
+    expect(provider).toContain("case 'setSessionSort'");
+  });
+
+  it('builds the menu from the modes the host sends, not from its own list', () => {
+    expect(main).toContain('message.sortModes');
+    expect(main).toContain('message.sortMode');
+    expect(provider).toContain('sortModes: SESSION_SORT_MODES');
+  });
+
+  it('styles the button and the menu items it creates', () => {
+    expect(main).toContain('session-sort-item');
+    expect(main).toContain('session-sort-check');
+    expect(css).toMatch(/#sort-btn\s*[,{]/);
+    expect(css).toMatch(/\.session-sort-item\s*\{/);
+    expect(css).toMatch(/\.session-sort-check\s*\{/);
+  });
+});
+
+describe('webview: the coloured workspace pill', () => {
+  const dir = path.join(__dirname, '..', 'webview');
+  const main = fs.readFileSync(path.join(dir, 'main.js'), 'utf8');
+  const css = fs.readFileSync(path.join(dir, 'styles.css'), 'utf8');
+
+  it('reads the colour pair the host resolved off the session row', () => {
+    expect(main).toContain('session.workspaceColor');
+    expect(main).toContain('.background');
+    expect(main).toContain('.foreground');
+  });
+
+  it('styles the class it marks a coloured pill with', () => {
+    expect(main).toContain('tab-badge--colored');
+    expect(css).toMatch(/\.tab-badge--colored\s*\{/);
+  });
+});
