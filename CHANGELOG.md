@@ -3,6 +3,29 @@
 This is the one file that names what the project used to be called. Everywhere else carries a
 single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
+## 0.7.3
+
+### The project has a logo
+
+There was no picture anywhere. The README opened with a bare `<h1>`, the marketplace tile fell back
+to the grey default placeholder, and the GitHub repo card was text on grey. For a tool whose whole
+pitch is a panel you look at, that is a bad first impression — and the marketplace ranks and renders
+an extension with no icon worse than one with any icon at all.
+
+The mark is three agents tucked in a cradle over the red / amber / green supervision light: it is
+sitting with your sessions, and it grades what they pause on. `package.json` now declares
+`icon` and a `galleryBanner` in the badge's navy, so the marketplace tile and its header are
+branded. The README header is a wordmark that swaps with the reader's light or dark theme.
+
+Every asset is original artwork and lives in [docs/branding/](docs/branding/) with the palette and a
+regeneration script. It borrows no vendor's mark, and the palette avoids Claude's orange on purpose
+— the extension supervises Claude Code, IBM Bob and Codex alike, so looking like any one of them
+would be both a licensing problem and a lie about what this is.
+
+The marketplace icon is a copy at `resources/logo.png` rather than a reference into `docs/`, because
+`.vscodeignore` keeps `docs/` out of the `.vsix`. `resources/icon.svg` is untouched: the activity-bar
+glyph has to stay monochrome `currentColor` so VS Code can tint it to the user's theme.
+
 ## 0.7.2
 
 ### Activity rows and Telegram cards now say which session, and which machine

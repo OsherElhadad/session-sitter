@@ -1,4 +1,9 @@
-<h1 align="center">Session Sitter</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/branding/wordmark-light.png">
+    <img src="docs/branding/wordmark-dark.png" alt="Session Sitter" width="560">
+  </picture>
+</p>
 
 <p align="center"><em>see every agent session · switch in one click · supervise what they pause on</em></p>
 
