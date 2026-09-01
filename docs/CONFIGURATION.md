@@ -65,6 +65,7 @@ deprecation.
 | Setting | Default | Purpose |
 |---|---|---|
 | `sessionSitter.autoRespond` | `[]` | Auto-reply and auto-approve rules. See [below](#auto-respond-rules). |
+| `sessionSitter.remotePeers` | `"auto"` | Whether the list includes sessions from other machines. `auto` mines the peer addresses out of the remote windows this IDE has already opened — no configuration — and pulls their sessions over SSH. `off` disables peer discovery, the polling and the SSH entirely. See [below](#sessions-from-other-machines). |
 | `sessionSitter.probelessActiveWindowMinutes` | `120` | How recently a **Codex** or **VS Code Chat** session must have been updated to count as active. Those sources expose no live-process signal, so recency is the only proxy; Claude and Bob are judged by what their extension hosts report as open. `0` keeps them in History always. |
 | `sessionSitter.sessionSort` | `"recent"` | How the Sessions list and History are ordered. See [below](#sorting-the-session-list). |
 | `sessionSitter.workspaceColors` | `{}` | Colour for each workspace's pill on a session row. See [below](#workspace-colours). |
@@ -120,12 +121,16 @@ still load. With **no** user configured at all, supervision still runs — the c
 pending action without BDI to weigh it against. A missing setting never fails a decision, because
 the agent is blocked on it. Nothing is ever guessed.
 
-### Deprecated
+### Removed
 
-| Setting | Status |
+Neither of these is declared any more, and no code reads either one. A leftover key in your
+`settings.json` is silently ignored, so it is worth deleting — it looks like configuration that is
+doing something.
+
+| Setting | What replaced it |
 |---|---|
-| `sessionSitter.uploadScriptPath` | **Deprecated.** The uploader is built in. Still read as a fallback: when `sessionSitter.dataRepoPath` is empty, the corpus root is derived from this path, so an existing setup keeps working. Set `sessionSitter.dataRepoPath` instead. |
-| `sessionSitter.pythonPath` | **Deprecated and unused.** The supervisor is TypeScript and runs in-process. Reading Bob's SQLite store still uses the `python3` on your `PATH`, but that is not configurable here — see [`ARCHITECTURE.md`](ARCHITECTURE.md#why-one-python3-call-remains). |
+| `sessionSitter.uploadScriptPath` | **Gone.** The uploader is built in and needs no script path. Set `sessionSitter.dataRepoPath` to your corpus root instead; this key is no longer read as a fallback for it. |
+| `sessionSitter.pythonPath` | **Gone.** The supervisor is TypeScript and runs in-process. Reading Bob's SQLite store still shells out to the `python3` on your `PATH`, and that was never configurable through this setting — see [`ARCHITECTURE.md`](ARCHITECTURE.md#why-one-python3-call-remains). |
 
 ---
 
@@ -205,6 +210,35 @@ setting falls back to `recent` rather than failing.
 
 The list is still **capped by recency** before it is sorted (20 rows in Sessions, 50 in History), so
 picking an alphabetical order never hides the sessions you touched most recently.
+
+---
+
+## Sessions from other machines
+
+`sessionSitter.remotePeers` is the on/off switch for the cross-machine part of the session list.
+It has two values because there is nothing to configure: the addresses are discovered, not typed.
+
+| Value | Behaviour |
+|---|---|
+| `auto` *(default)* | Discover peers and pull their sessions. |
+| `off` | No discovery, no polling, and no SSH connection of any kind. |
+
+Discovery reads the IDE's own state store. Every remote window you have ever opened leaves an
+`ssh-remote+<user@host>` record there, so the address used is the exact one the IDE itself connects
+with — the one most likely to work — and finding it costs no network traffic at all. This machine's
+own addresses are filtered out first: an IDE routinely records its own LAN address as a remote
+target, and a machine holds no authorized key for itself, so probing yourself would report your own
+machine as permanently unreachable.
+
+Reaching a peer runs `ssh` with `BatchMode=yes` and one shared connection per peer. `BatchMode`
+matters: without it a host that wants a password or a passphrase would block the poll indefinitely.
+With it, such a host is simply reported unreachable, which is the honest answer. Only peers
+reachable from this machine appear.
+
+Clicking a peer session focuses the window on **its own** machine rather than opening anything
+here — the session belongs to that machine, and its agent is running there.
+
+Set this to `off` if you work on one machine and would rather the extension never invoke `ssh`.
 
 ---
 

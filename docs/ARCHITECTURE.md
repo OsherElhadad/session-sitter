@@ -61,7 +61,7 @@ session-sitter/
 │       ├── main.js                     # tab strip, history, activity feed
 │       ├── toolbarMenu.js              # the ☰ menu (About + Settings…)
 │       └── styles.css                  # theme-aware styles
-├── src/test/                           # vitest; 600+ tests, no network, no real agent
+├── src/test/                           # vitest; no network, no real agent, no VS Code
 ├── knowledge/                          # BDI tier template + registry example
 ├── skills/kb-sitter/                   # the knowledge-loader skill
 └── docs/

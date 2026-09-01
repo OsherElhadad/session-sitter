@@ -92,7 +92,7 @@ lint: node_modules $(BUILD_INFO) ## Run ESLint over src/
 	$(NPX) eslint src
 
 .PHONY: test
-test: node_modules $(BUILD_INFO) ## Run the test suite (vitest, ~600 tests)
+test: node_modules $(BUILD_INFO) ## Run the test suite (vitest)
 	$(NPX) vitest run
 
 .PHONY: test-watch
