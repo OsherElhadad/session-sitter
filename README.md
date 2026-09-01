@@ -37,6 +37,15 @@ Across Claude Code, IBM Bob IDE, Codex and VS Code Chat. Across windows, and acr
   image is worse than none, and ci/check-links.mjs resolves image paths.
 -->
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/panel-light.png">
+    <img src="docs/screenshots/panel-dark.png" alt="The Session Sitter panel: a worklist of live sessions across four agents, above the supervision activity feed" width="340">
+  </picture>
+  <br>
+  <sub>The panel — every live session, and what the supervisor decided. <a href="docs/screenshots/">More shots</a>.</sub>
+</p>
+
 ---
 
 ## What changes
@@ -214,6 +223,13 @@ active while recently updated. Everything else moves to History.
 
 Each row carries a status dot: 🟢 running tools · 🟡 waiting on the agent · ⚫ idle, waiting on you.
 
+<p align="center">
+  <img src="docs/screenshots/panel-needs-you-dark.png" alt="The worklist sorted needs-you-first, with one session waiting on a human decision" width="320">
+  <img src="docs/screenshots/hover-preview-dark.png" alt="Hovering a row shows a preview of the last few messages in that session" width="320">
+  <br>
+  <sub>Needs-you-first ordering · hovering a row previews the conversation</sub>
+</p>
+
 ---
 
 ## Supervision
@@ -266,6 +282,18 @@ flowchart TD
 
 The deterministic tier is what keeps a governance layer off the critical path of every read, and
 the two timeout edges are the whole principle: an unanswered card is a denial.
+
+Every one of those decisions lands in the activity feed, saying which light it was, who decided —
+**🧠 AI** or **⚙ rule** — and what the agent was actually asked to do:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/activity-light.png">
+    <img src="docs/screenshots/activity-dark.png" alt="The supervision activity feed showing one decision of each light: green auto-approved, yellow auto-corrected, orange awaiting a human, red blocked" width="340">
+  </picture>
+  <br>
+  <sub>One card per decision. An orange card names its options and its countdown; a red one says why it stands.</sub>
+</p>
 
 **Everything is a setting** — no environment variables to maintain, no `.env`. Open
 **☰ → All settings…** in the panel, or search `sessionSitter` in the Settings UI. There is nothing
