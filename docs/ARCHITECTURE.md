@@ -1,5 +1,10 @@
 # Architecture: Session Sitter
 
+<p align="center">
+  <img src="diagrams/architecture.svg" width="900"
+       alt="One supervision engine under three front ends. Shipped: the VS Code panel, which is the session worklist and the activity feed, and the supervisor CLI for offline runs, replays and polling by hand. Designed but not built: a Claude Code plugin providing hooks in a bare terminal plus a session-sitter binary. Under them, the supervision engine in src/supervisor — the deterministic tier, the three knowledge tiers, the classifier, the record lifecycle and the outbox — pure Node, with no import of vscode and every dependency entering through OrchestratorOptions. It drives three things: the agent, through its own approval emitter; records/, one durable JSON file per decision; and your messaging channel, for decision cards and one-way updates.">
+</p>
+
 ## Overview
 
 The extension does two things.
@@ -74,7 +79,7 @@ session-sitter/
 │       ├── main.js                     # tab strip, history, activity feed
 │       ├── toolbarMenu.js              # the ☰ menu (About + Settings…)
 │       └── styles.css                  # theme-aware styles
-├── src/test/                           # vitest; 600+ tests, no network, no real agent
+├── src/test/                           # vitest; no network, no real agent, no VS Code
 ├── knowledge/                          # BDI tier template + registry example
 ├── skills/kb-sitter/                   # the knowledge-loader skill
 └── docs/
@@ -126,12 +131,16 @@ For each file in ~/.claude/sessions/:
   2. Skip if entrypoint != "claude-vscode"          (ignore CLI sessions)
   3. Skip if startedAt < (now - 24h)                (ignore zombie processes)
   4. process.kill(pid, 0)  →  throws if dead         (PID liveness check)
-  5. Read /proc/<pid>/stat field 21 (starttime)      (kernel jiffies since boot)
-  6. Compare to procStart  →  skip if mismatch       (PID recycling guard)
+  5. Collect every surviving candidate, then cross-check its start time:
+       on Linux    /proc/<pid>/stat field 21 == procStart   (kernel jiffies since boot)
+       elsewhere   one `ps -o pid=,lstart=` for all of them, compared as instants
+  6. Skip on a mismatch                              (PID recycling guard)
   7. Add sessionId to the active set
 ```
 
-The `procStart` comparison is the key insight: Linux can reuse a PID after a process dies. By storing and comparing the kernel start-time, we can distinguish the *original* Claude process from an unrelated process that happened to get the same PID later.
+The `procStart` comparison is the key insight: an OS can reuse a PID after a process dies. By storing and comparing the process start-time, we can distinguish the *original* Claude process from an unrelated process that happened to get the same PID later.
+
+Step 5 branches because `/proc` is Linux-only, and reading it on macOS threw for every session, which judged the whole worklist dead. The `ps` path asks about every candidate PID in **one** spawn, because this runs on a 5 s poll. Two details it has to get right: Claude writes `procStart` in UTC while `ps` prints the machine's local zone, so the two are compared as instants rather than as text; and when `ps` cannot be run, or says nothing parsable about a PID, the `kill(pid, 0)` signal alone decides — losing the recycling guard beats losing the feature.
 
 ### Why not VS Code's tab API?
 
@@ -140,7 +149,7 @@ The `procStart` comparison is the key insight: Linux can reuse a PID after a pro
 ### Fallback chain
 
 ```
-1. Tab API (duck-typed viewType check)      →  if produces matches: use tab titles
+1. Tab API (duck-typed viewType check)      →  if it produces matches: use tab titles
 2. ~/.claude/sessions/ PID liveness         →  primary detection (always tried)
 3. 2-hour recency window                    →  last resort if session files unreadable
 ```
@@ -332,6 +341,43 @@ Peer machines are therefore pulled explicitly. `sessionSitter.remotePeers` (`aut
 `off` to disable everything below) gates it, and the gate **fails closed**: if the setting cannot be
 read at all, no SSH happens.
 
+```mermaid
+flowchart LR
+  subgraph HERE["this machine"]
+    direction TB
+    W2["a sibling window"]
+    REGF[("~/.claude/session-sitter/windows/PID.json<br>WindowRegistry — open session ids,<br>workspace folders, ideCli, ipcSocket")]
+    W1["this window<br>Session Sitter panel"]
+    PD["PeerDiscovery — mines ssh-remote+user@host<br>out of each IDE's globalStorage/state.vscdb,<br>with no SSH traffic at all"]
+    SR["SshRunner — BatchMode, ControlMaster,<br>per-peer backoff"]
+    CACHE[("a slower-refreshed cache,<br>never on _scanSessions' await path")]
+    W2 --> REGF
+    REGF --> W1
+    W1 --> REGF
+    W1 --> PD --> SR
+    CACHE --> W1
+  end
+
+  subgraph THERE["a peer machine"]
+    direction TB
+    PROBE["remoteProbe.py, on stdin<br>live windows filtered with kill -0,<br>Bob rows verbatim, transcript head and tail"]
+    RF["remoteFocus, over the same SSH<br>write focus-PID.json, then run<br>the owner's ideCli --reuse-window"]
+    PW["the window that owns the session"]
+    RF --> PW
+  end
+
+  SR --> PROBE
+  PROBE --> CACHE
+  W1 -->|"you click a peer session"| RF
+```
+
+Three things in that picture are load-bearing. The registry is a **directory of files, not a
+service** — a window that dies leaves a stale file, not a broken socket. The probe returns **raw
+material, not sessions**, so titles and statuses are still derived by the one implementation in
+`sessionRows.ts`. And the peer path reaches the panel through a **cache**, because `_scanSessions`
+awaits its sources in sequence and an SSH round trip on that path would stall the local list behind
+the network.
+
 | Unit | Job |
 | --- | --- |
 | `remote/PeerDiscovery.ts` | find peers with **no** SSH traffic, by mining `ssh-remote+user@host` out of each IDE's `globalStorage/state.vscdb` |
@@ -385,32 +431,24 @@ remote ids are deliberately left out of the `filePaths`/`sources` maps that driv
 
 ## The Supervision Layer
 
-### The loop
+### The loop, as components
 
-```
-agent pauses at a prompt
-  → AutoResponder's approval sweep sees it (every 5 s, per IDE)
-      ├─ an auto-approve rule matches      → resolve it, done
-      ├─ it is a user-facing question       → never auto-answered; goes to the relay
-      └─ nothing handled it                → hand to SupervisionService
-                                                 │
-SessionExporter writes  <stateDir>/history/<id>.json   (the export contract)
-                                                 │
-Orchestrator: deterministic tier → load BDI → build prompt → classify → validate → act
-                                                 │
-                       ┌─────────────────────────┼──────────────────────┐
-                    GREEN                     YELLOW              ORANGE / RED
-              approve the prompt        inject labeled          post a decision card
-              + one-way update           guidance                + start the countdown
-                                                                        │
-                                                          reply ──┐  ┌── timeout
-                                                                  ▼  ▼
-                                                    approve / deny + relay the instruction
-                                                 │
-Orchestrator writes a delivery → <stateDir>/outbox/<deliveryId>.json
-                                                 │
-SupervisorOutbox applies it: approval channel (blocked prompt) or message channel (idle task)
-```
+What each unit does, in order. **The decision semantics — the four lights, the deterministic tier's
+verdicts, the timeout edges — are documented once, in
+[`SUPERVISION.md`](SUPERVISION.md#the-path-a-paused-action-takes), with a diagram.** This section
+covers only which component does which part, and why the boundaries fall where they do.
+
+| # | Unit | Its part of the loop |
+|---|---|---|
+| 1 | `AutoResponder` | the approval sweep, every 5 s per IDE. Applies an auto-respond rule if one matches; routes a user-facing question to the relay; hands everything else on |
+| 2 | `SessionExporter` | writes `<stateDir>/history/<id>.json` — the export contract, and the only thing the classifier reads the session through |
+| 3 | `SupervisionService` | owns an `Orchestrator` in-process and drives it; nothing spawns |
+| 4 | `Orchestrator` | deterministic tier → load the knowledge tiers → build the prompt → classify → validate → act |
+| 5 | `Orchestrator` | writes one delivery per intervention to `<stateDir>/outbox/<deliveryId>.json` |
+| 6 | `SupervisorOutbox` | applies it: the approval channel for a blocked prompt, the message channel for an idle task. See [The Agent Bridges](#the-agent-bridges) |
+
+The split between 4 and 6 is the one that matters: the Orchestrator never touches a live agent
+object, and the bridge never makes a decision.
 
 ### Why the supervisor runs in-process
 
@@ -510,6 +548,35 @@ Claude carries no tool metadata on its permission deferred, so `ClaudeApprover` 
 wraps each comm's `send` to record `requestId → {toolName, inputs}` before the prompt reaches the
 webview. A request with **no** captured metadata is never auto-approved — we know neither what it
 is nor whether it is a question, so it is handed to the supervisor instead.
+
+One intervention, end to end:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as the agent, paused at a prompt
+  participant O as Orchestrator
+  participant D as outbox/DELIVERYID.json
+  participant X as SupervisorOutbox
+  participant I as the V8 inspector
+  participant E as the agent's approval emitter
+
+  O->>D: write one delivery per intervention
+  Note over D: requestId set means the approval channel —<br>absent means an idle task and a chat message
+  X->>D: poll the outbox
+  D-->>X: the delivery
+  X->>I: runExclusive — one inspector per host, serialized
+  I->>E: walk the live scopes to the manager,<br>resolve this requestId
+  E->>A: allow, or reject
+  A-->>E: the prompt is resolved
+  E-->>X: confirmed
+  X->>D: move to outbox/done/ — only on a confirmed apply
+  Note over X,D: a failed or notfound resolve is left in place<br>and retried, never silently marked done
+```
+
+The disk hop between the Orchestrator and the bridge is not incidental. It is what makes an
+intervention survive a window reload, and it is the seam the CLI writes into when supervision is
+driven by hand.
 
 ---
 

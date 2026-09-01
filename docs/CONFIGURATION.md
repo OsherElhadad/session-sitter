@@ -60,11 +60,23 @@ deprecation.
 
 ## VS Code settings
 
+The Settings UI groups them under the same headings this section uses. Two groups are also marked
+**machine-scoped**, which keeps Settings Sync from copying them between machines:
+
+- the **path** settings — `supervisorStateDir`, `supervisorRepoPath`, `dataRepoPath`,
+  `knowledge.registryPath`, `supervisor.bobCliPath`, `supervisor.claudeCliPath`. A path is only
+  meaningful on the machine that has it. These stay overridable per workspace, so a checkout can
+  still point at its own corpus.
+- the three **credentials** — `supervisor.bobApiKey`, `supervisor.anthropicAuthToken`,
+  `supervisor.telegramBotToken`. These are user-settings only: a workspace `settings.json` is often
+  committed, and a token does not belong in a commit.
+
 ### The session panel
 
 | Setting | Default | Purpose |
 |---|---|---|
 | `sessionSitter.autoRespond` | `[]` | Auto-reply and auto-approve rules. See [below](#auto-respond-rules). |
+| `sessionSitter.remotePeers` | `"auto"` | Whether the list includes sessions from other machines. `auto` mines the peer addresses out of the remote windows this IDE has already opened — no configuration — and pulls their sessions over SSH. `off` disables peer discovery, the polling and the SSH entirely. See [below](#sessions-from-other-machines). |
 | `sessionSitter.probelessActiveWindowMinutes` | `120` | How recently a **Codex** or **VS Code Chat** session must have been updated to count as active. Those sources expose no live-process signal, so recency is the only proxy; Claude and Bob are judged by what their extension hosts report as open. `0` keeps them in History always. |
 | `sessionSitter.sessionSort` | `"recent"` | How the Sessions list and History are ordered. See [below](#sorting-the-session-list). |
 | `sessionSitter.workspaceColors` | `{}` | Colour for each workspace's pill on a session row. See [below](#workspace-colours). |
@@ -145,12 +157,22 @@ still load. With **no** user configured at all, supervision still runs — the c
 pending action without BDI to weigh it against. A missing setting never fails a decision, because
 the agent is blocked on it. Nothing is ever guessed.
 
-### Deprecated
+### Developer
 
-| Setting | Status |
+| Setting | Default | Purpose |
+|---|---|---|
+| `sessionSitter.debugCommands` | `false` | Show the **Probe …**, **Install … Hook**, **Capture …** and **Test … Send** commands in the Command Palette. See [below](#the-developer-commands). |
+
+### Removed
+
+Neither of these is declared any more, and no code reads either one. A leftover key in your
+`settings.json` is silently ignored, so it is worth deleting — it looks like configuration that is
+doing something.
+
+| Setting | What replaced it |
 |---|---|
-| `sessionSitter.uploadScriptPath` | **Deprecated.** The uploader is built in. Still read as a fallback: when `sessionSitter.dataRepoPath` is empty, the corpus root is derived from this path, so an existing setup keeps working. Set `sessionSitter.dataRepoPath` instead. |
-| `sessionSitter.pythonPath` | **Deprecated and unused.** The supervisor is TypeScript and runs in-process. Reading Bob's SQLite store still uses the `python3` on your `PATH`, but that is not configurable here — see [`ARCHITECTURE.md`](ARCHITECTURE.md#why-one-python3-call-remains). |
+| `sessionSitter.uploadScriptPath` | **Gone.** The uploader is built in and needs no script path. Set `sessionSitter.dataRepoPath` to your corpus root instead; this key is no longer read as a fallback for it. |
+| `sessionSitter.pythonPath` | **Gone.** The supervisor is TypeScript and runs in-process. Reading Bob's SQLite store still shells out to the `python3` on your `PATH`, and that was never configurable through this setting — see [`ARCHITECTURE.md`](ARCHITECTURE.md#why-one-python3-call-remains). |
 
 ---
 
@@ -230,6 +252,35 @@ setting falls back to `recent` rather than failing.
 
 The list is still **capped by recency** before it is sorted (20 rows in Sessions, 50 in History), so
 picking an alphabetical order never hides the sessions you touched most recently.
+
+---
+
+## Sessions from other machines
+
+`sessionSitter.remotePeers` is the on/off switch for the cross-machine part of the session list.
+It has two values because there is nothing to configure: the addresses are discovered, not typed.
+
+| Value | Behaviour |
+|---|---|
+| `auto` *(default)* | Discover peers and pull their sessions. |
+| `off` | No discovery, no polling, and no SSH connection of any kind. |
+
+Discovery reads the IDE's own state store. Every remote window you have ever opened leaves an
+`ssh-remote+<user@host>` record there, so the address used is the exact one the IDE itself connects
+with — the one most likely to work — and finding it costs no network traffic at all. This machine's
+own addresses are filtered out first: an IDE routinely records its own LAN address as a remote
+target, and a machine holds no authorized key for itself, so probing yourself would report your own
+machine as permanently unreachable.
+
+Reaching a peer runs `ssh` with `BatchMode=yes` and one shared connection per peer. `BatchMode`
+matters: without it a host that wants a password or a passphrase would block the poll indefinitely.
+With it, such a host is simply reported unreachable, which is the honest answer. Only peers
+reachable from this machine appear.
+
+Clicking a peer session focuses the window on **its own** machine rather than opening anything
+here — the session belongs to that machine, and its agent is running there.
+
+Set this to `off` if you work on one machine and would rather the extension never invoke `ssh`.
 
 ---
 
@@ -384,9 +435,19 @@ All under the **Session Sitter** category:
 | Upload Session to Corpus | Uploads the selected session (also on the row's right-click menu). |
 | Export Session for Supervision | Writes a full transcript export by hand, for a manual classify. |
 | Supervise the Blocked Session Now | Classifies the currently-blocked prompt on demand. |
-| Test Bob Send / Test Claude Send | Sends a test message into the most recent session of that source. |
-| Test Claude List Approvals | Lists Claude's pending permission prompts. |
-| Probe … / Install … Hook / Capture … | Read-only internals probes for debugging the agent bridges. |
+
+### The developer commands
+
+Twelve of the eighteen commands are developer probes: **Test Bob Send** / **Test Claude Send**
+(send a fixed message into the most recent session of that source), **Test Claude List Approvals**
+(list Claude's pending permission prompts), and the **Probe …** / **Install … Hook** / **Capture …**
+family (read-only inspection of the agent bridges — which panels are open, what a pending approval
+looks like — printing to the Session Sitter output channel).
+
+They share the user-facing **Session Sitter** category, so typing "Session" in the palette used to
+list mostly debug entries. They are now gated behind `sessionSitter.debugCommands`, which is `false`
+by default. Nothing about them changed except whether the palette offers them: turn the setting on
+and all twelve work exactly as before.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-14
 **Status:** Approved (brainstorming) — pending spec review, then implementation plan
-**Related:** [BOB-SEND-MESSAGE-RESEARCH.md](../../BOB-SEND-MESSAGE-RESEARCH.md)
+**Related:** [2026-07-14-bob-send-message-research.md](2026-07-14-bob-send-message-research.md)
 
 ---
 

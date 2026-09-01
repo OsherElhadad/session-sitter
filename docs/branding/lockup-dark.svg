@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="380" viewBox="0 0 1440 380" role="img" aria-label="Session Sitter">
+<rect width="1440" height="380" fill="#0B0E17"/>
+<g transform="translate(72,48) scale(0.5391)">
+<defs><linearGradient id="bga" x1="0" y1="0" x2="0.6" y2="1"><stop offset="0" stop-color="#242F52"/><stop offset="1" stop-color="#0F1424"/></linearGradient></defs><rect width="512" height="512" rx="116" fill="url(#bga)"/>
+<circle cx="152" cy="182" r="40" fill="#F6F4EF" opacity="0.85"/><circle cx="141" cy="176" r="7" fill="#141A2E"/><circle cx="163" cy="176" r="7" fill="#141A2E"/>
+<circle cx="360" cy="182" r="40" fill="#F6F4EF" opacity="0.85"/><circle cx="349" cy="176" r="7" fill="#141A2E"/><circle cx="371" cy="176" r="7" fill="#141A2E"/>
+<circle cx="256" cy="158" r="46" fill="#F6F4EF"/><circle cx="242" cy="152" r="8" fill="#141A2E"/><circle cx="270" cy="152" r="8" fill="#141A2E"/>
+<path d="M106 210A150 150 0 0 0 406 210Z" fill="#37DCA6"/>
+<rect x="106" y="200" width="300" height="22" rx="11" fill="#F6F4EF"/>
+<path d="M76 376Q256 430 436 376" fill="none" stroke="#F6F4EF" stroke-width="20"
+      stroke-linecap="round" opacity="0.85"/>
+<circle cx="192" cy="454" r="18" fill="#F4595E"/><circle cx="256" cy="454" r="18" fill="#F7B93E"/><circle cx="320" cy="454" r="18" fill="#37DCA6"/>
+</g>
+<text x="404" y="193" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="104" font-weight="700" fill="#F6F4EF" letter-spacing="-2">Session Sitter</text>
+<text x="406" y="252" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="32" fill="#7D8AA3">unattended agents, under written policy</text>
+</svg>

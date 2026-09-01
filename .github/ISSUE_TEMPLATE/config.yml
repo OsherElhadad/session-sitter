@@ -1,0 +1,13 @@
+# A vulnerability must not arrive as a public issue, so the private path is offered here rather
+# than only inside the bug template, which is too late to read.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/eranra/session-sitter/security/advisories/new
+    about: Opens a draft advisory only the maintainers can see. Please do not use a public issue.
+  - name: Configuration reference
+    url: https://github.com/eranra/session-sitter/blob/main/docs/CONFIGURATION.md
+    about: Every setting, environment variable, flag and command — check here before filing.
+  - name: Supervision troubleshooting
+    url: https://github.com/eranra/session-sitter/blob/main/docs/SUPERVISION.md
+    about: The traffic lights, the lifecycle, and why a decision came out the way it did.

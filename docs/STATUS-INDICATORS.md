@@ -12,14 +12,20 @@ the bug.
 
 ## The six states
 
-| Marker | State | Means | Your move |
-|:---:|---|---|---|
-| spinning green ring | `working` | Running a tool, or writing a reply | Nothing — it is busy |
-| solid amber arrow | `approval` | Paused on a permission prompt | Approve or reject it |
-| amber question mark | `question` | Asked you something | Answer it |
-| green dot in a ring | `finished` | Done, and you have not opened it since | Read the result |
-| small grey dot | `seen` | Done, and you have read it | Nothing |
-| hollow grey circle | `dormant` | Nothing happening, or no signal to tell | Nothing |
+| Marker | State | Means | Announced as | Your move |
+|:---:|---|---|---|---|
+| spinning green ring | `working` | Running a tool, or writing a reply | "Working" | Nothing — it is busy |
+| solid amber arrow | `approval` | Paused on a permission prompt | "Waiting for your approval" | Approve or reject it |
+| amber question mark | `question` | Asked you something | "Waiting for your answer" | Answer it |
+| green dot in a ring | `finished` | Done, and you have not opened it since | "Finished, unread" | Read the result |
+| small grey dot | `seen` | Done, and you have read it | "Finished, read" | Nothing |
+| hollow grey circle | `dormant` | Nothing happening, or no signal to tell | "Dormant" | Nothing |
+
+The **Announced as** column is the marker's accessible name (`STATUS_NAMES` in
+[`main.js`](../src/webview/main.js)) — what a screen reader reads out when focus reaches the row.
+It is short on purpose, because it is read every time; the full sentence is the hover tooltip
+(`statusTooltip`, one per state, listed nowhere else). Neither the colour nor the animation is a
+name, so without these the state is not there at all for anyone not looking at the pixels.
 
 They answer one question — **whose turn is it, and why** — and they are ordered above the way
 urgency runs. Pick **Needs you first** from the sort menu (**⇅**) and the list is sorted in exactly
