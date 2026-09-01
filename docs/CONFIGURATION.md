@@ -224,6 +224,16 @@ input.
 | `KNOWLEDGE_REF` | `main` | Ref to clone when reading remotely. |
 | `KNOWLEDGE_REGISTRY_PATH` | — | Registry markdown, for the CLI. |
 
+### The Claude Code plugin
+
+A hook is a bare Node process with no VS Code settings and no CLI flags, so the plugin's own knobs
+are environment variables rather than `sessionSitter.*` settings. The full table is in
+[`PLUGIN.md`](PLUGIN.md#configuration); the one worth knowing here is:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SESSION_SITTER_PRETOOL` | `on` | Whether the `PreToolUse` hook enforces your red clauses on calls Claude Code never prompts about — reading a project `.env` raises no permission prompt, so `PermissionRequest` is never asked about it. On by default: a clause that governs only the calls that would have prompted you anyway is not the promise this plugin makes. Its only outcomes are a denial citing a matched red clause and no decision at all, so `off` is the conservative choice, not the correct one. |
+
 ---
 
 ## Sorting the session list

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * Measure the `PermissionRequest` hook's wall-clock latency, as a real process.
+ * Measure the governance hooks' wall-clock latency, as real processes.
  *
  * The hook sits in front of a human-visible prompt, so its budget is milliseconds rather than the
  * 60 s the contract allows. That claim needs a number a reviewer can reproduce, not an estimate —
  * hence this script rather than a paragraph.
  *
- * It spawns `plugin/lib/hooks/permissionRequest.js` as a separate process per sample, so the figure
+ * It spawns the hook under test (`plugin/lib/hooks/permissionRequest.js`, or
+ * `preToolUse.js` for the scenarios marked `hook: 'preToolUse'`) as a separate process per sample, so the figure
  * includes Node startup, module loading, the decision, and the audit append: exactly what Claude
  * Code pays. Each scenario writes to a fresh temp data dir so one run cannot bias the next.
  *
@@ -26,7 +27,7 @@ const os = require('os');
 const path = require('path');
 
 const repoRoot = path.resolve(__dirname, '..');
-const hook = path.join(repoRoot, 'plugin', 'lib', 'hooks', 'permissionRequest.js');
+const hookPath = (name) => path.join(repoRoot, 'plugin', 'lib', 'hooks', `${name}.js`);
 
 const samplesArg = process.argv.indexOf('--samples');
 const SAMPLES = samplesArg >= 0 ? Number.parseInt(process.argv[samplesArg + 1], 10) || 50 : 50;
@@ -42,7 +43,52 @@ const PRACTICES = `### Intention: Running the test suite needs no approval
 Match: npm test
 
 The suite writes only inside the working tree.
+
+---
+
+### Intention: Secrets are never read into the transcript
+
+| Field | Value |
+|---|---|
+| id | team-sec-003 |
+| level | red |
+
+Match: .env
+
+A credential in the transcript is a credential in every log that transcript reaches.
 `;
+
+/**
+ * `PreToolUse` fires on every tool call, so its cost is paid by the whole session rather than only
+ * by a prompt. `expect.decision` is `none` for the no-decision case, which is also the case that
+ * must write no audit record at all — hence `expect.records`.
+ */
+const PRETOOL_SCENARIOS = [
+  {
+    name: 'no decision (Read of a source file)',
+    hook: 'preToolUse',
+    event: { tool_name: 'Read', tool_input: { file_path: '/tmp/x.ts' } },
+    expect: { decision: 'none', records: 0 },
+  },
+  {
+    name: 'no decision (npm test)',
+    hook: 'preToolUse',
+    event: { tool_name: 'Bash', tool_input: { command: 'npm test' } },
+    expect: { decision: 'none', records: 0 },
+  },
+  {
+    name: 'deny — written red clause (cat .env)',
+    hook: 'preToolUse',
+    event: { tool_name: 'Bash', tool_input: { command: 'cat .env' } },
+    expect: { decision: 'deny', actor: 'policy', records: SAMPLES },
+  },
+  {
+    name: 'deny — written red clause (Read .env)',
+    hook: 'preToolUse',
+    event: { tool_name: 'Read', tool_input: { file_path: '/tmp/repo/.env' } },
+    expect: { decision: 'deny', actor: 'policy', records: SAMPLES },
+  },
+];
 
 const SCENARIOS = [
   {
@@ -77,8 +123,12 @@ function percentile(sorted, p) {
 }
 
 function run(scenario, dataDir, practicesFile) {
+  const hook = hookPath(scenario.hook ?? 'permissionRequest');
   const payload = JSON.stringify({
-    session_id: 'timing', cwd: '/tmp', hook_event_name: 'PermissionRequest', ...scenario.event,
+    session_id: 'timing',
+    cwd: '/tmp',
+    hook_event_name: scenario.hook === 'preToolUse' ? 'PreToolUse' : 'PermissionRequest',
+    ...scenario.event,
   });
   const env = {
     ...process.env,
@@ -104,9 +154,11 @@ function run(scenario, dataDir, practicesFile) {
 }
 
 function main() {
-  if (!fs.existsSync(hook)) {
-    process.stderr.write(`missing ${hook} — run \`make plugin\` first\n`);
-    return 1;
+  for (const name of ['permissionRequest', 'preToolUse']) {
+    if (!fs.existsSync(hookPath(name))) {
+      process.stderr.write(`missing ${hookPath(name)} — run \`make plugin\` first\n`);
+      return 1;
+    }
   }
 
   const practicesFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ss-timing-')), 'practices.md');
@@ -151,6 +203,42 @@ function main() {
     if (records.length !== SAMPLES) {
       process.stdout.write(`    ✗ expected ${SAMPLES} audit records, found ${records.length}\n`);
       failures++;
+    }
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+
+  process.stdout.write(`\nPreToolUse latency — ${SAMPLES} process spawns per scenario\n`);
+  process.stdout.write('scenario                                     min     p50     p95     max   verdict\n');
+  process.stdout.write('-'.repeat(96) + '\n');
+
+  for (const scenario of PRETOOL_SCENARIOS) {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-timing-data-'));
+    const { timings, lastOutput } = run(scenario, dataDir, practicesFile);
+    const sorted = [...timings].sort((a, b) => a - b);
+
+    const out = JSON.parse(lastOutput);
+    const specific = out.hookSpecificOutput ?? null;
+    const trail = path.join(dataDir, 'decisions.jsonl');
+    const records = fs.existsSync(trail)
+      ? fs.readFileSync(trail, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l))
+      : [];
+    const actual = {
+      decision: specific ? specific.permissionDecision : 'none',
+      actor: records.length ? records[records.length - 1].actor : undefined,
+      records: records.length,
+    };
+    const ok = Object.entries(scenario.expect).every(([k, v]) => actual[k] === v);
+    if (!ok) { failures++; }
+
+    const ms = (n) => n.toFixed(1).padStart(6);
+    process.stdout.write(
+      `${scenario.name.padEnd(44)}${ms(sorted[0])}  ${ms(percentile(sorted, 0.5))}  `
+      + `${ms(percentile(sorted, 0.95))}  ${ms(sorted[sorted.length - 1])}   `
+      + `${ok ? '✓' : '✗'} ${actual.decision}${actual.actor ? `/${actual.actor}` : ''}`
+      + ` (${actual.records} records)\n`);
+    if (!ok) {
+      process.stdout.write(`    expected ${JSON.stringify(scenario.expect)}\n`);
+      process.stdout.write(`    got      ${JSON.stringify(actual)}\n`);
     }
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

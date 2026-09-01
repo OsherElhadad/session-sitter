@@ -26,6 +26,18 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/lib/hooks/preToolUse.js\"",
+            "timeout": 10,
+            "statusMessage": "Session Sitter is checking your practices..."
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|resume|clear|compact|fork",

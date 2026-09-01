@@ -4,7 +4,7 @@ Session Sitter ships as a Claude Code plugin as well as a VS Code extension. Sam
 front end: the extension shows you a panel, the plugin answers permission prompts.
 
 **What it is:** agent governance for the terminal. Your team's written practices decide every
-permission prompt, unsafe calls are rewritten into safe ones instead of blocked, and every decision
+permission prompt — and their red clauses stop the calls that never raise one — unsafe calls are rewritten into safe ones instead of blocked, and every decision
 lands in an audit trail that names the clause it applied.
 
 **The principle:** *silence is never approval.* When nothing can reach a verdict, the answer is no.
@@ -30,10 +30,50 @@ Then point it at your practices file and restart the session:
 export SESSION_SITTER_PRACTICES=/path/to/practices.md
 ```
 
-The plugin decides nothing until it is asked, and it is asked only when Claude Code is about to
-prompt you. If your `permissions.defaultMode` is `auto`, nothing prompts and nothing reaches this
-plugin — run with `--permission-mode manual` to see it work. (`default` was renamed; it is no
+If your `permissions.defaultMode` is `auto`, nothing prompts, so the whole decision ladder below
+never runs — run with `--permission-mode manual` to see it work. (`default` was renamed; it is no
 longer among the choices `claude --help` lists.)
+
+---
+
+## Which calls does which hook govern
+
+This distinction is load-bearing, and getting it wrong is how a clause looks enforced and is not.
+
+**Claude Code does not prompt for every tool call.** Reading a file inside the project — including a
+`.env` — is allowed with no prompt at all, even under `--permission-mode manual` with nothing in your
+`allow` rules. `PermissionRequest` stands in front of a *prompt*, so for a call that raises no prompt
+it is never invoked, and a clause enforced only there never fires. That was verified in a live
+session, not inferred: `cat .env` and a `Read` of the same path both succeeded and
+`PermissionRequest` was not called once.
+
+So there are two hooks, with two different jobs:
+
+| | `PermissionRequest` | `PreToolUse` |
+|---|---|---|
+| Fires on | only calls Claude Code was going to prompt you about | **every** tool call |
+| Can answer | allow, deny, or allow-with-the-call-rewritten | deny, or nothing |
+| Reaches for a model | yes, on rung 6, when you turn the classifier on | **never** |
+| When it cannot decide | **denies** — it costs one prompt, and silence is not approval | **returns no decision** — it is in front of every call in the session, so denying here would deny the session |
+| Rungs it applies | all seven | a matched red clause, or the built-in destructive table. Nothing else. |
+
+`PreToolUse` covers every route to the same content, because it matches the tool name and its
+arguments the same way the rest of the ladder does: one clause matching `.env` denies `Bash
+{"command":"cat .env"}`, `Read`, `Grep`, `Glob`, `NotebookRead`, `Write` and `Edit` without naming
+any of them. That matters — a clause forbidding secrets is defeated if `grep -r AWS_SECRET .` still
+works.
+
+Two things it deliberately does not do:
+
+- **It cannot rewrite a call.** `PreToolUse` has no `updatedInput`, only allow/deny/ask. So when a
+  correction rule would fire it stands aside and leaves the rewrite to `PermissionRequest`. The
+  honest consequence: a correctable call that Claude Code allows without prompting is not corrected.
+- **It never returns `allow`.** An allow there would suppress the prompt you wanted and skip
+  `PermissionRequest` entirely. No decision is the correct neutral, and it is what this hook returns
+  for the overwhelming majority of calls.
+
+Your written **green** clauses still outrank the built-in table here, so a team that wrote
+`rm -rf ./build` as green keeps it. Turn the whole hook off with `SESSION_SITTER_PRETOOL=off`.
 
 ---
 
@@ -41,7 +81,8 @@ longer among the choices `claude --help` lists.)
 
 | Hook | Job | Budget |
 |---|---|---|
-| `PermissionRequest` | **The governance decision.** Allow, deny with the clause cited, or allow with the call rewritten. Writes the audit record. | 60 s allowed; measured p50 **64 ms** per process, of which 3 ms is the decision |
+| `PermissionRequest` | **The governance decision** for a call Claude Code was going to prompt about. Allow, deny with the clause cited, or allow with the call rewritten. Writes the audit record. | 60 s allowed; measured p50 **64 ms** per process, of which 3 ms is the decision |
+| `PreToolUse` | **The red clauses on calls that never prompt.** Fires on every tool call, denies only on a matched red clause or the built-in destructive table, and returns no decision for everything else. Cannot rewrite a call and never calls a model. | 10 s allowed; measured p50 **65 ms** per process for the no-decision case, max 89 ms over 50 spawns — almost all of it Node startup |
 | `ConfigChange` | **Guards the agent's own permission configuration.** Blocks a settings change that widens what the agent may do, allows a narrowing, records both. | 5 s |
 | `SessionStart` | Registers the session — id, cwd, pid, name, model, host — so a bare terminal session is visible and the audit knows whose decision a record is | 5 s |
 | `PostToolUse`, `PostToolUseFailure` | Appends the minimum a wedge detector needs: tool, a hash of the input, success or failure, timestamp. The input itself is never stored. | 5 s |
@@ -50,7 +91,8 @@ longer among the choices `claude --help` lists.)
 
 ## The decision ladder
 
-`PermissionRequest` takes the first rung that holds. Rungs 1–5 spawn nothing and consult no model — measured p50 64 ms per hook process against
+`PermissionRequest` takes the first rung that holds. It runs only for a call that would have
+prompted you; `PreToolUse` applies rungs 3 and 5 to the rest (see above). Rungs 1–5 spawn nothing and consult no model — measured p50 64 ms per hook process against
 11–17 s when the classifier runs (`node scripts/time-permission-hook.js`, and
 `docs/superpowers/plans/2026-09-01-plugin-verification.md` §5).
 
@@ -336,6 +378,7 @@ user, narrowest winning — via `SESSION_SITTER_USER` / `_PROJECT` / `_TEAM` plu
 | `SESSION_SITTER_PRACTICES` | — | Path to a single practices markdown file. The simplest setup. |
 | `SESSION_SITTER_MODE` | `enforce` | `enforce` applies the whole ladder, fail-closed included. `observe` records every decision but returns no verdict for the ambiguous case, handing it back to Claude Code and to Auto mode. |
 | `SESSION_SITTER_CLASSIFIER` | `off` | Whether an ambiguous call may spawn the classifier CLI. Off by default: paying for a subprocess and a model round trip in front of a live prompt is the operator's call. |
+| `SESSION_SITTER_PRETOOL` | `on` | Whether the `PreToolUse` hook enforces red clauses on calls Claude Code never prompts about. On by default: without it a written clause governs only the calls that would have raised a prompt anyway. Safe as a default because its only two outcomes are a denial citing a matched red clause — the same verdict `PermissionRequest` would give the same call — and no decision at all. |
 | `SESSION_SITTER_PERSIST_RULES` | `off` | Whether an allow made by a written green clause may return a **generalised** standing permission rule derived from that clause. Off by default — a plugin that silently edits your permission rules is a bad citizen. The dialog's literal `permission_suggestions` are never echoed. |
 | `SESSION_SITTER_RULE_DESTINATION` | `session` | Where such a rule is written: `session` (in memory), `localSettings`, `projectSettings`, `userSettings`. An unrecognised value falls back to `session`. |
 | `SESSION_SITTER_USER` / `_PROJECT` / `_TEAM` | — | Knowledge-routing triple for the three-tier layout |

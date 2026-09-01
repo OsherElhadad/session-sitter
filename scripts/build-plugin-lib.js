@@ -33,6 +33,7 @@ const libDir = path.join(repoRoot, 'plugin', 'lib');
 const ENTRY_POINTS = [
   'hooks/permissionRequest.js',
   'hooks/configChange.js',
+  'hooks/preToolUse.js',
   'hooks/sessionStart.js',
   'hooks/postToolUse.js',
   'hooks/sessionEnd.js',

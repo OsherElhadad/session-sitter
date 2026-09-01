@@ -33,6 +33,7 @@ function loadSettings(env = process.env, cwd) {
         classifierEnabled: bool(env.SESSION_SITTER_CLASSIFIER, false),
         persistRules: bool(env.SESSION_SITTER_PERSIST_RULES, false),
         ruleDestination: ruleDestination(env.SESSION_SITTER_RULE_DESTINATION),
+        preToolUse: bool(env.SESSION_SITTER_PRETOOL, true),
         user: env.SESSION_SITTER_USER || null,
         project: env.SESSION_SITTER_PROJECT || null,
         team: env.SESSION_SITTER_TEAM || null,

@@ -42,6 +42,14 @@ export interface PluginSettings {
    * is usually git-tracked, so both are opt-in rather than assumed.
    */
   ruleDestination: RuleDestination;
+  /**
+   * Whether the `PreToolUse` hook enforces red clauses on calls Claude Code never prompts about.
+   * **On** by default: without it, a written clause governs only the calls that would have raised a
+   * prompt anyway, which is not what "your practices decide" means. It is safe as a default because
+   * its only two outcomes are a denial that cites a matched red clause — the same verdict
+   * `PermissionRequest` would give the same call — and no decision at all.
+   */
+  preToolUse: boolean;
   /** Knowledge-routing triple for the practices tiers. A missing tier is skipped, not an error. */
   user: string | null;
   project: string | null;
@@ -71,6 +79,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env, cwd?: string)
     classifierEnabled: bool(env.SESSION_SITTER_CLASSIFIER, false),
     persistRules: bool(env.SESSION_SITTER_PERSIST_RULES, false),
     ruleDestination: ruleDestination(env.SESSION_SITTER_RULE_DESTINATION),
+    preToolUse: bool(env.SESSION_SITTER_PRETOOL, true),
     user: env.SESSION_SITTER_USER || null,
     project: env.SESSION_SITTER_PROJECT || null,
     team: env.SESSION_SITTER_TEAM || null,
