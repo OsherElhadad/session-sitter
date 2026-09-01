@@ -565,6 +565,28 @@ worth of spend to accomplish nothing, which is the actual shape of the gap.
 
 ---
 
+## What was fixed because of this run
+
+This section is dated. Everything below in *What does not work yet* is left exactly as it was
+observed — the observations are the record and rewriting them would defeat the point of the
+document. But six of the ten were acted on in the commits that follow this one, and a reader
+should not be left auditing bugs that are gone.
+
+| Finding | Status | What changed |
+|---|---|---|
+| **1.** `claude -p` is ungoverned | **open, and not ours to close** | The platform does not emit `PermissionRequest` on the headless path. Re-verified three ways with `--include-hook-events`. Nothing in the plugin can fix it. |
+| **2.** Only prompted calls are governed | **fixed** | A `PreToolUse` hook now enforces red clauses on calls Claude Code never prompts about. `cat .env`, `Read .env` and a `grep` retry are all denied citing the written clause — the `Read` route this run left open, and the retry that this run relied on the agent's courtesy to avoid. 27 benign calls across two live sessions returned no decision and wrote no record. |
+| **3.** The matcher matches prose | **fixed** | Payload keys are excluded from the haystack green clauses see and kept in the one red clauses see: contents may make a decision more restrictive, never less. The `NOTES.md` that a green test-suite clause allowed is no longer allowed. Separately, a green clause no longer licenses a whole compound line — every constituent is evaluated and the most restrictive verdict wins. |
+| **4.** `--replay` cannot reproduce a content-based decision | **fixed, as a consequence of 3** | A decision that no longer depends on the bytes is one the stored `inputSummary` can reproduce. |
+| **5.** A correction cites a clause id your file does not define | **fixed** | The id is resolved against the loaded clauses: the team's citation when it resolves, `built-in §<ruleId>` when it does not. |
+| **6.** The natural force-push clause disables the correction lane | **fixed** | `PLUGIN.md`'s worked example is now a regex with a negative lookahead, which also covers `-f` — a form the old substring missed entirely. |
+| **7.** Fail-closed with nothing configured denies ordinary work | **open, by design** | This is what "silence is never approval" costs. It is documented rather than softened. |
+| **8.** `--permission-mode default` is not a documented mode | **fixed** | The docs say `manual`. |
+| **9.** The transcript records the pre-rewrite input | **open** | Cosmetic, and not reachable from a hook. |
+| **10.** Not tested here | **still not tested** | The classifier tier, the three-tier knowledge layout, `statusline.js` and log rotation remain unexercised by a live run. |
+
+The fixes were verified at the hook boundary against the merged code, not only in unit tests.
+
 ## What does not work yet
 
 Blunt list. Each item was observed in a run above, not inferred.
