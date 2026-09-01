@@ -266,8 +266,18 @@ export function activate(context: vscode.ExtensionContext) {
       stateDir: stateDir || undefined,
       envFiles: workspaceRoot ? [path.join(workspaceRoot, '.supervisor.env')] : [],
     });
-    // The corpus repo is the default knowledge source; fall back to the workspace itself.
-    return { ...base, knowledgeLocalRepo: base.knowledgeLocalRepo || workspaceRoot };
+    // The corpus repo is the knowledge source, and there is deliberately no fallback to the
+    // workspace. The workspace is the tree the supervised agent can write, so defaulting policy
+    // to it let an agent author the clauses that govern it — highest-precedence tier included.
+    // With `sessionSitter.dataRepoPath` unset, supervision runs without BDI (see
+    // `Orchestrator.loadKnowledgeFor`) rather than trusting a writable source: the same
+    // never-substitute-a-guess rule the slug routing already follows.
+    if (!base.knowledgeLocalRepo && !base.knowledgeRepo) {
+      log('[knowledge] no knowledge source configured (sessionSitter.dataRepoPath is empty); '
+        + 'supervision will classify without BDI knowledge. The workspace is NOT used as a '
+        + 'fallback, because the supervised agent can write to it.');
+    }
+    return base;
   })();
 
   // Remote-control settings are read here because they change how the messaging channel below is
