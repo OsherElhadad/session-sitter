@@ -99,3 +99,34 @@ describe('webview: the coloured workspace pill', () => {
     expect(css).toMatch(/\.tab-badge--colored\s*\{/);
   });
 });
+
+// styles.css has always had a `.tab[aria-selected="true"]` rule, but nothing ever set the
+// attribute — so the panel whose whole job is switching between sessions gave no indication of
+// which one you were in, and the rule was dead. These assert both halves are present, since
+// either one alone is silent at runtime.
+describe('webview: the current session is marked on its row', () => {
+  const dir = path.join(__dirname, '..', 'webview');
+  const main = fs.readFileSync(path.join(dir, 'main.js'), 'utf8');
+  const css = fs.readFileSync(path.join(dir, 'styles.css'), 'utf8');
+  const provider = fs.readFileSync(
+    path.join(__dirname, '..', 'SessionSitterViewProvider.ts'), 'utf8');
+
+  it('sets aria-selected on the row, from the id the host sends', () => {
+    expect(main).toContain("setAttribute('aria-selected'");
+    expect(main).toContain('message.currentSessionId');
+    expect(provider).toContain('currentSessionId: current');
+  });
+
+  it('still styles the selected row it now marks', () => {
+    expect(css).toMatch(/\.tab\[aria-selected="true"\]\s*\{/);
+  });
+
+  it('gives the list one tab stop and moves inside it with the arrow keys', () => {
+    // 20 rows with tabindex="0" each is 20 presses of Tab before History.
+    expect(main).toContain('applyRovingTabindex');
+    expect(main).toContain("'ArrowDown'");
+    expect(main).toContain("'ArrowUp'");
+    expect(main).toContain("'Home'");
+    expect(main).toContain("'End'");
+  });
+});

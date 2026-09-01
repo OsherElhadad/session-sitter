@@ -979,6 +979,7 @@ describe('session order and workspace colours', () => {
     }>;
     sortMode?: string;
     sortModes?: Array<{ id: string; label: string }>;
+    currentSessionId?: string | null;
   }
 
   /** The LAST message of a type, so a re-push after a settings change is what gets asserted. */
@@ -1133,6 +1134,30 @@ describe('session order and workspace colours', () => {
     await handler({ type: 'setSessionSort', mode: 'rm -rf' });
 
     expect(update).toHaveBeenCalledWith('sessionSort', 'recent', 1);
+  });
+
+  // Which row the panel marks as "the session you are in". Claude's manager is the only source
+  // that reports a focused session, so it is the only one that can answer this — and the panel
+  // exists to switch between sessions, so a list with nothing marked is the bug.
+  it('names the focused Claude session as the current one', async () => {
+    withSettings({});
+    setClaudeOpenState({ panels: ['s1', 's2'], active: 's2' });
+    const provider = makeProvider([activeSession('s1'), activeSession('s2')]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    expect(lastPush(postMessage, 'updateSessions')?.currentSessionId).toBe('s2');
+  });
+
+  it('marks nothing when no source reports a focused session', async () => {
+    withSettings({});
+    setClaudeOpenState({ panels: ['s1'], active: null });
+    const provider = makeProvider([activeSession('s1')]);
+    const { postMessage } = resolveWebviewCapturing(provider);
+    await (provider as unknown as { _pushSessions(): Promise<void> })._pushSessions();
+
+    // Null, not a guess: marking the newest row would claim something we do not know.
+    expect(lastPush(postMessage, 'updateSessions')?.currentSessionId).toBeNull();
   });
 
   it('repaints when either setting changes, and ignores unrelated setting changes', async () => {

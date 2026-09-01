@@ -508,8 +508,15 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
    *    `sessionSitter.probelessActiveWindowMinutes`.
    *
    * Both partitions stay sorted by recency.
+   *
+   * `current` is the session the panel marks as the one you are in. Claude's manager reports its
+   * focused session id, so that is the answer for a Claude panel; no other source exposes such a
+   * signal, which is why a focused Bob, Codex or Chat session leaves the list with no marked row
+   * rather than a guessed one.
    */
-  private async _partitionSessions(): Promise<{ active: ClaudeSession[]; history: ClaudeSession[] }> {
+  private async _partitionSessions(): Promise<{
+    active: ClaudeSession[]; history: ClaudeSession[]; current: string | null;
+  }> {
     const localClaude = await getOpenClaudeSessionIds(this._log);
     const localBobIds = await getOpenBobTaskIds(this._log);
     // `readLiveWindows` is local by construction: it reads this machine's registry directory and
@@ -542,7 +549,11 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
     };
 
     const all = this._sortedByRecency();
-    return { active: all.filter(isActive), history: all.filter(s => !isActive(s)) };
+    return {
+      active: all.filter(isActive),
+      history: all.filter(s => !isActive(s)),
+      current: localClaude.active,
+    };
   }
 
   /** The order the user picked for the session list. */
@@ -572,10 +583,13 @@ export class SessionSitterViewProvider implements vscode.WebviewViewProvider, vs
 
   private async _pushSessions(): Promise<void> {
     if (!this._view) { return; }
-    const { active } = await this._partitionSessions();
+    const { active, current } = await this._partitionSessions();
     void this._view.webview.postMessage({
       type: 'updateSessions',
       sessions: this._forDisplay(active, SESSIONS_LIMIT),
+      // Which row the panel marks as the session you are in. A panel whose whole job is switching
+      // between sessions has to say which one you are looking at.
+      currentSessionId: current,
       // Sent with the sessions so the panel can name peers it could not reach, rather than
       // letting an unreachable machine look like a machine with nothing running.
       // Optional call: peer support is additive, and a session manager without it is still valid.

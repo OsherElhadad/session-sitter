@@ -16,6 +16,9 @@
 
   let historyOpen = false;
 
+  /** @type {string | null} — the session the host reports you are currently in, or null */
+  let currentSessionId = null;
+
   /** @type {string} — id of the active sort order; the extension host owns the real value */
   let sortMode = 'recent';
 
@@ -469,7 +472,11 @@
     tab.className = 'tab';
     tab.dataset.sessionId = session.sessionId;
     tab.setAttribute('role', 'tab');
-    tab.setAttribute('tabindex', '0');
+    // Which row is the session you are in. The host sends the id; every other row is explicitly
+    // false, because a `role="tab"` with no aria-selected reads as "not a tab in a tablist".
+    tab.setAttribute('aria-selected', session.sessionId === currentSessionId ? 'true' : 'false');
+    // Overwritten by applyRovingTabindex() once the whole list is built — see the note there.
+    tab.setAttribute('tabindex', '-1');
     tab.setAttribute('title', (session.title || '(untitled)') + ' — ' + formatRelativeTime(session.updatedAt));
 
     const statusEl = document.createElement('span');
@@ -517,7 +524,20 @@
         if (event.target && event.target.classList && event.target.classList.contains('tab-close')) { return; }
         event.preventDefault();
         vscodeApi.postMessage({ type: 'switchSession', sessionId: session.sessionId });
+        return;
       }
+      const rows = tabStrip ? Array.prototype.slice.call(tabStrip.querySelectorAll('.tab')) : [];
+      const here = rows.indexOf(tab);
+      let next = -1;
+      if (event.key === 'ArrowDown') { next = here + 1; }
+      else if (event.key === 'ArrowUp') { next = here - 1; }
+      else if (event.key === 'Home') { next = 0; }
+      else if (event.key === 'End') { next = rows.length - 1; }
+      else { return; }
+      // Deliberately does not wrap: the ends of the list are where History and the toolbar are,
+      // and silently jumping to the other end loses your place.
+      event.preventDefault();
+      focusRow(rows, next);
     });
 
     tab.addEventListener('contextmenu', function (event) {
@@ -602,7 +622,35 @@
       return;
     }
     sessions.forEach(session => tabStrip.appendChild(buildTab(session)));
+    applyRovingTabindex();
     appendPeerWarning();
+  }
+
+  /**
+   * One tab stop for the whole list, not one per row.
+   *
+   * A `role="tab"` list is reached once and then walked with the arrow keys (see the row's keydown
+   * handler); giving 20 rows `tabindex="0"` each instead means 20 presses of Tab before you reach
+   * History. The reachable row is the selected one, or the first when the host reports none.
+   */
+  function applyRovingTabindex() {
+    const rows = tabStrip ? tabStrip.querySelectorAll('.tab') : [];
+    let chosen = -1;
+    rows.forEach(function (row, i) {
+      if (chosen < 0 && row.getAttribute('aria-selected') === 'true') { chosen = i; }
+    });
+    if (rows.length && chosen < 0) { chosen = 0; }
+    rows.forEach(function (row, i) {
+      row.setAttribute('tabindex', i === chosen ? '0' : '-1');
+    });
+  }
+
+  /** Move focus to another row, carrying the single tab stop with it. */
+  function focusRow(rows, index) {
+    if (index < 0 || index >= rows.length) { return; }
+    rows.forEach(function (r) { r.setAttribute('tabindex', '-1'); });
+    rows[index].setAttribute('tabindex', '0');
+    rows[index].focus();
   }
 
   // Name the peers that could not be reached this pass.
@@ -893,6 +941,7 @@
     switch (message.type) {
       case 'updateSessions':
         sessions = Array.isArray(message.sessions) ? message.sessions : [];
+        currentSessionId = typeof message.currentSessionId === 'string' ? message.currentSessionId : null;
         peerStatuses = Array.isArray(message.peers) ? message.peers : [];
         // The host sorted the rows already; these only drive the menu's check mark and tooltip.
         if (Array.isArray(message.sortModes)) { sortModes = message.sortModes; }
