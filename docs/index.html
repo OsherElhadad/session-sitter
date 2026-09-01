@@ -230,10 +230,12 @@ An unanswered card denies. It never approves.</pre>
           <tr>
             <th scope="row">Model tier</th>
             <td>When a call needs judgment, a direct API call with a warm prompt cache:
-              <strong>4,078 ms median</strong> for <code>claude-opus-5</code> (n=5, min 2,814 ms,
-              <strong>max 14,049 ms</strong>) · 3,437 ms for <code>claude-sonnet-5</code> ·
-              2,889 ms for <code>claude-haiku-4-5</code>. The median is not a guarantee: the tail is
-              real, and a cold cache or a retry lands in it.</td>
+              <strong>5,559 ms median</strong> for <code>claude-opus-5</code> (n=12, min 3,977 ms,
+              <strong>max 15,180 ms</strong>) · 3,117 ms for <code>claude-haiku-4-5</code>. The
+              median is not a guarantee: the tail is real, and roughly <strong>1 in 12</strong>
+              samples exceeded the tier's 10 s timeout and fell through to the subprocess below,
+              paying its full cost. <code>claude-sonnet-5</code> measured 10,033 ms median — above
+              that timeout, so it is the wrong choice here despite being cheaper.</td>
           </tr>
           <tr>
             <th scope="row">What that replaced</th>
@@ -243,9 +245,11 @@ An unanswered card denies. It never approves.</pre>
           </tr>
           <tr>
             <th scope="row">Prompt cache</th>
-            <td>After the first judgement, <strong>~11,089 tokens</strong> of the prefix are read
-              from cache against <strong>~177</strong> newly written — a
-              <strong>98.5%</strong> cache hit on the prefix.</td>
+            <td>After the first judgement, <strong>11,286 tokens</strong> of the prefix are read
+              from cache against <strong>~770</strong> newly written — a
+              <strong>98.9%</strong> cache hit. This only applies to sessions long enough to cache:
+              the minimum cacheable prefix is model-dependent (~2,048 tokens on Haiku) and a shorter
+              one silently caches nothing at all, with no error.</td>
           </tr>
           <tr>
             <th scope="row">Cost per judgement</th>
