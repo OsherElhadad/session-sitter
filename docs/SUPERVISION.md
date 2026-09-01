@@ -19,6 +19,52 @@ never auto-answered** — `ask_followup_question` and `AskUserQuestion` go to a 
 real option, because resolving them through the approval channel makes the agent report that you
 gave no answer at all.
 
+## The path a paused action takes
+
+```mermaid
+flowchart TD
+  P["an agent pauses at a prompt"] --> AR{"an auto-respond<br>rule matches?"}
+  AR -->|yes| RULE["apply it and record it<br>no model call"]
+  AR -->|no| Q{"a question<br>for the human?"}
+  Q -->|yes| RELAY["never auto-answered —<br>relayed to you with its options"]
+  Q -->|no| DET{"deterministic tier<br>supervisor/tiers.ts"}
+  DET -->|"read-only or plainly safe"| G
+  DET -->|"unambiguously destructive"| R
+  DET -->|ambiguous| BDI["load the three knowledge tiers<br>team, project, user"]
+  BDI --> CLS["classify — one CLI call,<br>transcript and practices on stdin"]
+  CLS --> G["green — approve the prompt"]
+  CLS --> Y["yellow — inject labeled guidance<br>the agent self-corrects"]
+  CLS --> O["orange — your call"]
+  CLS --> R["red — policy"]
+  CLS -->|"unparsable output"| O
+  O --> W["decision card posted<br>countdown running"]
+  R --> W
+  W -->|you reply| ACT["approve, or deny<br>and relay your own words"]
+  W -->|"orange times out"| DENY["deny, and hand the agent<br>the safe alternatives"]
+  W -->|"red times out"| BLOCK["the block stands"]
+  RULE --> L[("records/ — one durable<br>JSON record per decision")]
+  G --> L
+  Y --> L
+  ACT --> L
+  DENY --> L
+  BLOCK --> L
+
+  classDef green fill:#3fb950,stroke:#2a7f38,color:#141A2E
+  classDef yellow fill:#d29922,stroke:#8f6a17,color:#141A2E
+  classDef orange fill:#db6d28,stroke:#95491b,color:#141A2E
+  classDef red fill:#f85149,stroke:#a83731,color:#ffffff
+  class G green
+  class Y yellow
+  class O,W orange
+  class R red
+```
+
+Three edges in there are the whole design. The **deterministic tier** keeps a governance layer off
+the critical path of every read: a `read_file` never costs a model call. The two **timeout** edges
+are what "silence is never approval" means in code. And **unparsable output escalates to Orange**
+rather than failing open — see *Recovery, and why it never fails closed* in
+[`ARCHITECTURE.md`](ARCHITECTURE.md#recovery-and-why-it-never-fails-closed).
+
 ---
 
 ## Turning it on
@@ -91,19 +137,38 @@ whether you are looking at the panel or at your phone. They are recorded even wi
 
 ## The lifecycle
 
+```mermaid
+stateDiagram-v2
+  [*] --> analysis_pending
+
+  analysis_pending --> rule_applied: an auto-respond rule decided it
+  analysis_pending --> green_completed: green, prompt approved
+  analysis_pending --> yellow_ready: yellow, guidance built
+  analysis_pending --> orange_awaiting_user: orange or red, card posted
+  analysis_pending --> orange_awaiting_question: the agent asked the human
+  analysis_pending --> failed: with the reason recorded
+
+  yellow_ready --> yellow_delivered: injected into the session
+
+  orange_awaiting_user --> orange_resolved_by_user: you replied
+  orange_awaiting_user --> orange_transitioned_to_yellow: orange timed out, denied + alternatives
+  orange_awaiting_user --> red_blocked: red timed out, the block stands
+
+  orange_awaiting_question --> orange_resolved_by_user: you picked an option
+  orange_awaiting_question --> orange_timed_out: no answer, the agent still waits for you
+
+  note right of failed
+    Terminal, no further automatic processing:
+    rule_applied, green_completed, yellow_delivered,
+    orange_resolved_by_user, orange_transitioned_to_yellow,
+    red_blocked, failed.
+    orange_timed_out is deliberately not terminal —
+    the question is still open for you.
+  end note
 ```
-analysis_pending
-   ├── green_completed                    prompt approved, recorded
-   ├── yellow_ready → yellow_delivered    guidance injected
-   ├── orange_awaiting_question           a question is waiting for a human answer
-   │      ├── orange_resolved_by_user     answer delivered to the agent
-   │      └── orange_timed_out            no answer; the agent still waits for you
-   ├── orange_awaiting_user               a decision card is live, countdown running
-   │      ├── orange_resolved_by_user     you replied: approve, or deny + relay
-   │      ├── orange_transitioned_to_yellow   timed out: denied + alternatives
-   │      └── red_blocked                 timed out on a Red: the block stands
-   └── failed                             with the reason recorded
-```
+
+Orange and Red share `orange_awaiting_user` because they wait the same way: a card, a countdown, and
+a human. What differs is only where a timeout lands. There is no `red_awaiting_user`.
 
 Each state is one JSON file under `<stateDir>/records/`, written atomically, carrying its own
 event trail. That is what makes the whole thing restart-safe: kill the window mid-Orange, reopen
