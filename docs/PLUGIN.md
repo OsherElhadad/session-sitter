@@ -32,7 +32,8 @@ export SESSION_SITTER_PRACTICES=/path/to/practices.md
 
 The plugin decides nothing until it is asked, and it is asked only when Claude Code is about to
 prompt you. If your `permissions.defaultMode` is `auto`, nothing prompts and nothing reaches this
-plugin — run with `--permission-mode default` to see it work.
+plugin — run with `--permission-mode manual` to see it work. (`default` was renamed; it is no
+longer among the choices `claude --help` lists.)
 
 ---
 
@@ -102,7 +103,13 @@ Anything outside a `###` entry is ignored, so notes like this one are free.
 | level | red |
 | tags | git, history |
 
-Match: `git push --force`, `/git\s+push\b.*--delete/`
+Match: `/git\s+push\b.*(--force(?!-with-lease)|\s-f\b)/`, `/git\s+push\b.*--delete/`
+
+> The first pattern is a regex, and the negative lookahead is load-bearing. A plain
+> `Match: git push --force` is a case-insensitive **substring**, so it also matches
+> `git push --force-with-lease` — and because a corrected call is re-checked against your red
+> clauses before it is allowed, that red clause would veto the very rewrite the correction lane
+> just made. The correction would come back as a denial and the lane would look broken.
 
 Rewriting history on a branch other people build on destroys their work. Push a new commit, or use
 `--force-with-lease` on a branch only you build on.
