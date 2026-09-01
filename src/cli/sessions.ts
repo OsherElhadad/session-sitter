@@ -28,60 +28,8 @@ import {
   type ClaudeSession,
   type SessionStorePaths,
 } from '../sessionScan';
+import { isBlockedOnYou } from '../sessionStatus';
 
-/**
- * What a session is waiting on, which is the only question a worklist exists to answer.
- *
- * Derived from the raw `status` the stores report, and named from the human's side of the
- * transaction rather than the agent's:
- *
- *  - `working`   — tools are running or a reply is streaming. Nothing for you to do.
- *  - `queued`    — a prompt has landed and the agent has not started answering it. Waiting on the
- *                  agent. Normally momentary; a session stuck here is a wedged session.
- *  - `needs-you` — the agent finished and the transcript has been quiet. Your turn.
- */
-export type Attention = 'working' | 'queued' | 'needs-you';
-
-const ATTENTION: Readonly<Record<string, Attention>> = {
-  active: 'working',
-  waiting: 'queued',
-  idle: 'needs-you',
-};
-
-// Takes a bare string, as `sessionSort.SortableSession` does: the value comes out of a file that
-// another vendor writes, so the type system cannot promise it is one of the three.
-export function attentionOf(session: { status: string }): Attention {
-  return ATTENTION[session.status] ?? 'needs-you';
-}
-
-/**
- * The worklist's own order, and why it is not one of `sessionSort`'s six.
- *
- * `sessionSort` has a mode labelled "Needs you first" whose key ranks `waiting` ahead of `active`
- * ahead of `idle` — but by the rules in `readStatus`, `waiting` means the *agent* has not started
- * yet and `idle` means the agent finished and it is your turn. So that mode leads with the sessions
- * that need you least, which is fine in a panel you are watching and wrong for a command whose
- * whole output is a to-do list.
- *
- * Rather than change a comparator the panel depends on, the CLI adds this one order and leaves the
- * other six exactly as they are: `--sort status` still gives the panel's ordering, byte for byte.
- */
-export const ATTENTION_RANK: Readonly<Record<Attention, number>> = {
-  'needs-you': 0, working: 1, queued: 2,
-};
-
-/** The CLI's default `--sort`. Not a `SessionSortMode` — the other six all are. */
-export const NEEDS_ME_SORT = 'needs-me';
-
-/** Needs you first, then whatever is running, newest first inside each group. */
-export function sortByAttention<T extends ClaudeSession>(sessions: readonly T[]): T[] {
-  return [...sessions].sort((a, b) =>
-    ATTENTION_RANK[attentionOf(a)] - ATTENTION_RANK[attentionOf(b)]
-    || b.updatedAt.getTime() - a.updatedAt.getTime()
-    // The same final tie-break every `sessionSort` comparator has: without it, equal keys leave the
-    // order to whatever sequence the scan produced, and that changes between passes.
-    || (a.sessionId < b.sessionId ? -1 : a.sessionId > b.sessionId ? 1 : 0));
-}
 
 export interface CollectOptions {
   /** Store locations; defaulted so callers only override them in tests. */
@@ -97,6 +45,20 @@ export interface CollectOptions {
   /** Injected in tests, so no test ever opens a connection. */
   remote?: RemoteReader;
 }
+
+/**
+ * Why the terminal never reports `seen`.
+ *
+ * `resolveDisplayStatus` splits `finished` into `finished` / `seen` / `dormant` using when you last
+ * opened the row, and that timestamp lives in the extension's `globalState`
+ * (`sessionSitter.lastViewed`, inside VS Code's own `state.vscdb`) — not in any agent's store. So the
+ * CLI reports the base state the transcript supports, and a read and an unread result both read
+ * `finished` here.
+ *
+ * ponytail: not worth opening that db on every invocation — the two states it would unlock, `seen`
+ * and an aged-out `dormant`, both mean "nothing for you to do", so neither changes the worklist. If
+ * it ever matters, `PeerDiscovery` already reads that exact file and its reader can be reused.
+ */
 
 /** The part of `RemoteSessionSource` this module uses, so tests can stand in for it. */
 export interface RemoteReader {
@@ -156,7 +118,13 @@ export interface FilterOptions {
   since?: Date;
   /** Keep only this agent (`claude` | `bob` | `codex` | `chat`). */
   agent?: string;
-  /** Keep only sessions whose turn it is for a human. */
+  /**
+   * Keep only sessions that are blocked on a human — `approval` and `question`.
+   *
+   * Not the wider `needsYou`, which also counts `finished`: an unread result is a reason to look,
+   * but nothing is stalled waiting for you to look at it. `--needs-me` is a to-do list, so it is
+   * the two states where the agent cannot proceed without you.
+   */
   needsMe?: boolean;
 }
 
@@ -166,7 +134,7 @@ export function filterSessions(
   return sessions.filter(s => {
     if (opts.since && s.updatedAt.getTime() < opts.since.getTime()) { return false; }
     if (opts.agent && s.source !== opts.agent) { return false; }
-    if (opts.needsMe && attentionOf(s) !== 'needs-you') { return false; }
+    if (opts.needsMe && !isBlockedOnYou(s.status)) { return false; }
     return true;
   });
 }

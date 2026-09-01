@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { CliError } from '../../cli/args';
 import type { ClaudeSession } from '../../sessionScan';
-import { attentionOf, filterSessions, sortByAttention } from '../../cli/sessions';
+import { filterSessions } from '../../cli/sessions';
+import { SESSION_STATUSES } from '../../sessionStatus';
+import { sortSessions } from '../../sessionSort';
 import { renderJson, renderText, run, parseStatusArgs, type StatusOptions } from '../../cli/status';
 import { fakeIo } from './fakeIo';
 
@@ -14,53 +16,52 @@ function session(over: Partial<ClaudeSession> = {}): ClaudeSession {
     projectPath: '/home/u/session-sitter',
     title: 'extract the pure readers',
     updatedAt: new Date(NOW.getTime() - 60_000),
-    status: 'idle',
+    status: 'finished',
     source: 'claude',
     ...over,
   };
 }
 
 const OPTIONS: StatusOptions = {
-  needsMe: false, sort: 'needs-me', peers: false, json: false,
+  needsMe: false, sort: 'status', peers: false, json: false,
 };
 
-describe('attentionOf', () => {
-  it('names what the session is waiting on, from the human side', () => {
-    // `idle` in the store means the agent finished and the transcript went quiet — your turn.
-    expect(attentionOf({ status: 'idle' })).toBe('needs-you');
-    expect(attentionOf({ status: 'active' })).toBe('working');
-    expect(attentionOf({ status: 'waiting' })).toBe('queued');
+describe('the six-state markers', () => {
+  const io = fakeIo({ now: NOW });
+
+  it('renders a distinct glyph and label for every state', () => {
+    // No state may share a marker with another, and none may render blank: the glyph is the only
+    // thing left once NO_COLOR strips the colour.
+    const rendered = SESSION_STATUSES.map(status => {
+      const rows = renderText([session({ status })], { sessions: [], peers: [] }, OPTIONS, io)
+        .split('\n');
+      const row = rows.find(l => /^\S/.test(l) && l.includes('Claude'));
+      expect(row, status).toBeDefined();
+      return row!.split(/\s\s+/).slice(0, 2).join(' ');
+    });
+    expect(new Set(rendered).size).toBe(SESSION_STATUSES.length);
+    for (const marker of rendered) { expect(marker.trim()).not.toBe(''); }
   });
 
-  it('treats an unknown status as needing a human, never as safe to ignore', () => {
-    expect(attentionOf({ status: 'something-new' })).toBe('needs-you');
-  });
-});
-
-describe('sortByAttention', () => {
-  it('leads with the sessions that need you, newest first inside each group', () => {
-    const rows = sortByAttention([
-      session({ sessionId: 'working-old', status: 'active', updatedAt: new Date(NOW.getTime() - 5_000) }),
-      session({ sessionId: 'needs-old', updatedAt: new Date(NOW.getTime() - 900_000) }),
-      session({ sessionId: 'needs-new', updatedAt: new Date(NOW.getTime() - 30_000) }),
-      session({ sessionId: 'queued', status: 'waiting' }),
-    ]);
-    expect(rows.map(r => r.sessionId)).toEqual(['needs-new', 'needs-old', 'working-old', 'queued']);
+  it('names every state it renders with the state\'s own word', () => {
+    for (const status of SESSION_STATUSES) {
+      const out = renderText([session({ status })], { sessions: [], peers: [] }, OPTIONS, io);
+      expect(out, status).toContain(status);
+    }
   });
 
-  it('breaks a full tie on the session id, so the order holds between passes', () => {
-    const at = new Date(NOW.getTime() - 1000);
-    const rows = sortByAttention([
-      session({ sessionId: 'b', updatedAt: at }),
-      session({ sessionId: 'a', updatedAt: at }),
-    ]);
-    expect(rows.map(r => r.sessionId)).toEqual(['a', 'b']);
-  });
-
-  it('does not mutate its input', () => {
-    const input = [session({ sessionId: 'b' }), session({ sessionId: 'a' })];
-    sortByAttention(input);
-    expect(input.map(s => s.sessionId)).toEqual(['b', 'a']);
+  it('the default order leads with the states that are blocked on you', () => {
+    // sessionSort owns the ranking; this asserts the CLI actually asks for it.
+    const rows = sortSessions([
+      session({ sessionId: 'dormant', status: 'dormant' }),
+      session({ sessionId: 'working', status: 'working' }),
+      session({ sessionId: 'question', status: 'question' }),
+      session({ sessionId: 'approval', status: 'approval' }),
+      session({ sessionId: 'finished', status: 'finished' }),
+      session({ sessionId: 'seen', status: 'seen' }),
+    ], 'status');
+    expect(rows.map(r => r.sessionId))
+      .toEqual(['approval', 'question', 'finished', 'working', 'seen', 'dormant']);
   });
 });
 
@@ -69,34 +70,39 @@ describe('filterSessions', () => {
     session({ sessionId: 'recent-claude' }),
     session({ sessionId: 'old-claude', updatedAt: new Date(NOW.getTime() - 3 * 86_400_000) }),
     session({ sessionId: 'chat', source: 'chat' }),
-    session({ sessionId: 'busy', status: 'active' }),
+    session({ sessionId: 'busy', status: 'working' }),
+    session({ sessionId: 'blocked', status: 'approval' }),
+    session({ sessionId: 'asking', status: 'question' }),
   ];
 
   it('drops sessions older than the window', () => {
     expect(filterSessions(sessions, { since: new Date(NOW.getTime() - 86_400_000) })
-      .map(s => s.sessionId)).toEqual(['recent-claude', 'chat', 'busy']);
+      .map(s => s.sessionId)).toEqual(['recent-claude', 'chat', 'busy', 'blocked', 'asking']);
   });
 
   it('filters by agent', () => {
     expect(filterSessions(sessions, { agent: 'chat' }).map(s => s.sessionId)).toEqual(['chat']);
   });
 
-  it('--needs-me keeps only the sessions whose turn it is for a human', () => {
+  it('--needs-me keeps approval and question, and nothing else', () => {
+    // Deliberately NOT 'finished': an unread result is worth a look, but nothing is stalled on you
+    // looking at it, and a to-do list that includes everything you have not read is not a to-do list.
     expect(filterSessions(sessions, { needsMe: true }).map(s => s.sessionId))
-      .toEqual(['recent-claude', 'old-claude', 'chat']);
+      .toEqual(['blocked', 'asking']);
   });
 
   it('keeps everything with no filter', () => {
-    expect(filterSessions(sessions, {})).toHaveLength(4);
+    expect(filterSessions(sessions, {})).toHaveLength(6);
   });
 });
 
 describe('parseStatusArgs', () => {
   const io = fakeIo({ now: NOW });
 
-  it('defaults to a 24-hour window and the needs-me order', () => {
+  it('defaults to a 24-hour window and the urgency order', () => {
     const options = parseStatusArgs([], io);
-    expect(options.sort).toBe('needs-me');
+    // 'status' is sessionSort's urgency ranking: approval, question, finished, working, seen, dormant.
+    expect(options.sort).toBe('status');
     expect(options.since).toEqual(new Date(NOW.getTime() - 86_400_000));
   });
 
@@ -137,8 +143,9 @@ describe('parseStatusArgs', () => {
 
 describe('renderText', () => {
   const sessions = [
-    session({ sessionId: 'a', title: 'needs a human' }),
-    session({ sessionId: 'b', title: 'running tools', status: 'active' }),
+    session({ sessionId: 'a', title: 'paused on a prompt', status: 'approval' }),
+    session({ sessionId: 'b', title: 'running tools', status: 'working' }),
+    session({ sessionId: 'c', title: 'read already', status: 'seen' }),
   ];
 
   it('emits no escape sequences at all when stdout is a pipe', () => {
@@ -146,9 +153,12 @@ describe('renderText', () => {
     const out = renderText(sessions, { sessions, peers: [] }, OPTIONS, io);
     // eslint-disable-next-line no-control-regex
     expect(out).not.toMatch(/\u001b\[/);
-    expect(out).toContain('needs you');
+    expect(out).toContain('approval');
     expect(out).toContain('working');
-    expect(out).toContain('2 sessions');
+    expect(out).toContain('3 sessions');
+    expect(out).toContain('1 blocked on you');
+    // A state with nobody in it is not named at all — four zeroes read as noise.
+    expect(out).not.toContain('0 dormant');
   });
 
   it('paints when stdout is a terminal', () => {
@@ -170,7 +180,7 @@ describe('renderText', () => {
 
   it('shows the machine column, by short host, once a peer is in the list', () => {
     const io = fakeIo({ now: NOW });
-    const withPeer = [...sessions, session({ sessionId: 'c', peer: 'u@buildbox.example.com' })];
+    const withPeer = [...sessions, session({ sessionId: 'd', peer: 'u@buildbox.example.com' })];
     const out = renderText(withPeer, { sessions: withPeer, peers: [] }, OPTIONS, io);
     expect(out).toContain('MACHINE');
     expect(out).toContain('buildbox');
@@ -201,28 +211,32 @@ describe('renderText', () => {
 
 describe('renderJson', () => {
   it('matches the documented version 1 contract', () => {
-    const sessions = [session({ sessionId: 'local-1' }), session({
-      sessionId: 'remote-1', status: 'active', peer: 'u@buildbox.example.com',
+    const sessions = [session({ sessionId: 'local-1', status: 'approval' }), session({
+      sessionId: 'remote-1', status: 'working', peer: 'u@buildbox.example.com',
     })];
     const json = renderJson(sessions, { sessions, peers: [] }, NOW);
 
     expect(json.version).toBe(1);
     expect(json.generatedAt).toBe(NOW.toISOString());
-    expect(json.counts).toEqual({ total: 2, 'needs-you': 1, working: 1, queued: 0 });
+    // Every state is keyed, present at zero — a consumer can read a count without probing for it.
+    expect(json.counts).toEqual({
+      total: 2, approval: 1, question: 0, finished: 0, working: 1, seen: 0, dormant: 0,
+    });
     expect(Object.keys(json.sessions[0]).sort()).toEqual([
-      'ageSeconds', 'agent', 'attention', 'local', 'machine', 'sessionId', 'status', 'title',
+      'ageSeconds', 'agent', 'blockedOnYou', 'local', 'machine', 'sessionId', 'status', 'title',
       'updatedAt', 'workspace',
     ]);
     expect(json.sessions[0]).toMatchObject({
       sessionId: 'local-1',
       agent: 'claude',
-      status: 'idle',
-      attention: 'needs-you',
+      status: 'approval',
+      blockedOnYou: true,
       local: true,
       ageSeconds: 60,
       workspace: { name: 'session-sitter', path: '/home/u/session-sitter' },
     });
-    expect(json.sessions[1]).toMatchObject({ local: false, machine: 'buildbox', attention: 'working' });
+    expect(json.sessions[1])
+      .toMatchObject({ local: false, machine: 'buildbox', status: 'working', blockedOnYou: false });
   });
 
   it('reports peer reachability with nulls, never with invented values', () => {

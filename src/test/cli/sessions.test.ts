@@ -80,7 +80,7 @@ describe('collectSessions', () => {
   it('merges peer sessions and reports each peer', async () => {
     const peerSession: ClaudeSession = {
       sessionId: 'p-1', projectName: 'proj', projectPath: '/p', title: 'over there',
-      updatedAt: new Date(), status: 'idle', source: 'claude', peer: 'u@buildbox',
+      updatedAt: new Date(), status: 'finished', source: 'claude', peer: 'u@buildbox',
     };
     const worklist = await collectSessions({ paths, remote: remote([peerSession]) });
     expect(worklist.sessions.map(s => s.sessionId)).toEqual(['p-1']);
@@ -102,7 +102,7 @@ describe('collectSessions', () => {
     ]);
     const newer: ClaudeSession = {
       sessionId: 'p-new', projectName: 'proj', projectPath: '/p', title: 'newer peer',
-      updatedAt: new Date(Date.now() + 60_000), status: 'idle', source: 'claude', peer: 'u@buildbox',
+      updatedAt: new Date(Date.now() + 60_000), status: 'finished', source: 'claude', peer: 'u@buildbox',
     };
     const worklist = await collectSessions({ paths, remote: remote([newer]) });
     expect(worklist.sessions[0].sessionId).toBe('p-new');
