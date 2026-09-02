@@ -105,6 +105,18 @@ export interface LearnedClauseFile {
   evidence: Evidence | null;
   support: number;
   contradictions: number;
+  /**
+   * The selector's ranking signal, **frozen when the clause was accepted** and never updated
+   * afterwards (`14-runtime-and-dashboard.md` §A3 step 5, team-lead ruling 4).
+   *
+   * It is a field rather than `min(support, 100)` computed at compile time for one reason: `support`
+   * is a live counter the extraction pipeline keeps writing, and anything mutable that reaches the
+   * compiled artifact moves its revision, which rewrites the cached prompt prefix of every running
+   * session. So the accept step reads `support` once, writes it here, and nothing touches it again.
+   * Absent reads as `0` — a hand-written clause has no support signal, and the selector's total
+   * order falls through to the id.
+   */
+  weight: number;
   learnedAt: string | null;
   adoptedAt: string | null;
   expires: string | null;
@@ -348,7 +360,7 @@ export function parseFrontmatter(text: string, file: string): {
 
 /** Every key the schema knows. Anything else is preserved in `extra` and reported by name. */
 const KNOWN_KEYS = new Set([
-  'id', 'status', 'level', 'evidence', 'support', 'contradictions',
+  'id', 'status', 'level', 'evidence', 'support', 'contradictions', 'weight',
   'learned_at', 'adopted_at', 'expires', 'supersedes', 'displaces',
   'fix_from', 'fix_to', 'learned_from',
   'retired_at', 'retired_reason', 'retired_by',
@@ -537,6 +549,7 @@ export function parseLearnedClause(
   };
   const support = count('support');
   const contradictions = count('contradictions');
+  const weight = count('weight');
   if (scalar('contradictions') === null) {
     // A missing count is the *optimistic* reading, so it is worth saying out loud.
     warn(null, 'no `contradictions` count — absent reads as 0, which is the optimistic assumption');
@@ -642,6 +655,7 @@ export function parseLearnedClause(
     evidence,
     support,
     contradictions,
+    weight,
     learnedAt: date('learned_at'),
     adoptedAt: date('adopted_at'),
     expires: date('expires'),

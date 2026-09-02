@@ -44,6 +44,8 @@
  * nothing, and a red clause that silently matches nothing is the worst failure mode this file has.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.compileMatcher = compileMatcher;
+exports.patternSpecs = patternSpecs;
 exports.clauseIdFor = clauseIdFor;
 exports.clauseFrom = clauseFrom;
 exports.rankClauses = rankClauses;
@@ -95,8 +97,13 @@ function splitPatterns(value) {
 /**
  * Compile one pattern. An unparseable regex is dropped rather than thrown: a malformed clause must
  * not take the whole policy file down with it, and the clause is still handed to the classifier.
+ *
+ * Dropping it is right at *load* time and wrong at *compile* time — a red clause whose only matcher
+ * was dropped silently protects nothing. So the drop is visible in {@link PatternSpec.compiled},
+ * and `policy compile` refuses to emit an artifact when any spec carries a null (see
+ * `src/policy/compile.ts`). Same parse, two policies.
  */
-function compile(pattern) {
+function compileMatcher(pattern) {
     const asRegex = REGEX_LITERAL.exec(pattern);
     try {
         return asRegex
@@ -111,6 +118,32 @@ function compile(pattern) {
         return null;
     }
 }
+/**
+ * Every `Match:` pattern in a body, in file order, compiled or not.
+ *
+ * The null-preserving counterpart to {@link extractPatterns}: that one drops what will not compile,
+ * because a load must not fail on one bad line, and this one keeps the hole visible so
+ * `policy compile` can refuse to emit an artifact around it.
+ */
+function patternSpecs(text) {
+    const specs = [];
+    for (const line of text.split('\n')) {
+        const m = MATCH_LINE.exec(line.trim());
+        if (!m) {
+            continue;
+        }
+        for (const raw of splitPatterns(m[1])) {
+            const compiled = compileMatcher(raw);
+            specs.push({
+                raw,
+                isRegex: REGEX_LITERAL.test(raw),
+                flags: compiled?.re.flags ?? 'i',
+                compiled: compiled?.re ?? null,
+            });
+        }
+    }
+    return specs;
+}
 /** Lift the `Match:` lines out of an entry body, returning the remaining prose and the matchers. */
 function extractPatterns(text) {
     const kept = [];
@@ -122,7 +155,7 @@ function extractPatterns(text) {
             continue;
         }
         for (const raw of splitPatterns(m[1])) {
-            const compiled = compile(raw);
+            const compiled = compileMatcher(raw);
             if (compiled) {
                 patterns.push(compiled);
             }

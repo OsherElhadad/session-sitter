@@ -118,17 +118,18 @@ const SCHEMA_RULES = `OUTPUT SCHEMA RULES (follow EXACTLY — invalid output is 
 - A timeout fallback is traffic_light="yellow" with transitioned_from="orange",
   transition_reason set, and a non-empty supervisor_message_to_agent.`;
 
-export function renderKnowledge(entries: KnowledgeEntry[]): string {
-  if (entries.length === 0) { return '(no BDI entries loaded)'; }
+export function renderKnowledge(entries: KnowledgeEntry[], policyBlock?: string | null): string {
+  if (entries.length === 0 && !policyBlock) { return '(no BDI entries loaded)'; }
   // Narrower tier first so the model sees precedence order.
   const sorted = [...entries].sort((a, b) => entryPrecedence(b) - entryPrecedence(a));
-  return sorted.map(e => {
+  const rendered = sorted.map(e => {
     const meta =
       `[${e.tier}] ${e.kind} ${e.id ?? '?'} `
       + `level=${e.level ?? '-'} confidence=${e.confidence ?? '-'} `
       + `tags=${e.tags.join(',') || '-'} source=${e.sourceFile ?? e.source ?? '-'}`;
     return `- ${meta}\n  ${e.title}: ${e.text}`.replace(/\s+$/, '');
   }).join('\n');
+  return policyBlock ? [policyBlock, rendered].filter(s => s).join('\n') : rendered;
 }
 
 /**
@@ -179,7 +180,7 @@ function sessionBlock(session: NormalizedSession, bundle: KnowledgeBundle): stri
     + `PENDING ACTION (what the agent is waiting to do):\n${renderPending(session)}\n`
     + `WAITING REASON: ${session.waitingReason || '(unknown)'}\n\n`
     + '<<<BDI KNOWLEDGE (data, narrower tier first)>>>\n'
-    + `${renderKnowledge(bundle.entries)}\n<<<END KNOWLEDGE>>>`
+    + `${renderKnowledge(bundle.entries, bundle.policyBlock)}\n<<<END KNOWLEDGE>>>`
   );
 }
 
