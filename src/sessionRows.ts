@@ -1,5 +1,5 @@
 import * as path from 'path';
-import type { ClaudeSession } from './SessionManager';
+import type { ClaudeSession } from './sessionScan';
 import { bobStatus } from './sessionStatus';
 
 /**
