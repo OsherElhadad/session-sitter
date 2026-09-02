@@ -144,6 +144,12 @@ In precedence order:
 Reading a local checkout is the recommended setup: the loading path stays deterministic and needs
 no network.
 
+**There is no fallback to the workspace.** With neither configured, supervision classifies without
+BDI and says so in the log. That is deliberate: the workspace is the one tree the supervised agent
+can write, so defaulting policy to it would let an agent author the clauses that govern its own
+next tool call — at the user tier, which outranks the team's. Knowledge is only ever read from a
+source you named, for the same reason a wrong slug is never substituted for a missing one.
+
 ---
 
 ## Loading knowledge yourself

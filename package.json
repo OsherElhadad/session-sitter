@@ -23,6 +23,9 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
+  "bin": {
+    "session-sitter": "./out/cli/index.js"
+  },
   "extensionDependencies": [
     "Anthropic.claude-code"
   ],
@@ -276,6 +279,27 @@
             ],
             "default": "bob",
             "markdownDescription": "Which agent CLI classifies an ambiguous action: `bob` (IBM Bob Shell, default) or `claude` (Claude Code). The deterministic tier and your `sessionSitter.autoRespond` rules run first and need no CLI at all."
+          },
+          "sessionSitter.supervisor.fastClassifier": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "When on, an ambiguous action is first judged by the **fast** classifier: one HTTP call that reuses the agent's own paused conversation as a prompt-cached prefix, so it answers in a few seconds instead of the ten-plus an agent CLI needs. The CLI selected by `sessionSitter.supervisor.engine` stays as the fallback for timeouts, unparsable verdicts and low-confidence answers.\n\n**Requires an API token and a gateway URL, which most Claude Code users do not have.** If you signed in with a Pro/Max/Team subscription, your credentials are held in the OS keychain via OAuth and there is no `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` to use — so this stays off, and ambiguous actions go to the agent CLI exactly as before. Nothing breaks; it simply has no effect. It applies when you run against an API key or a gateway (see the three settings below)."
+          },
+          "sessionSitter.supervisor.fastClassifierModel": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Model the fast classifier judges with. Empty uses the **agent's own** model (`ANTHROPIC_MODEL`), minus any trailing context-window suffix such as `[1m]` — which a plain Messages endpoint rejects. So by default the supervisor thinks with the same model as the agent it supervises."
+          },
+          "sessionSitter.supervisor.fastClassifierTimeoutSeconds": {
+            "type": "number",
+            "default": 10,
+            "minimum": 1,
+            "markdownDescription": "How long the fast classifier may take before the action is handed to the agent CLI instead. Keep it short: the point of the tier is that it is fast, and the fallback is what covers the slow tail."
+          },
+          "sessionSitter.supervisor.fastClassifierBaseUrl": {
+            "type": "string",
+            "default": "",
+            "markdownDescription": "Gateway the fast classifier posts `/v1/messages` to. Empty falls back to `sessionSitter.supervisor.anthropicBaseUrl` (and then to `ANTHROPIC_BASE_URL`). The token is the one from `sessionSitter.supervisor.anthropicAuthToken` / `ANTHROPIC_AUTH_TOKEN`."
           },
           "sessionSitter.supervisor.bobCliPath": {
             "type": "string",

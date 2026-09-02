@@ -7,6 +7,7 @@ Everything in `docs/`, and what each file is for. Start with whichever question 
 | Document | Read it when you want to know |
 |---|---|
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | how sessions are detected, what each component does, how a click switches a session, how peer machines are reached, and how a blocked prompt is resolved through the agent bridges |
+| [`CLI.md`](CLI.md) | the `session-sitter` terminal command: the worklist, the audit trail, the overnight digest, the practices linter, and the `--json` contracts other tools read |
 | [`CONFIGURATION.md`](CONFIGURATION.md) | every setting, every environment-variable fallback, every CLI flag and every command — the reference, not a tutorial |
 
 ## The Claude Code plugin
