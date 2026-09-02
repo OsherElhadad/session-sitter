@@ -376,7 +376,7 @@ export function recordFrom(d: Record<string, unknown>): SupervisionRecord {
 
 /** Parse a persisted call. An older record has none, and a hand-edited one may hold anything. */
 function callFrom(v: unknown): RecordedCall | null {
-  if (v === null || typeof v !== 'object') { return null; }
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) { return null; }
   const d = v as Record<string, unknown>;
   const toolName = nullableStr(d.tool_name);
   if (toolName === null) { return null; } // a call with no tool identity records nothing

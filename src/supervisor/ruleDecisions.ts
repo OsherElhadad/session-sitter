@@ -116,9 +116,10 @@ function truncate(text: string, max: number): string {
  *
  * `rule.tool_name` alone cannot answer "what exactly ran?" any better than a supervisor record
  * could without this, so the deterministic tier records the call in the same shape. The arguments
- * arrive as a JSON string (that is all the auto-responder carries); if they do not parse, the call
- * stays null — a field that is sometimes structured and sometimes a raw string is worse than one
- * that is sometimes absent. Text rules resolve no tool, so they have no call.
+ * arrive as a JSON string (that is all the auto-responder carries); if they do not parse, the tool
+ * name is still recorded with a null input — a field that is sometimes structured and sometimes a
+ * raw string is worse than one that is sometimes absent. Text rules resolve no tool, so they have
+ * no call.
  */
 export function ruleCall(d: RuleDecision): RecordedCall | null {
   if (d.kind === 'text') { return null; }

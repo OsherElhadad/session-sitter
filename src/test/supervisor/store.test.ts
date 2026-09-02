@@ -119,9 +119,13 @@ describe('the recorded call', () => {
     const rec = await s.create('sess-1', 'claude');
     const file = path.join(recordsDir, `${rec.request_id}.json`);
     const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+
+    raw.call = { tool_name: 'AskUser', input: null };
+    fs.writeFileSync(file, JSON.stringify(raw), 'utf8');
+    expect((await s.get(rec.request_id))?.call).toEqual({ tool_name: 'AskUser', input: null });
+
     raw.call = { tool_name: 'AskUser', input: 'not an object' };
     fs.writeFileSync(file, JSON.stringify(raw), 'utf8');
-
     expect((await s.get(rec.request_id))?.call).toEqual({ tool_name: 'AskUser', input: null });
   });
 });
