@@ -147,7 +147,7 @@ describe('renderText', () => {
 
   it('paints on a terminal', () => {
     // eslint-disable-next-line no-control-regex
-    expect(renderText(pages, SINCE, fakeIo({ now: NOW, isTty: true }))).toMatch(/\[/);
+    expect(renderText(pages, SINCE, fakeIo({ now: NOW, isTty: true }))).toMatch(/\[[0-9;]*m/);
   });
 });
 
