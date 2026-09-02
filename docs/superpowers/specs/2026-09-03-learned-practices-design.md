@@ -333,7 +333,11 @@ measured 11k prefix, and growing without bound as the pipeline learns. By contra
 renderer already caps at 40 turns and truncates payloads to 400 chars. This is a correctness bug the
 learning pipeline would detonate, not an optimisation.
 
-Selection is deterministic, budgeted, and ordered. The two rules that matter:
+Selection is deterministic, budgeted, and ordered, and the budget is **two blocks** rather than one:
+a revision-stable core in the cached `system` knowledge block, and a per-call selection on the
+trailing user turn, which sits after the last cache breakpoint and therefore costs nothing in cache
+terms. Putting per-call content inside the cached prefix instead would invalidate it on every
+decision — the precise failure §4 exists to prevent. The two rules that matter:
 
 **Matching is never budgeted.** Deterministic matching runs over *every* compiled clause, with no
 cap and no retrieval. A red clause dropped by a budget is a silent safety failure. Matching 200
@@ -341,7 +345,7 @@ clauses against one command is **0.0065 ms**. The budget applies only to the cla
 block, reached only when the deterministic ladder returned nothing.
 
 **Clauses whose patterns were evaluated and missed are excluded from the prompt.** This is the
-non-obvious one, and it is what makes the ceiling in §8 honest. The classifier is the *last* rung;
+non-obvious one, and it is what makes §8's rendered-clause ceiling honest. The classifier is the *last* rung;
 deterministic matching runs at every rung before it. So by the time a prompt is built, **every
 matchable clause has already been tested against this call and lost.** Rendering it is prose
 claiming to be about something its own pattern says this call is not: it cannot fire
@@ -425,11 +429,11 @@ byte-identical. Filtering it out of selection instead would break the prefix for
 decision in the session — which is the mistake a later "tidy-up" would make, so it has a regression
 test.
 
-### 8. The clause ceiling: 25 rendered clauses per learned tier, with same-tier displacement
+### 8. The per-tier rendered-clause ceiling: 25, with same-tier displacement
 
 The compliance curve in §3 is about *instructions in a prompt*. Byte budgets protect the prompt;
-they do not protect compliance. So the ceiling counts **clauses that reach the prompt, not clauses
-that exist** — and by §6, a deterministic-only clause never reaches the prompt, so it costs zero
+they do not protect compliance. So the ceiling is a **rendered-clause** count — clauses that reach
+the prompt, not clauses that exist — and by §6, a deterministic-only clause never reaches the prompt, so it costs zero
 instruction-equivalents and is exempt.
 
 That exemption dissolves the eviction hazard for exactly the clauses that matter. A deterministic red
@@ -452,11 +456,10 @@ was full and an unrelated clause lost its seat. The evicted clause was not wrong
 Newest does not win by default: a candidate with weaker replay evidence than its target is rejected,
 which is the difference between a budget and a queue.
 
-**The number 25 rests on a guess, and the guess is named.** The budget is ~150 rendered
-instruction-equivalents (a third of the way to the measured 500-instruction knee), and 25 per
-learned tier follows from **an assumed ~2 instruction-equivalents per rendered clause** — the rule,
+**The number 25 rests on a guess, and the guess is named.** The **total instruction-equivalent budget** is ~150
+(a third of the way to the measured 500-instruction knee), and the per-tier ceiling of 25 follows from **an assumed ~2 instruction-equivalents per rendered clause** — the rule,
 its scope, and usually one exception. That multiplier has not been counted against the real rendered
-form. **If it is wrong the ceiling is wrong**: at 4 each, the ceiling should be about 12. The
+form. **If it is wrong the ceiling is wrong**: at 4 each it should be about 12. The
 replacement is mechanical — count imperative sentences in the actual rendered prompt, divide by
 clause count, set the ceiling from the measured multiplier — and it is the single highest-leverage
 number in this design to replace with a datum.
@@ -562,8 +565,8 @@ schema-stable, masked at write time, and each one is already a labelled decision
 is specified weakly on purpose — a version-pinned shape extractor that fails closed — and it is off
 by default.
 
-**The `~2 instruction-equivalents per clause` multiplier is a guess, and the ceiling of 25 is wrong
-if it is.** Stated fully in §8 with the measurement that replaces it.
+**The `~2 instruction-equivalents per clause` multiplier is a guess, and the per-tier ceiling of 25
+is wrong if it is.** Stated fully in §8 with the measurement that replaces it.
 
 Several other numbers are guesses and are marked as such wherever they appear rather than laundered
 into facts: the 5% breadth ceiling for a candidate's pattern set (the *asymmetry* is the argument,
@@ -584,26 +587,48 @@ filter. Worth one deliberate check by whoever owns the importer, through the exp
 a direct read. A memory note may also state the opposite of an accepted clause and nothing will
 reconcile them; we cannot detect that without reading the notes, so we will not claim to.
 
-### Open questions for the reviewer
+### The compiled artifact, settled
 
-Five specs written in parallel and reconciled by message left residual disagreements. They are all
-in the same place — the compiled artifact — and none changes the argument above, but they must be
-settled before implementation rather than during it:
+Five specs written in parallel left residual disagreements, all in one place — the shape of the
+compiled artifact. They are recorded with their rulings, because a reader who finds the source specs
+still contradicting each other needs to know which side won and why.
 
-1. **Artifact field names and casing.** The schema spec and the runtime spec describe the same file
-   with different keys (`compiledAt`/`built_at`, `body`/`message`, `corpusRevision`/`corpus_ref`).
-2. **The revision's identity.** Content hash, or the corpus git SHA with a `local-` form for an
-   uncommitted checkout? The schema spec records this as settled in favour of the content hash; the
-   runtime spec still states the git-SHA form as a contract.
-3. **What the runtime opens.** A `HEAD` pointer file plus `<rev>.json`, or a `current.json` that *is*
-   the artifact — one file open per decision instead of two.
-4. **Whether mutable provenance ships in the artifact.** The runtime spec includes a compile-derived
-   `weight` from the support count; the schema spec excludes support precisely so that editing it
-   cannot move the revision and invalidate the cache. Both cannot hold — and there is a test on each
-   side that would fail.
-5. **The prompt budget's shape.** A split 8 KB cached core plus a 4 KB per-call selection, or one
-   2,000-token budget over a single selection pass. The schema spec flags that it did not verify
-   where the cache breakpoint actually sits, which is what decides this.
+1. **Field names are snake_case on disk.** `SupervisionRecord` is already snake_case on disk by
+   documented convention, and the artifact is another on-disk file read by the same codebase. One
+   convention, no per-file exception: `built_at`, `corpus_ref`, `message`.
+2. **The revision is the content hash.** Identical content must produce an identical revision — that
+   is what makes a pinned session's prefix byte-identical, and it avoids needing a second
+   `local-<hash>` form for an uncommitted checkout. The corpus git SHA stays as a separate
+   informational field, `corpus_ref`, so the markdown is recoverable; it is simply not the identity.
+3. **Both files, and they were never alternatives.** The immutable `policy/<rev>.json` files are
+   required for audit resolution — a March decision must resolve to the text that actually fired,
+   which one mutable file cannot provide. And the hook's budget is milliseconds, so it must not pay
+   for a pointer indirection. So `current.json` is a **copy** of the current revision, written
+   atomically, and there is no `HEAD` pointer file. The duplicated bytes are the measured 112 KB,
+   which is not a cost worth a design compromise.
+4. **Mutable provenance stays out of the hashed artifact, and `weight` is frozen at accept time.** If
+   editing a support count moved the revision, every running session's cached prefix would be
+   invalidated at 6.8× and scaling with context. But the selector still needs a ranking signal, so
+   `weight` is bucketed once when the clause is accepted and never updated afterwards; live `support`,
+   `evidence` and `contradictions` stay in the corpus and the audit log, where the offline tools read
+   them. Selection therefore stays reproducible from `(revision, selector, input)` with no sidecar
+   file and no revision churn. If a clause's support later changes enough to matter, that is a new
+   clause revision through the normal review path — which is the honest way to express it.
+5. **The prompt budget is the two-block split, and the existing structure already affords it.** The
+   fast classifier renders `system` as `[rubric, knowledge]` with the cache breakpoint on the **last
+   system block** (`fastClassifier.ts:260`), and puts the judging instruction on a **trailing user
+   turn** because Anthropic has no trailing-system channel — so nothing after that breakpoint is
+   cached (`fastClassifier.ts:21-22`). That is exactly the shape the split needs: the revision-stable
+   core goes in the cached `system` knowledge block, and the per-call selection rides the uncached
+   trailing user turn, costing nothing in cache terms. A single budget over one selection pass would
+   put per-call content *inside* the cached prefix and invalidate it on every decision — the precise
+   failure §4's pinning exists to prevent.
+
+Two smaller gaps belong to the schema owner rather than being papered over here. **The audit deadline
+field does not exist**: the review templates render "audit closes \<date\>" with nothing to read, so
+either the schema gains an `audit_until` field or the templates drop the line. And **the two ceilings
+need their two names used consistently**, because both were being called "the ceiling": the
+**per-tier rendered-clause ceiling** (25, §8) and the **total instruction-equivalent budget** (~150).
 
 ---
 
@@ -652,7 +677,7 @@ settled before implementation rather than during it:
   illustrative number in the user docs is then replaced by a number from that run.**
 - The two measurements that would falsify the core arguments, taken deliberately: **zero prompt-cache
   prefix breaks** across a session that spans a published revision, and the **rendered
-  instruction-equivalents per clause** that §8's ceiling depends on.
+  instruction-equivalents per clause** that §8's rendered-clause ceiling depends on.
 
 ---
 
