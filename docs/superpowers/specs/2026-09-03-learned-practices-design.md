@@ -639,8 +639,9 @@ still contradicting each other needs to know which side won and why.
    required for audit resolution — a March decision must resolve to the text that actually fired,
    which one mutable file cannot provide. And the hook's budget is milliseconds, so it must not pay
    for a pointer indirection. So `current.json` is a **copy** of the current revision, written
-   atomically, and there is no `HEAD` pointer file. The duplicated bytes are the measured 112 KB,
-   which is not a cost worth a design compromise.
+   atomically, and there is no `HEAD` pointer file. The duplicated bytes are a measured 139.8 KB at
+   200 clauses with spec-shaped bodies — 210.5 KB with long ones — which is not a cost worth a
+   design compromise.
 4. **Mutable provenance stays out of the hashed artifact, and `weight` is frozen at accept time.** If
    editing a support count moved the revision, every running session's cached prefix would be
    invalidated at 6.8× and scaling with context. But the selector still needs a ranking signal, so
@@ -686,9 +687,16 @@ need their two names used consistently**, because both were being called "the ce
 - **A vector store, embeddings, or any similarity model at the permission boundary.** Selection is
   token overlap plus deterministic matching. The named upgrade path is the stdlib's own full-text
   search, the day a measured miss rate justifies it.
-- **`node:sqlite` in v1.** A 200-clause artifact parses in 0.355 ms and a 100,000-record log
-  aggregates in 133 ms; the retention default keeps roughly 28,000 records. The triggers that change
-  this are measured thresholds, written down, and none is met.
+- **`node:sqlite` in v1.** A 200-clause artifact reads and parses in 0.55 ms (0.75 ms with long
+  bodies), and the whole hook policy path — parse, match all clauses, select for one call — measures
+  **0.70-0.89 ms against a 2 ms budget**. Compiling takes 5.6-6.5 ms, off the hot path. A
+  100,000-record log aggregates in 133 ms, and the retention default keeps roughly 28,000 records.
+  The triggers that change this are measured thresholds, written down, and none is met.
+
+  An earlier draft of this document quoted 112 KB and 0.355 ms. Those were projections and both
+  were optimistic; the figures above are measured against a real 200-clause, 414-pattern artifact.
+  Worth knowing alongside them: the 8 KB core budget binds at roughly **50 patternless red or
+  orange clauses** with long bodies, so it is a real limit rather than a theoretical one.
 - **A second evaluator for replay.** Replay calls the same exported evaluator the hook calls, with the
   corpus, the clock and the classifier injected. A second evaluator would make the report lie, and it
   would lie in the direction of confidence.
