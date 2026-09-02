@@ -26,9 +26,12 @@ that mines the tool's own decision log, proposes candidate clauses, validates th
 history, and hands them to a human in a git diff**, with the accepted result compiled into an
 artifact the runtime loads in half a millisecond.
 
-It synthesises five working specs (schema, extraction, validation, governance, runtime) into the
-argument a reviewer needs. Where those specs defend a choice at length, this document gives the
-choice, the alternative, and why the alternative loses.
+It synthesises the five working specs in
+[`2026-09-03-learned-practices/`](2026-09-03-learned-practices/) — schema, extraction,
+validation, governance, runtime — into the argument a reviewer needs. Where those specs defend a
+choice at length, this document gives the choice, the alternative, and why the alternative loses.
+They carry what this compresses, including roughly 200 numbered test invariants; where they
+disagree with this document, this document wins.
 
 ---
 
