@@ -57,6 +57,7 @@ exports.buildCard = buildCard;
 exports.applyToggle = applyToggle;
 exports.questionOptionLabel = questionOptionLabel;
 exports.buildQuestionCard = buildQuestionCard;
+exports.defaultApi = defaultApi;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const messaging_1 = require("./messaging");
@@ -204,6 +205,11 @@ function buildQuestionCard(record) {
     keyboard.push([{ text: '✅ Submit answers', callback_data: `${rid}|__submit` }]);
     return [lines.join('\n'), { inline_keyboard: keyboard }];
 }
+/**
+ * The real Bot API transport. Exported so the remote-control feature drives the same HTTP path —
+ * including the timeout that must outlast a long poll — instead of growing a second one that
+ * would drift from it.
+ */
 function defaultApi(token) {
     const base = `https://api.telegram.org/bot${token}`;
     return async (method, payload) => {
@@ -229,6 +235,7 @@ function defaultApi(token) {
 }
 class TelegramChannel {
     constructor(opts) {
+        this.updateSource = opts.updateSource;
         this.chatId = opts.chatId;
         this.offsetPath = opts.offsetPath;
         this.timeoutMinutes = opts.timeoutMinutes ?? 30;
@@ -280,6 +287,19 @@ class TelegramChannel {
             ? pending.reduce((best, r) => ((r.notified_at ?? r.created_at) > (best.notified_at ?? best.created_at) ? r : best))
             : null;
         const out = [];
+        // Handed our updates by the remote control, which owns the single read on this token. It also
+        // owns the offset, so nothing here touches it.
+        if (this.updateSource !== undefined) {
+            for (const u of this.updateSource()) {
+                const update = (u ?? {});
+                const uid = typeof update.update_id === 'number' ? update.update_id : 0;
+                const resolved = await this.resolveUpdate(update, uid, byId, byMessage, latest);
+                if (resolved !== null) {
+                    out.push(resolved);
+                }
+            }
+            return out;
+        }
         const offset = await this.readOffset();
         let resp;
         try {

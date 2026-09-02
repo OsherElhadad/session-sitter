@@ -54,7 +54,12 @@ const orchestrator_1 = require("./orchestrator");
 const store_1 = require("./store");
 const telegram_1 = require("./telegram");
 const transcript_1 = require("./transcript");
-function buildChannel(config, log = () => { }) {
+/**
+ * @param updateSource When given, the Telegram channel takes its updates from here instead of
+ * calling `getUpdates`. Used when the remote interface is active: a bot token has one destructive
+ * update stream, so it owns the read and forwards supervision what belongs to it.
+ */
+function buildChannel(config, log = () => { }, updateSource) {
     if (config.messagingChannel === 'telegram') {
         if (config.telegramBotToken && config.telegramChatId) {
             return new telegram_1.TelegramChannel({
@@ -64,6 +69,7 @@ function buildChannel(config, log = () => { }) {
                 timeoutMinutes: config.orangeResponseTimeoutMinutes,
                 longPollSeconds: 10, // getUpdates returns instantly on a tap/reply
                 log,
+                updateSource,
             });
         }
         log('warning: messaging channel is telegram but the bot token / chat id are missing; '
