@@ -91,6 +91,13 @@ describe('models', () => {
     expect(rec.events).toEqual([]);
     expect(rec.source).toBe('unknown');
   });
+
+  it('rejects an array call even if it carries a tool_name property', () => {
+    const arrayCall: unknown[] = [];
+    (arrayCall as unknown as Record<string, unknown>).tool_name = 'Bash';
+    const rec = recordFrom({ request_id: 'req-1', session_id: 's', call: arrayCall });
+    expect(rec.call).toBeNull();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────── tiers

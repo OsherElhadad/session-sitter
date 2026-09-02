@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
+import * as path from 'path';
 import { OutboxAgentController } from '../../supervisor/agentControl';
 import { FakeEngine } from '../../supervisor/engine';
 import { FakeChannel } from '../../supervisor/messaging';
@@ -29,6 +30,7 @@ import {
 } from './fixtures';
 import { ensureDirs, historyDir, outboxDir, recordsDir } from '../../supervisor/config';
 import { localHostName } from '../../supervisor/sessionIdentity';
+import { redactSecrets } from '../../corpus/mask';
 
 let tmp: string;
 beforeEach(() => { tmp = makeTmpDir(); });
@@ -44,6 +46,86 @@ const ambiguous = (overrides: Parameters<typeof makeExport>[0] = {}) => makeExpo
   pendingArgs: { path: 'src/app.ts', content: 'x' },
   pendingDescription: 'Write src/app.ts',
   ...overrides,
+});
+
+describe('the recorded call', () => {
+  it('records the tool call the decision judged', async () => {
+    const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), {
+      exported: ambiguous({
+        pendingName: 'write_to_file',
+        pendingArgs: { path: 'src/app.ts', content: 'x' },
+      }),
+    });
+    const rec = await rig.orch.supervise(SESSION_ID);
+
+    expect(rec.call).toEqual({
+      tool_name: 'write_to_file',
+      input: { path: 'src/app.ts', content: 'x' },
+    });
+  });
+
+  it('masks a credential in the tool input so it never reaches the record', async () => {
+    const secret = 'sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+    const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), {
+      exported: ambiguous({
+        pendingName: 'execute_command',
+        pendingArgs: { command: `curl -H "x-api-key: ${secret}" https://api.example.test/v1/x` },
+        pendingDescription: 'Call the API',
+      }),
+    });
+    const rec = await rig.orch.supervise(SESSION_ID);
+
+    const input = JSON.stringify(rec.call?.input);
+    expect(input).not.toContain(secret);
+    expect(input).toContain('curl');                      // the shape of the call survives
+    // And nothing leaked through the persisted file either.
+    const dir = path.join(rig.config.stateDir, 'records');
+    const onDisk = fs.readdirSync(dir)
+      .map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('');
+    expect(onDisk).not.toContain(secret);
+  });
+
+  it('masks credentials nested inside the tool input', async () => {
+    const secret = 'ghp_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789';
+    const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), {
+      exported: ambiguous({
+        pendingArgs: { env: { GITHUB_TOKEN: secret }, args: [`--token=${secret}`] },
+      }),
+    });
+    const rec = await rig.orch.supervise(SESSION_ID);
+
+    expect(JSON.stringify(rec.call?.input)).not.toContain(secret);
+  });
+
+  // Regression fixture for a closed gap. Before PR #40, the masking rules in src/corpus/mask.ts
+  // ended in a `\b` boundary, and `_` is a word character — so no boundary could ever fall between
+  // a key body and an underscore that followed it. `sk-ant-`/`sk-proj-` bodies are base64url and
+  // routinely contain `_`, so this was not a truncated match: the run before the first `_` is
+  // shorter than the `{20,}` minimum, so nothing matched at all and the key reached the record
+  // verbatim. #40 fixed it by replacing the trailing `\b` with a negative lookahead over the same
+  // character class. Keep this fixture underscore-bearing — collapsing it back to a letter run
+  // would stop testing the gap #40 closed.
+  it('masks an underscore-bearing key (the gap PR #40 closed)', async () => {
+    const secret = 'sk-ant-api03-Ab3_dEfGhIjKlMnOpQrStUvWxYz0123456789_zZ';
+    const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), {
+      exported: ambiguous({ pendingArgs: { command: `deploy --key=${secret}` } }),
+    });
+    const rec = await rig.orch.supervise(SESSION_ID);
+
+    const input = JSON.stringify(rec.call?.input);
+    expect(input).not.toContain(secret);
+    expect(input).toContain('redacted');
+    expect(redactSecrets(secret)).not.toContain(secret);
+  });
+
+  it('stays null when there is no pending action to record', async () => {
+    const rig = buildTestOrchestrator(tmp, new FakeEngine([json('yellow')]), {
+      exported: ambiguous({ noPending: true }),
+    });
+    const rec = await rig.orch.supervise(SESSION_ID);
+
+    expect(rec.call).toBeNull(); // never reconstructed from the assessment's prose
+  });
 });
 
 describe('green', () => {

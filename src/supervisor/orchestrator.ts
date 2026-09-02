@@ -28,6 +28,7 @@ import {
   SupervisionRecord,
   SupervisionState,
   TrafficLight,
+  recordedCall,
 } from './models';
 import { buildSupervisionPrompt } from './prompt';
 import { formatAnswerDeliveryText, normalizeQuestion, questionSpecFrom } from './questions';
@@ -247,6 +248,9 @@ export class Orchestrator {
       // decision belongs to, and by then the transcript is long gone.
       session_name: sessionNameFrom(session),
       host: localHostName() || null,
+      // What was judged, not just the verdict: without the call the audit trail cannot answer
+      // "what exactly was allowed?" for anything the deterministic tier did not decide.
+      call: recordedCall(session.pendingAction?.name, session.pendingAction?.arguments ?? null),
     });
     if (session.pendingAction) {
       record.pending_request_id = session.pendingAction.requestId;
