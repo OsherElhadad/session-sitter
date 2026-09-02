@@ -269,6 +269,40 @@ describe('what reaches the artifact', () => {
     expect(error).toContain('the-old-rule');
   });
 
+  it('refuses a supersession cycle of any length, naming every clause in a stable order', () => {
+    // Three, not two: a length-2 special case is wrong the first time someone writes a chain. Every
+    // clause in the cycle is dropped, so a ring of reds removes every one of those protections and
+    // the individual drop warnings never say the pair annihilated.
+    const result = compilePolicy(input({
+      learned: [
+        learned({ id: 'rule-a', frontmatter: 'supersedes: [rule-b]\n' }),
+        learned({ id: 'rule-b', frontmatter: 'supersedes: [rule-c]\n' }),
+        learned({ id: 'rule-c', frontmatter: 'supersedes: [rule-a]\n' }),
+      ],
+    }));
+    expect(result.policy).toBeNull();
+    const cycle = result.errors.filter(e => e.includes('supersession cycle'));
+    expect(cycle).toHaveLength(1);
+    expect(cycle[0]).toContain('practices §rule-a (data/knowledge/teams/payments/learned/rule-a.md)'
+      + ' → practices §rule-b (data/knowledge/teams/payments/learned/rule-b.md)'
+      + ' → practices §rule-c (data/knowledge/teams/payments/learned/rule-c.md)'
+      + ' → practices §rule-a');
+  });
+
+  it('warns that a clause not yet accepted supersedes nothing yet', () => {
+    const result = compilePolicy(input({
+      learned: [
+        learned({ id: 'candidate', status: 'proposed', frontmatter: 'supersedes: [old-rule]\n' }),
+        learned({ id: 'old-rule' }),
+      ],
+    }));
+    expect(result.errors).toEqual([]);
+    expect(result.policy?.clauses.map(c => c.id)).toEqual(['old-rule']);
+    expect(result.warnings.join('\n'))
+      .toContain('practices §candidate (data/knowledge/teams/payments/learned/candidate.md) is '
+        + '`proposed`, so `supersedes: old-rule` has no effect until it is accepted');
+  });
+
   it('carries no mutable provenance at all', () => {
     const policy = ok({ learned: [learned()] });
     const keys = Object.keys(policy.clauses[0]);
