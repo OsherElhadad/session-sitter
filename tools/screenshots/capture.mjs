@@ -212,7 +212,7 @@ function shotList(fx, now) {
           (a, b) => statusRank(a) - statusRank(b)) },
         { type: 'updateActivity', items: [activity[0]] },
       ],
-      settle: `document.querySelector('#tab-strip .tab .status-waiting') !== null
+      settle: `document.querySelector('#tab-strip .tab .status-approval') !== null
         && document.querySelector('.activity-awaiting-badge') !== null`,
     },
     {
@@ -285,8 +285,12 @@ function pngSize(file) {
   return [head.readUInt32BE(0), head.readUInt32BE(4)];
 }
 
-const STATUS_RANK = { waiting: 0, active: 1, idle: 2 };
-const statusRank = s => STATUS_RANK[s.status] ?? 3;
+// The same urgency order as STATUS_RANK in src/sessionSort.ts, which is what the host applies
+// for the 'status' mode the shot below is standing in for.
+const STATUS_RANK = {
+  approval: 0, question: 1, finished: 2, working: 3, seen: 4, dormant: 5,
+};
+const statusRank = s => STATUS_RANK[s.status] ?? STATUS_RANK.dormant;
 
 // ── Capture ─────────────────────────────────────────────────────────────────
 

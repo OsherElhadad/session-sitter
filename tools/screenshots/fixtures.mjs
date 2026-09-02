@@ -11,9 +11,13 @@
 const ago = (now, minutes) => new Date(now - minutes * 60_000).toISOString();
 
 /**
- * The `updateSessions` payload — the worklist. Covers all four sources, the three status states,
- * three coloured workspace pills, one uncoloured pill, the "(no workspace)" fallback, and one
- * session on another machine.
+ * The `updateSessions` payload — the worklist. Covers all four sources, three coloured workspace
+ * pills, one uncoloured pill, the "(no workspace)" fallback, and one session on another machine.
+ *
+ * Between this list and `history()` below, every one of the six status markers appears exactly
+ * once, which is the whole point of the panel shot — `seen` and one `dormant` sit in History
+ * because that is where those two states actually land. Codex and VS Code Chat are `dormant` by
+ * necessity, not by choice: neither exposes any liveness signal (docs/STATUS-INDICATORS.md).
  */
 export function sessions(now) {
   return [
@@ -23,7 +27,7 @@ export function sessions(now) {
       projectName: 'acme-api',
       projectPath: '/home/dev/work/acme-api',
       updatedAt: ago(now, 2),
-      status: 'active',
+      status: 'working',
       source: 'claude',
       workspaceColor: { background: '#2e7d32', foreground: '#ffffff' },
     },
@@ -33,7 +37,7 @@ export function sessions(now) {
       projectName: 'checkout-service',
       projectPath: '/home/dev/work/checkout-service',
       updatedAt: ago(now, 6),
-      status: 'waiting',
+      status: 'approval',
       source: 'bob',
       workspaceColor: { background: '#c0392b', foreground: '#ffffff' },
     },
@@ -43,7 +47,7 @@ export function sessions(now) {
       projectName: 'docs-site',
       projectPath: '/home/dev/work/docs-site',
       updatedAt: ago(now, 24),
-      status: 'idle',
+      status: 'dormant',
       source: 'codex',
       workspaceColor: { background: '#64748b', foreground: '#ffffff' },
     },
@@ -53,7 +57,7 @@ export function sessions(now) {
       projectName: 'acme-api',
       projectPath: '/home/dev/work/acme-api',
       updatedAt: ago(now, 51),
-      status: 'idle',
+      status: 'dormant',
       source: 'chat',
     },
     {
@@ -62,7 +66,7 @@ export function sessions(now) {
       projectName: 'ledger-worker',
       projectPath: '/srv/build/ledger-worker',
       updatedAt: ago(now, 9),
-      status: 'active',
+      status: 'question',
       source: 'claude',
       peer: 'dev@build-box.example',
       workspaceColor: { background: '#6d28d9', foreground: '#ffffff' },
@@ -73,7 +77,7 @@ export function sessions(now) {
       projectName: '',
       projectPath: '',
       updatedAt: ago(now, 3 * 60),
-      status: 'idle',
+      status: 'finished',
       source: 'claude',
     },
   ];
@@ -88,7 +92,7 @@ export function history(now) {
       projectName: 'acme-api',
       projectPath: '/home/dev/work/acme-api',
       updatedAt: ago(now, 2 * 24 * 60),
-      status: 'idle',
+      status: 'seen',
       source: 'claude',
       workspaceColor: { background: '#2e7d32', foreground: '#ffffff' },
     },
@@ -98,7 +102,7 @@ export function history(now) {
       projectName: 'checkout-service',
       projectPath: '/home/dev/work/checkout-service',
       updatedAt: ago(now, 5 * 24 * 60),
-      status: 'idle',
+      status: 'dormant',
       source: 'bob',
       workspaceColor: { background: '#c0392b', foreground: '#ffffff' },
     },

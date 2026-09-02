@@ -279,8 +279,11 @@ describe('webview styles.css: the panel follows the theme', () => {
   it('draws separators and shadows with the widget tokens', () => {
     expect(css).not.toMatch(/border-bottom:[^;]*rgba\(128, 128, 128, 0\.14\)\s*;/);
     expect(css).toMatch(/border-bottom: 1px solid var\(--vscode-widget-border/);
-    // Every shadow goes through the token; the black is only its last-resort fallback.
-    const shadows = css.match(/box-shadow:[^;]+;/g) ?? [];
+    // Every elevation shadow goes through the token; the black is only its last-resort fallback.
+    // The status-finished ring (0 blur, colour-carrying) is a silhouette, not a shadow, and is
+    // exempt — it deliberately uses the state's own colour, not the widget-shadow token.
+    const shadows = (css.match(/box-shadow:[^;]+;/g) ?? [])
+      .filter(rule => !/0 0 0 \d+px/.test(rule));
     expect(shadows.length).toBeGreaterThan(0);
     shadows.forEach(rule => expect(rule).toContain('var(--vscode-widget-shadow'));
   });
@@ -358,8 +361,8 @@ describe('webview: keyboard and screen-reader access', () => {
   });
 
   it('names every status the dot can be in, idle included', () => {
-    expect(main).toContain("statusEl.setAttribute('aria-label', statusLabel)");
-    expect(main).toContain("'Idle'");
+    expect(main).toContain("el.setAttribute('aria-label', tip)");
+    expect(main).toContain('Nothing is happening in this session.');
   });
 
   it('reveals the close button when the focus lands on it directly', () => {
