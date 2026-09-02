@@ -535,10 +535,18 @@ export function decideDeterministically(
  * every clause: at 200 clauses the unbounded render is ~11.5 k tokens of policy crowding out the
  * transcript it is supposed to reason about, which is a correctness bug rather than a cost line.
  *
- * TODO (`fastClassifier`, #37): the artifact's `prompt_core` belongs in the `system` block behind that
- * classifier's cache breakpoint, and the per-call selection on a trailing user turn, where it costs
- * nothing in cache terms. This hook still calls `buildSupervisionPrompt`, which has one knowledge
- * block and no breakpoint, so both go in it — no worse than the unbounded dump, and strictly smaller.
+ * TODO (PR #37's `fastClassifier`) — the split is already decided, so wire it rather than re-derive
+ * it. Two regions, and which half goes where is not interchangeable:
+ *
+ *  - `policy.compiled.prompt_core` → the **`system` knowledge block**, inside `cache_control` on the
+ *    last system block. It is revision-stable, so it belongs in the cached prefix; any byte change
+ *    there is *supposed* to invalidate the cache, and the revision is what says one happened.
+ *  - `selection.selected` + `selection.subsetLine` → the **trailing user turn**. There is no
+ *    trailing-system channel, and nothing after the last breakpoint is cached, so per-call content
+ *    costs nothing there. In the `system` block it would invalidate the prefix on every decision.
+ *
+ * This hook still calls `buildSupervisionPrompt`, which has one knowledge block and no breakpoint,
+ * so both halves go in it — no worse than the unbounded dump, and strictly smaller.
  */
 async function decideWithClassifier(
   input: PermissionRequestInput, policy: PolicyInputs, settings: PluginSettings,

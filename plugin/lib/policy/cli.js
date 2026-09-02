@@ -188,6 +188,8 @@ async function compile(argv) {
         process.stderr.write('compile needs a routing triple: --user U [--project P] [--team T]\n');
         return 2;
     }
+    // Named in an expiry error, so a refused compile can say what is still live.
+    const serving = (0, compile_1.loadPolicy)().policy?.revision ?? null;
     const input = await (0, compile_1.gatherCorpus)({
         corpusRoot: corpus,
         user,
@@ -195,7 +197,7 @@ async function compile(argv) {
         team: flag(argv, 'team') ?? settings.team,
         registryPath: flag(argv, 'registry') ?? (settings.supervisor.knowledgeRegistryPath || undefined),
     });
-    const { policy, errors, warnings } = (0, compile_1.compilePolicy)(input);
+    const { policy, errors, warnings } = (0, compile_1.compilePolicy)({ ...input, servingRevision: serving });
     for (const w of warnings) {
         process.stdout.write(`warn: ${w}\n`);
     }

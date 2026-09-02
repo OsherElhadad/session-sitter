@@ -100,18 +100,27 @@ export function matchingClauses(
 }
 
 const TIER_RANK: Record<string, number> = { user: 2, project: 1, team: 0 };
+const ORIGIN_RANK: Record<string, number> = { human: 0, learned: 1 };
 
 /**
- * The fill order: narrowness, then the frozen weight, then the id. A total order, so no tie is
- * broken by insertion or map-iteration order — which is what makes the rendered set replayable.
+ * The fill order: **origin**, then narrowness, then the frozen weight, then the id. A total order,
+ * so no tie is broken by insertion or map-iteration order — which is what makes the rendered set
+ * replayable.
+ *
+ * `origin` leads, and it leads for a reading reason rather than a semantic one. This is rendering
+ * order: it changes nothing about precedence, which the four-rung ladder decides. But a reviewer who
+ * sees a machine clause listed above a human's will reasonably conclude precedence is broken. With
+ * origin first, the rendered order visibly agrees with the ladder — a machine proposal never appears
+ * to outrank a human's explicit practice.
  *
  * `weight` is frozen at accept time rather than derived from the live support count, because
  * anything mutable that reaches the artifact moves its revision and rewrites every running
  * session's cached prefix. A hand-written clause has no support signal and ties at 0, falling
- * through to the id.
+ * through to the id — and with origin ahead of weight, that tie can no longer put it last.
  */
 export function compareFill(a: CompiledClause, b: CompiledClause): number {
-  return ((TIER_RANK[b.tier] ?? 0) - (TIER_RANK[a.tier] ?? 0))
+  return ((ORIGIN_RANK[a.origin] ?? 9) - (ORIGIN_RANK[b.origin] ?? 9))
+    || ((TIER_RANK[b.tier] ?? 0) - (TIER_RANK[a.tier] ?? 0))
     || (b.weight - a.weight)
     || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }

@@ -30,7 +30,7 @@ import { decisionsPath } from '../hooks/paths';
 import { decideDeterministically } from '../hooks/permissionRequest';
 import { loadSettings } from '../hooks/settings';
 import {
-  coreClauses, compilePolicy, currentPath, gatherCorpus, writePolicy,
+  coreClauses, compilePolicy, currentPath, gatherCorpus, loadPolicy, writePolicy,
 } from './compile';
 
 const USAGE = `session-sitter policy — lint a practices file, or compile the corpus
@@ -162,6 +162,8 @@ export async function compile(argv: string[]): Promise<number> {
     return 2;
   }
 
+  // Named in an expiry error, so a refused compile can say what is still live.
+  const serving = loadPolicy().policy?.revision ?? null;
   const input = await gatherCorpus({
     corpusRoot: corpus,
     user,
@@ -169,7 +171,7 @@ export async function compile(argv: string[]): Promise<number> {
     team: flag(argv, 'team') ?? settings.team,
     registryPath: flag(argv, 'registry') ?? (settings.supervisor.knowledgeRegistryPath || undefined),
   });
-  const { policy, errors, warnings } = compilePolicy(input);
+  const { policy, errors, warnings } = compilePolicy({ ...input, servingRevision: serving });
 
   for (const w of warnings) { process.stdout.write(`warn: ${w}\n`); }
   if (policy === null) {
