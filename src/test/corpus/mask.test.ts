@@ -278,3 +278,58 @@ describe('redactSecrets', () => {
     expect(redactSecrets(SECRETS.openai_key, 'XXX')).toBe('XXX');
   });
 });
+
+/**
+ * Real `sk-ant-` / `sk-proj-` bodies are base64url and routinely contain `_`. Every fixture above
+ * is a run of one repeated letter, which is why a rule that could not match past an underscore
+ * passed the whole suite while leaking the two key formats this project is most likely to meet.
+ */
+describe('secrets containing underscores', () => {
+  const REALISTIC: Record<string, string> = {
+    anthropic_key: 'sk-ant-api03-Ab1_Cd2-Ef3_Gh4-Ij5_Kl6-Mn7_Op8-Qr9_St0-Uv1_Wx2',
+    openai_key: 'sk-proj-Ab1_Cd2-Ef3_Gh4-Ij5_Kl6-Mn7_Op8',
+    github_pat_fine: `github_pat_${'A_'.repeat(41)}`,
+    jwt: `eyJhb_Gci.${'a_'.repeat(10)}.${'b-'.repeat(10)}`,
+  };
+
+  for (const [name, secret] of Object.entries(REALISTIC)) {
+    it(`${name} is detected in full, not truncated`, async () => {
+      writeSession(`u-${name}.claude.json`, `key: ${secret} trailing`);
+      const scan = await buildSecretMap(await iterFiles(sessionsDir), tmp);
+      expect([...scan.mapping.keys()]).toContain(secret);
+      // No shorter prefix was recorded in its place — a truncated match is a leak, not a hit.
+      for (const found of scan.mapping.keys()) {
+        expect(secret.startsWith(found) && found !== secret).toBe(false);
+      }
+    });
+  }
+
+  it('masks an underscore-bearing key out of the file entirely', async () => {
+    const secret = REALISTIC.anthropic_key;
+    const file = writeSession('leak.claude.json', `{"prompt":"use ${secret} please"}`);
+    await run({ repoRoot: tmp, user: 'alice' });
+    const after = fs.readFileSync(file, 'utf8');
+    expect(after).not.toContain(secret);
+    expect(after).toContain(MARKER);
+  });
+
+  it('labels an Anthropic key as anthropic_key, not openai_key', async () => {
+    writeSession('label.claude.json', REALISTIC.anthropic_key);
+    const scan = await buildSecretMap(await iterFiles(sessionsDir), tmp);
+    expect(scan.meta.get(REALISTIC.anthropic_key)).toBe('anthropic_key');
+  });
+});
+
+describe('rule shape', () => {
+  /**
+   * A trailing `\b` is the defect that hid the underscore bug: `_` is a word character, so a
+   * boundary can never fall between a key body and an underscore that follows it. Every rule ends
+   * with a negative lookahead over its own class instead, which asserts what is actually meant —
+   * "no more secret characters follow".
+   */
+  it('no rule terminates in a word-boundary assertion', () => {
+    for (const rule of RULES) {
+      expect(rule.regex.source.endsWith('\\b'), `${rule.name} ends with \\b`).toBe(false);
+    }
+  });
+});
