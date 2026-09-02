@@ -226,6 +226,11 @@ function renderAblation(report) {
             + `${report.evidence_class}`,
         `        ${report.evidence}`,
     ];
+    // The shadowing rung is the actionable half of a `shadowed` finding, so it gets its own line rather
+    // than being buried at the end of the evidence sentence.
+    if (report.shadowed_by) {
+        lines.push(`        pre-empted by ${report.shadowed_by}`);
+    }
     if (report.note) {
         lines.push(`        note: ${report.note}`);
     }

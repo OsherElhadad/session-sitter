@@ -13,10 +13,12 @@ import { describe, it, expect } from 'vitest';
 import type { DecisionRecord } from '../../audit/trail';
 import type { CompiledClause } from '../../policy/compile';
 import { parsePractices } from '../../policy/practices';
+import { DecidedReplay, rungOf } from '../../policy/replay';
 import {
   CEILING_PER_TIER,
   GREEN_PERSISTENCE_NOTE,
   Incumbent,
+  RED_NOT_PROPOSED,
   RED_RETIREMENT_CAVEAT,
   ablate,
   ablateAll,
@@ -39,9 +41,13 @@ const entry = (id: string, level: string, match: string, title = id) =>
   `### Intention: ${title}\n\n| Field | Value |\n|---|---|\n| id | ${id} |\n`
   + `| level | ${level} |\n\nMatch: ${match}\n\nA rationale sentence for ${id}.\n`;
 
+// `bucket-drop` matters: `aws s3 rb` is on no built-in destructive pattern and no correction rule, so
+// it is the one red here that nothing else in the ladder would decide. `sql-drop` is deliberately the
+// opposite — rung 5 covers `drop table` too — which is what the shadowing tests below exercise.
 const CORPUS = clauses([
-  entry('git-force', 'red', '/git\\s+push\\b.*--force\\b/'),
+  entry('git-force', 'red', '/git\\s+push\\b.*(--force(?!-with-lease)|\\s-f\\b)/'),
   entry('sql-drop', 'red', '/drop\\s+table/i'),
+  entry('bucket-drop', 'red', '/aws s3 rb s3:\\/\\/prod-/'),
   entry('learned-fetch', 'green', '/git fetch/'),
 ].join('\n---\n\n'));
 
@@ -150,9 +156,13 @@ describe('the near-miss index (§5.5)', () => {
 
 describe('ablating one clause', () => {
   it('T21: a clause that is the sole cause of a recorded deny changes >0 and is no candidate', () => {
-    const records = [cited('git-force', 'git push --force origin main', 'deny'), ...noise(20)];
-    const report = ablate('git-force', CORPUS, records);
+    // `bucket-drop` is the sole cause: nothing else in the ladder covers `aws s3 rb`, so removing it
+    // leaves the call undecided. (`git-force` would be the wrong fixture — rung 2 shadows it; see the
+    // shadowing block below.)
+    const records = [cited('bucket-drop', 'aws s3 rb s3://prod-backups', 'deny'), ...noise(20)];
+    const report = ablate('bucket-drop', CORPUS, records);
     expect(report.changed).toBeGreaterThan(0);
+    expect(report.evidence_class).toBe('in-service');
     expect(report.retirement_candidate).toBe(false);
   });
 
@@ -217,37 +227,43 @@ describe('T36–T38 — why a zero means less for a red', () => {
 
   it('T37: one lifetime fire and zero window fires is `deterrent`, not `dead-weight?`', () => {
     // Zero *recent* fires is precisely what success looks like for a deterrent, so it is never
-    // proposed for retirement — the clause fired once, behaviour changed, and it stopped firing.
-    const records = [
-      cited('sql-drop', 'drop table sessions', 'deny', '2026-01-05T09:00:00.000Z'),
-      ...noise(50, 'drop table something'), // near-misses in the window, and still a deterrent
-    ];
-    const report = ablate('sql-drop', CORPUS, records);
+    // proposed for retirement — the clause fired once, behaviour changed, and it stopped firing. Its
+    // own fire replays to the same deny via rung 7, which does not count as shadowing.
+    // The fire is passed in rather than mined from the window, because the trail rotates: a clause that
+    // fired six months ago has its only fire in a file that no longer exists. See `lifetimeFires`.
+    const report = ablate('bucket-drop', CORPUS, noise(50), { lifetimeFires: 1 });
     expect(report.lifetime_fires).toBe(1);
     expect(report.evidence_class).toBe('deterrent');
     expect(report.retirement_candidate).toBe(false);
   });
 
   it('T38: zero lifetime fires and zero near-misses is `insufficient-exposure`', () => {
-    const report = ablate('sql-drop', CORPUS, noise(50));
+    const report = ablate('bucket-drop', CORPUS, noise(50));
     expect({ fires: report.lifetime_fires, misses: report.near_misses })
       .toEqual({ fires: 0, misses: 0 });
     expect(report.evidence_class).toBe('insufficient-exposure');
   });
 
   it('T38: adding one near-miss reclassifies it `dead-weight?`', () => {
+    // Same literal core (`aws s3 rb s3`), different bucket: the hazard's shape occurs in this traffic
+    // even though the clause, which only names `prod-`, never triggers.
     const almost = record({
-      inputSummary: 'psql -c "DROP TABLE archived_events"',
-      call: { tool_name: 'Bash', input: { command: 'psql -c "DROP  TABLE archived_events"' } },
+      inputSummary: 'aws s3 rb s3://staging-artifacts --force',
+      call: {
+        tool_name: 'Bash',
+        input: { command: 'aws s3 rb s3://staging-artifacts --force' },
+      },
     });
-    const report = ablate('sql-drop', CORPUS, [almost, ...noise(50)]);
+    const report = ablate('bucket-drop', CORPUS, [almost, ...noise(50)]);
     expect(report.near_misses).toBe(1);
     expect(report.evidence_class).toBe('dead-weight?');
     expect(report.retirement_candidate).toBe(false);
   });
 
-  it('every red ablation carries the deterrence caveat, whatever the class', () => {
-    expect(ablate('sql-drop', CORPUS, noise(50)).note).toBe(RED_RETIREMENT_CAVEAT);
+  it('every red ablation says it is a listing, not a proposal', () => {
+    // `RED_RETIREMENT_CAVEAT` belongs to a displacement packet that actually retires a red. An ablation
+    // listing retires nothing, so saying "this retires a red clause" would misdescribe the output.
+    expect(ablate('bucket-drop', CORPUS, noise(50)).note).toBe(RED_NOT_PROPOSED);
   });
 
   it('the classifier reads a lifetime fire ahead of everything else', () => {
@@ -256,6 +272,108 @@ describe('T36–T38 — why a zero means less for a red', () => {
     expect(classify('red', 0, 0, 0)).toBe('insufficient-exposure');
     expect(classify('green', 0, 0, 0)).toBe('retire');
     expect(classify('green', 3, 0, 0)).toBe('in-service');
+  });
+});
+
+// --------------------------------------------------------------------------- shadowing
+
+describe('shadowed — a zero because another rung decides, not because the clause is dead', () => {
+  it('names the rung and the rule that pre-empts a red from above', () => {
+    // The real finding, on the real corpus: the correction lane at rung 2 rewrites `--force` into
+    // `--force-with-lease` and allows, and `git-force`'s own negative lookahead says the rewritten form
+    // is acceptable. So the clause matches the traffic and never decides it. That is correct behaviour
+    // and a redundant clause — not dead weight, and the two need opposite responses.
+    const records = [...Array.from({ length: 5 }, (_, i) => record({
+      inputSummary: `git push --force origin feature-${i}`,
+      call: { tool_name: 'Bash', input: { command: `git push --force origin feature-${i}` } },
+      decision: 'allow', actor: 'policy', clause: 'practices §force-push', light: 'yellow',
+      rewritten: true,
+    })), ...noise(30)];
+    const report = ablate('git-force', CORPUS, records);
+    expect(report.changed).toBe(0);
+    expect(report.evidence_class).toBe('shadowed');
+    expect(report.matches).toBe(5);
+    expect(report.shadowed_by).toContain("rung 2's corrected");
+    expect(report.shadowed_by).toContain('force-push');
+    expect(report.evidence).toContain('5 pre-empted call(s)');
+  });
+
+  it('the same clause without its `-with-lease` lookahead is NOT shadowed — it blocks the rewrite', () => {
+    // The lookahead is what makes the clause assert that `--force-with-lease` is acceptable. Drop it and
+    // rung 2's re-check of the *rewritten* input hits the clause, so the correction is refused and the
+    // clause is doing real work. Same traffic, opposite reading — which is why the shadow finding has to
+    // be measured rather than inferred from the ladder's rung order.
+    const strict = clauses(entry('git-force', 'red', '/git\\s+push\\b.*--force\\b/'));
+    const records = [...Array.from({ length: 5 }, (_, i) => record({
+      inputSummary: `git push --force origin feature-${i}`,
+      call: { tool_name: 'Bash', input: { command: `git push --force origin feature-${i}` } },
+      decision: 'deny', actor: 'policy', clause: 'practices §git-force', light: 'red',
+    })), ...noise(30)];
+    const report = ablate('git-force', strict, records);
+    expect(report.changed).toBe(5);
+    expect(report.evidence_class).toBe('in-service');
+  });
+
+  it('names the rung that pre-empts a red from below', () => {
+    // `sql-drop` fires, and removing it still changes nothing, because rung 5's built-in destructive
+    // table denies the same calls. `deterrent` would be the wrong word: it has not stopped firing, it
+    // is redundant with a default.
+    const records = [
+      ...Array.from({ length: 4 }, (_, i) => cited('sql-drop', `drop table tmp_import_${i}`, 'deny')),
+      ...noise(30),
+    ];
+    const report = ablate('sql-drop', CORPUS, records);
+    expect(report.changed).toBe(0);
+    expect(report.lifetime_fires).toBe(4);
+    expect(report.evidence_class).toBe('shadowed');
+    expect(report.shadowed_by).toContain("rung 5's denied — built-in destructive-action rule");
+  });
+
+  it('a shadowed clause is never `dead-weight?`, which would invite the wrong action', () => {
+    const records = [...Array.from({ length: 3 }, () => cited('sql-drop', 'drop table t', 'deny')),
+      ...noise(30)];
+    expect(ablate('sql-drop', CORPUS, records).evidence_class).not.toBe('dead-weight?');
+  });
+
+  it('carries a note naming both available responses, because the gate cannot choose', () => {
+    const records = [...Array.from({ length: 3 }, () => cited('learned-fetch', 'git fetch --all', 'allow')),
+      ...noise(30)];
+    // A green clause on `git fetch --all` — rung 1 does not cover it (`fetch` is not a safe command),
+    // so shadow it with a second accepted green instead.
+    const pair = [...CORPUS, ...clauses(entry('other-fetch', 'green', '/git fetch/'))];
+    const report = ablate('learned-fetch', pair, records);
+    expect(report.evidence_class).toBe('shadowed');
+    expect(report.note).toContain('redundant, not dead');
+    expect(report.note).toContain('narrow it to cover what the other rung does not');
+  });
+
+  it('rung 7 is not a shadower: a fail-closed deny is the absence of a decision', () => {
+    // `bucket-drop`'s own deny replays to the same deny via the fail-closed rung. Calling that
+    // redundancy would argue for deleting exactly the clauses that carry the policy — it is the only
+    // thing that would still deny in observe mode, or once a green covers the call.
+    const report = ablate('bucket-drop', CORPUS,
+      [cited('bucket-drop', 'aws s3 rb s3://prod-backups', 'deny'), ...noise(30)]);
+    expect(report.matches).toBe(0);
+    expect(report.evidence_class).not.toBe('shadowed');
+  });
+
+  it('a clause that matches nothing is `retire`/`insufficient-exposure`, not shadowed', () => {
+    // Matching nothing and being pre-empted are different facts, and only one of them means delete.
+    expect(ablate('learned-fetch', CORPUS, noise(200)).evidence_class).toBe('retire');
+    expect(ablate('bucket-drop', CORPUS, noise(200)).evidence_class).toBe('insufficient-exposure');
+  });
+
+  it('the ladder rung is derived from the actor and the note', () => {
+    const label = (over: Partial<DecidedReplay>) => rungOf({
+      verdict: 'deny', clause: null, from: 'ladder', actor: 'policy', note: 'x', ...over,
+    });
+    expect(label({ actor: 'deterministic', verdict: 'allow' })).toBe(1);
+    expect(label({ note: 'corrected — practices §fp: …', verdict: 'allow' })).toBe(2);
+    expect(label({ verdict: 'deny' })).toBe(3);
+    expect(label({ verdict: 'allow' })).toBe(4);
+    expect(label({ actor: 'deterministic', verdict: 'deny' })).toBe(5);
+    expect(label({ from: 'injected', actor: 'model' })).toBe(6);
+    expect(label({ from: 'fallback', actor: 'timeout' })).toBe(7);
   });
 });
 
