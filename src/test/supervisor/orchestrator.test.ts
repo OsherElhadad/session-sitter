@@ -92,20 +92,25 @@ describe('the recorded call', () => {
     expect(JSON.stringify(rec.call?.input)).not.toContain(secret);
   });
 
-  // KNOWN GAP, documented on purpose. Today's masking rules in src/corpus/mask.ts use
-  // `sk-ant-[A-Za-z0-9-]{20,}` and `sk-(?:proj-)?[A-Za-z0-9]{20,}` — neither character set
-  // includes `_`, so a key containing one is not matched at all and reaches the record verbatim.
-  // Upstream PR #40 widens exactly those two character sets. When it merges this test SHOULD start
-  // failing, and the correct fix is to flip both assertions to `not.toContain` — not to loosen it.
-  it('does NOT yet mask an underscore-bearing key (see PR #40)', async () => {
+  // Regression fixture for a closed gap. Before PR #40, the masking rules in src/corpus/mask.ts
+  // ended in a `\b` boundary, and `_` is a word character — so no boundary could ever fall between
+  // a key body and an underscore that followed it. `sk-ant-`/`sk-proj-` bodies are base64url and
+  // routinely contain `_`, so this was not a truncated match: the run before the first `_` is
+  // shorter than the `{20,}` minimum, so nothing matched at all and the key reached the record
+  // verbatim. #40 fixed it by replacing the trailing `\b` with a negative lookahead over the same
+  // character class. Keep this fixture underscore-bearing — collapsing it back to a letter run
+  // would stop testing the gap #40 closed.
+  it('masks an underscore-bearing key (the gap PR #40 closed)', async () => {
     const secret = 'sk-ant-api03-Ab3_dEfGhIjKlMnOpQrStUvWxYz0123456789_zZ';
     const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), {
       exported: ambiguous({ pendingArgs: { command: `deploy --key=${secret}` } }),
     });
     const rec = await rig.orch.supervise(SESSION_ID);
 
-    expect(JSON.stringify(rec.call?.input)).toContain(secret);
-    expect(redactSecrets(secret)).toContain(secret); // the gap is in the rules, not in this path
+    const input = JSON.stringify(rec.call?.input);
+    expect(input).not.toContain(secret);
+    expect(input).toContain('redacted');
+    expect(redactSecrets(secret)).not.toContain(secret);
   });
 
   it('stays null when there is no pending action to record', async () => {
