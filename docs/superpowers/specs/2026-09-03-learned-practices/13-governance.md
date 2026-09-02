@@ -127,8 +127,10 @@ proposal, and it is never automatic.
 └── users/<slug>/bottom-line.md         + declined.jsonl
 ```
 
-`<corpus root>` is `sessionSitter.dataRepoPath` when set, else `<dataDir>/corpus` (auto-created).
-That single fallback is what makes the solo-dev and team-lead cases the *same* code path. The
+`<corpus root>` is `sessionSitter.dataRepoPath`. `init` sets it to `<dataDir>/corpus` (auto-created)
+when the user has no corpus repo, so the runtime itself never guesses — it always reads a setting
+that was already pointed somewhere. That init-time default is what makes the solo-dev and team-lead
+cases the *same* code path at runtime. The
 declined ledger sits next to the knowledge file it would have modified — **a decline is recorded at
 the tier of the clause it would have created**, so a team decline is shared and reviewable and a user
 decline is private, with no new concept.

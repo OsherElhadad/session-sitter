@@ -6,7 +6,7 @@ first.** It is the document a reviewer needs; these five are the ones an impleme
 
 They are working specs, written in parallel by separate authors and reconciled by review, then
 committed unedited apart from path rewriting. That means they are more detailed and less tidy than
-the design doc — roughly 5,200 lines against its 717 — and they carry the material it deliberately
+the design doc — roughly 5,200 lines against its ~740 — and they carry the material it deliberately
 compressed:
 
 | Spec | What only this file has |

@@ -1,7 +1,7 @@
 # Design: learned practices — closing the write path
 
-**Date:** 2026-09-03
-**Status:** Approved
+**Date:** 2026-09-02
+**Status:** Proposed
 
 ---
 
@@ -57,7 +57,7 @@ What remains unclaimed, in priority order:
 | | Unclaimed capability | The state of the art it is measured against |
 |---|---|---|
 | 1 | **Clause citation as a contract.** The applied clause is named deterministically, in the decision and in the record. | Auto mode scores severity internally and reports the fixed string `Blocked by classifier`. A built-in rule's label sometimes surfaces; a **user-authored** rule is never cited, and which you get is not configurable. |
-| 2 | **Learned rules as a git artifact under team-scoped review.** One clause per file, accepted by a commit, reviewable as a diff, blameable, revertable. | Auto memory is machine-local and unreviewed. Cursor's team rules are dashboard-managed. Nobody reviews a learned rule as a diff. |
+| 2 | **Learned rules as a git artifact under team-scoped review.** One clause per file, accepted by a commit, reviewable as a diff, blameable, revertible. | Auto memory is machine-local and unreviewed. Cursor's team rules are dashboard-managed. Nobody reviews a learned rule as a diff. |
 | 3 | **Rewrite-and-recheck.** The unsafe call becomes the safe one, and the rewritten input is re-evaluated against the deny clauses before it is returned. | No first-party or competitor equivalent. |
 | 4 | **An attributed decision record covering allows as well as denials.** Every decision, with the clause, the actor, the latency and the outcome, queryable. | `/permissions` has a "Recently denied" tab: denials only, descriptions rather than inputs, no rule attribution. |
 | 5 | **Generalising from repeated decisions.** Four observed `npm test` shapes become one clause with a widened pattern, at the narrowest level that covers the evidence. | First-party "don't ask again" saves the literal or prefix rule — deliberately the opposite of generalising. |
@@ -188,7 +188,7 @@ The cost of the chosen option is exactly **one frontmatter parser and one direct
 existing is reformatted, revalidated or migrated; an absent `learned/` directory reads as zero
 clauses through the loader's existing rule that a missing tier is skipped rather than an error. The
 baseline that must stay green is **1,139 tests in 56 files** (a clean run on `10ff422`; PR #42 took
-it to 1,237).
+it to 1,240).
 
 The frontmatter is deliberately **not YAML** and must not pretend to be: it is a documented subset —
 scalars, inline bracketed lists, and exactly one nested block — and anything outside that subset is
@@ -552,7 +552,7 @@ action nobody saw.
 |---|---|
 | PR #40 — corpus masking for keys containing `_` | open, and the base every fixture in this design assumes. The masking rules terminated in `\b`, so a real-format `sk-ant-` key containing an underscore was missed **entirely** and written to the corpus verbatim. It survived 35 passing tests because every fixture was underscore-free. |
 | PR #41 — never read knowledge from the tree the supervised agent can write | open. The write-boundary hazard in §"architecture" restated as code. |
-| PR #42 — the learned-clause foundation: a machine may propose without outranking a human | open. Shipped at `src/supervisor/learnedClauses.ts`, beside the loader it extends, because the policy layer's own directory lives on an unmerged branch. Took the test baseline from 1,139 to 1,237. |
+| PR #42 — the learned-clause foundation: a machine may propose without outranking a human | open. Shipped at `src/supervisor/learnedClauses.ts`, beside the loader it extends, because the policy layer's own directory lives on an unmerged branch. Took the test baseline from 1,139 to 1,240. |
 | PR #43 — record the tool call each decision judged | open, and it **gates most of the pipeline**. Every structural detector keys on a shape derived from the tool call, and the record did not contain one: `source` is the channel, and the only tool identity was on the rule trace, populated only for rule-decided records. Until it lands, the pipeline can emit gap *counts* and override proposals and nothing else. |
 
 PR #40 is also the reason for a rule that reads like paranoia and is not: **the validation gate does
@@ -651,9 +651,10 @@ still contradicting each other needs to know which side won and why.
    file and no revision churn. If a clause's support later changes enough to matter, that is a new
    clause revision through the normal review path — which is the honest way to express it.
 5. **The prompt budget is the two-block split, and the existing structure already affords it.** The
-   fast classifier renders `system` as `[rubric, knowledge]` with the cache breakpoint on the **last
-   system block** (`fastClassifier.ts:260`), and puts the judging instruction on a **trailing user
-   turn** because Anthropic has no trailing-system channel — so nothing after that breakpoint is
+   fast classifier, on the unmerged `ss/fast-supervisor` branch, renders `system` as
+   `[rubric, knowledge]` with the cache breakpoint on the **last system block**
+   (`fastClassifier.ts:260`), and puts the judging instruction on a **trailing user turn** because
+   Anthropic has no trailing-system channel — so nothing after that breakpoint is
    cached (`fastClassifier.ts:21-22`). That is exactly the shape the split needs: the revision-stable
    core goes in the cached `system` knowledge block, and the per-call selection rides the uncached
    trailing user turn, costing nothing in cache terms. A single budget over one selection pass would

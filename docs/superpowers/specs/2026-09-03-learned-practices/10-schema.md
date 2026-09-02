@@ -9,10 +9,10 @@ Read alongside the research notes (report 00) (+ ADDENDUM), `01-internal-review.
 
 Code read before designing: `src/supervisor/knowledge.ts` (all 469 lines),
 `src/supervisor/prompt.ts:121-132`, `src/supervisor/models.ts` (`KnowledgeRef`, `RuleTrace`,
-`SupervisionRecord`), `knowledge/bottom-line.template.md`, `docs/KNOWLEDGE.md:60-175`, and in
-``: `src/policy/practices.ts`, `src/policy/cli.ts`, `src/policy/corrections.ts`,
-`src/policy/generalise.ts`, `src/hooks/permissionRequest.ts`, `src/hooks/paths.ts`,
-`src/hooks/settings.ts`, `src/audit/trail.ts`.
+`SupervisionRecord`), `knowledge/bottom-line.template.md`, `docs/KNOWLEDGE.md:60-175`, and on the
+unmerged `pr/policy-compile` branch: `src/policy/practices.ts`, `src/policy/cli.ts`,
+`src/policy/corrections.ts`, `src/policy/generalise.ts`, `src/hooks/permissionRequest.ts`,
+`src/hooks/paths.ts`, `src/hooks/settings.ts`, `src/audit/trail.ts`.
 
 ---
 
@@ -96,7 +96,7 @@ migration: no existing file changes, no existing test changes, no reformat.
   `TABLE_ROW_RE` behaviour, including the documented `meta[key] = val` swallow, is unchanged.
 - The baseline that must keep passing is **1,139 tests in 56 files** — a clean vitest run on
   `10ff422`. (The 1,146 figure quoted earlier was a worktree that already carried PR #40's 7 tests.
-  PR #42 took it to 1,237.)
+  PR #42 took it to 1,240.)
   It exercises `parseBottomLine`, `parsePractices`, `clauseFrom`, `loadKnowledge` and the hook
   ladder. None of those inputs or outputs change.
 - `learned/` is absent in every existing corpus, and an absent directory reads as zero clauses. The
@@ -1448,7 +1448,7 @@ Existing-style tests: no network, no real agent, no VS Code, injectable seams
    session JSONL (§7.4). Documented, not observed — deliberately, per the privacy rule.
 3. ~~**The test count.**~~ **Settled: 1,139 in 56 files**, a clean vitest run on `10ff422`. Not
    1,146 (that worktree already contained PR #40's 7 tests) and not my 851 / 1,152 (greps of
-   `it(`/`test(` call sites, a different metric). PR #42 took the baseline to 1,237. §1.3 and §8
+   `it(`/`test(` call sites, a different metric). PR #42 took the baseline to 1,240. §1.3 and §8
    cite 1,139.
 4. ~~**PR #37's cache breakpoint placement.**~~ **Verified, caveat withdrawn.**
    `src/supervisor/fastClassifier.ts` builds `system` as `[rubric, knowledge]`
