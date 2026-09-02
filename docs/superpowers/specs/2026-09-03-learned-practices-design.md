@@ -498,7 +498,8 @@ the policy directory itself.
 This is a **security property, not a nicety**: it is the difference between a learned green clause
 and an arbitrary-command allowlist, and it is a property of the *matcher*, which the pipeline can
 only require and not enforce. The seven widening levels and the coverage floors that go with them are
-in the extraction working spec (§6), and whoever implements the matcher should read it before
+in [`2026-09-03-learned-practices/11-pipeline.md`](2026-09-03-learned-practices/11-pipeline.md) §6,
+and whoever implements the matcher should read it before
 touching either.
 
 ---
