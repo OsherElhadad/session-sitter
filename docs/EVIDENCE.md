@@ -8,9 +8,11 @@ written by hand.
 Two conventions, because they change how much a claim is worth:
 
 - **Where the evidence came from.** *Live session* means a real interactive `claude` in a
-  pty, driven by `docs/evidence/drive.py`, with the plugin deciding real permission
-  prompts. *Hook boundary* means the event JSON piped straight into the shipped hook
-  binary — real hook code, real output, but no session around it. Every claim says which.
+  pty, driven by a JSONL step script through a small ad hoc Python harness (not part of
+  this repo — see [below](#reproduce-it-yourself) for the procedure), with the plugin
+  deciding real permission prompts. *Hook boundary* means the event JSON piped straight
+  into the shipped hook binary — real hook code, real output, but no session around it.
+  Every claim says which.
 - **Isolation.** Every run used `CLAUDE_CONFIG_DIR=/tmp/ss-e2e/cfg`, a scratch project at
   `/tmp/ss-e2e/repo`, and a **bare git repository on disk** as `origin`. The force pushes
   below were real force pushes; they just went to `/tmp/ss-e2e/remote.git`. Nothing read
@@ -98,8 +100,9 @@ cat > /tmp/ss-e2e/steps.jsonl <<'EOF'
 EOF
 
 cd /tmp/ss-e2e/repo
-python3 docs/evidence/drive.py /tmp/ss-e2e/out/uc1.raw /tmp/ss-e2e/steps.jsonl \
-  claude --plugin-dir "$TAP" --permission-mode manual
+# Drive claude interactively from steps.jsonl (see "Reproduce it yourself" below for the
+# harness this was actually run through — it isn't part of this repo).
+claude --plugin-dir "$TAP" --permission-mode manual
 ```
 
 ### What actually happened
@@ -745,18 +748,23 @@ node plugin/lib/policy/cli.js check "$SESSION_SITTER_PRACTICES"
 
 TAP=$(sh docs/evidence/tap-plugin.sh "$PLUGIN" /tmp/ss-e2e/cap)
 cd /tmp/ss-e2e/repo
-python3 "$OLDPWD/docs/evidence/drive.py" /tmp/ss-e2e/out/run.raw /tmp/ss-e2e/steps.jsonl \
-  claude --plugin-dir "$TAP" --permission-mode manual
+claude --plugin-dir "$TAP" --permission-mode manual   # driven interactively, see below
 
 node "$OLDPWD/plugin/lib/audit/cli.js" digest --since 24h
 ```
 
 `setup.sh` writes only under `$ROOT` (default `/tmp/ss-e2e`) and needs credentials from the
-environment; it copies nothing out of `~/.claude`. `drive.py` takes a JSONL step file of
-`{"wait": …}` / `{"send": …}` / `{"sleep": …}` objects and drives a real `claude` in a pty,
-saving both the raw byte stream and a de-ANSI'd transcript. `tap-plugin.sh` is optional and
-only needed to capture the hook's own stdin and stdout; the decisions are identical without
-it.
+environment; it copies nothing out of `~/.claude`. The `claude` step above was not typed by
+hand — it was scripted through a small, ad hoc Python harness (not part of this repo, so
+nothing to `git checkout`), driven from a JSONL step file of `{"wait": "<substring>",
+"timeout": <seconds>}` / `{"send": "<text or \r>"}` / `{"sleep": <seconds>}` objects like the
+one in the walkthrough above. The harness forked `claude` under a real pty (Python's
+`pty.fork()`), fed it the scripted keystrokes, stripped ANSI escapes as it read the pty's
+output, and wrote both the raw byte stream and the de-ANSI'd transcript to disk. Reproducing
+a run means writing an equivalent driver — real terminal semantics matter here, since a plain
+pipe changes how an interactive CLI behaves, and Node's standard library has no pty
+allocator. `tap-plugin.sh` is optional and only needed to capture the hook's own stdin and
+stdout; the decisions are identical without it.
 
 Two things to expect if you re-run this. Session ids, timestamps and costs will differ.
 And the model may not do what the prompt asks — in §5 it declined step 3 entirely — so a
