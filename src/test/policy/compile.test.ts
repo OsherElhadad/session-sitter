@@ -235,6 +235,40 @@ describe('what reaches the artifact', () => {
     expect(policy.clauses.map(c => c.id)).toEqual(['new-rule']);
   });
 
+  it('warns naming both clauses and both files when it drops a superseded clause', () => {
+    // The drop is legitimate; doing it invisibly is not. Nothing in the superseded clause's own
+    // file records that an edit to a *different* file removed it from live policy, so the compile
+    // report is the only place a reviewer can find out.
+    const result = compilePolicy(input({
+      learned: [
+        learned({ id: 'new-rule', frontmatter: 'supersedes: [old-rule]\n' }),
+        learned({ id: 'old-rule' }),
+      ],
+    }));
+    expect(result.errors).toEqual([]);
+    const warning = result.warnings.join('\n');
+    expect(warning).toContain('practices §old-rule');
+    expect(warning).toContain('learned/old-rule.md');
+    expect(warning).toContain('practices §new-rule');
+    expect(warning).toContain('learned/new-rule.md');
+  });
+
+  it('refuses a supersedes naming an id no clause has, because it retires nothing silently', () => {
+    // The observable failure of a typo is that the old rule keeps firing while its author believes
+    // it is gone — a permissive clause you think you retired and did not.
+    const result = compilePolicy(input({
+      learned: [
+        learned({ id: 'new-rule', frontmatter: 'supersedes: [teh-old-rule]\n' }),
+        learned({ id: 'the-old-rule' }),
+      ],
+    }));
+    expect(result.policy).toBeNull();
+    const error = result.errors.join('\n');
+    expect(error).toContain('teh-old-rule');
+    expect(error).toContain('learned/new-rule.md');
+    expect(error).toContain('the-old-rule');
+  });
+
   it('carries no mutable provenance at all', () => {
     const policy = ok({ learned: [learned()] });
     const keys = Object.keys(policy.clauses[0]);

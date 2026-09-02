@@ -333,17 +333,41 @@ function compilePolicy(input) {
             .map(learnedClause),
     ];
     // A clause named by an accepted clause's `supersedes` is out: the replacement is present, and the
-    // old text stays resolvable through the older artifact and the corpus.
-    const superseded = new Set();
+    // old text stays resolvable through the older artifact and the corpus. Which superseder did it is
+    // kept, not just the fact — the warning below is the only record the removal happened, and a
+    // reviewer needs to know whose edit removed their clause.
+    const corpusIds = new Set(pairs.map(p => p.clause.id));
+    const superseded = new Map();
     for (const { clause } of pairs) {
-        if (clause.status === 'accepted') {
-            clause.supersedes.forEach(id => superseded.add(id));
+        if (clause.status !== 'accepted') {
+            continue;
+        }
+        for (const id of clause.supersedes) {
+            if (!corpusIds.has(id)) {
+                // An error rather than a warning, because the author's stated intent did not happen: the
+                // old clause keeps firing while its file's history says it was retired. Safe to refuse —
+                // a refused compile writes nothing, the runtime keeps serving the last good revision, and
+                // `policy block` is a deny-only channel outside the artifact, so no brake is lost.
+                const near = (0, learnedClauses_1.didYouMean)(id, corpusIds);
+                errors.push(`${clause.citation} (${clause.source_file ?? '?'}): \`supersedes: ${id}\` names `
+                    + 'no clause in the corpus, so it retires nothing and the old rule keeps firing'
+                    + `${near === null ? '' : ` — did you mean ${JSON.stringify(near)}?`}`);
+                continue;
+            }
+            superseded.set(id, clause);
         }
     }
     const clauses = [];
     const byId = new Map();
     for (const { clause, specs } of pairs) {
-        if (superseded.has(clause.id)) {
+        const supersededBy = superseded.get(clause.id);
+        if (supersededBy) {
+            // A warning, not an error: superseding is legitimate. Doing it invisibly is not — on the human
+            // lane there is no `status` field at all, so an edit to one file removes another file's entry
+            // from live policy with nothing in that file, or its history, saying so.
+            warnings.push(`${clause.citation} (${clause.source_file ?? '?'}) is superseded by `
+                + `${supersededBy.citation} (${supersededBy.source_file ?? '?'}) and is not in this `
+                + 'revision — nothing in its own file records that');
             continue;
         }
         // The highest-value check in this file. `practices.ts` drops an unparseable pattern so that one
