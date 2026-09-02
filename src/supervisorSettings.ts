@@ -30,6 +30,10 @@ export interface SupervisorSettings {
   anthropicBaseUrl?: string;
   anthropicAuthToken?: string;
   classifierTimeoutSeconds?: number;
+  fastClassifier?: boolean;
+  fastClassifierModel?: string;
+  fastClassifierTimeoutSeconds?: number;
+  fastClassifierBaseUrl?: string;
   orangeResponseTimeoutMinutes?: number;
   messagingChannel?: string;
   telegramBotToken?: string;
@@ -79,6 +83,10 @@ export function readSupervisorSettings(cfg: SettingsReader): SupervisorSettings 
     anthropicBaseUrl: userText(cfg, 'supervisor.anthropicBaseUrl'),
     anthropicAuthToken: userText(cfg, 'supervisor.anthropicAuthToken'),
     classifierTimeoutSeconds: userValue<number>(cfg, 'supervisor.classifierTimeoutSeconds'),
+    fastClassifier: userValue<boolean>(cfg, 'supervisor.fastClassifier'),
+    fastClassifierModel: userText(cfg, 'supervisor.fastClassifierModel'),
+    fastClassifierTimeoutSeconds: userValue<number>(cfg, 'supervisor.fastClassifierTimeoutSeconds'),
+    fastClassifierBaseUrl: userText(cfg, 'supervisor.fastClassifierBaseUrl'),
     orangeResponseTimeoutMinutes: userValue<number>(cfg, 'supervisor.orangeResponseTimeoutMinutes'),
     messagingChannel: userText(cfg, 'supervisor.messagingChannel'),
     telegramBotToken: userText(cfg, 'supervisor.telegramBotToken'),
@@ -107,6 +115,11 @@ export function applySupervisorSettings(
     anthropicBaseUrl: s.anthropicBaseUrl ?? base.anthropicBaseUrl,
     anthropicAuthToken: s.anthropicAuthToken ?? base.anthropicAuthToken,
     classifierTimeoutSeconds: num(s.classifierTimeoutSeconds, base.classifierTimeoutSeconds),
+    fastClassifierEnabled: s.fastClassifier ?? base.fastClassifierEnabled,
+    fastClassifierModel: s.fastClassifierModel ?? base.fastClassifierModel,
+    fastClassifierTimeoutSeconds: num(
+      s.fastClassifierTimeoutSeconds, base.fastClassifierTimeoutSeconds),
+    fastClassifierBaseUrl: s.fastClassifierBaseUrl ?? base.fastClassifierBaseUrl,
     orangeResponseTimeoutMinutes: num(
       s.orangeResponseTimeoutMinutes, base.orangeResponseTimeoutMinutes),
     messagingChannel: (s.messagingChannel ?? base.messagingChannel).toLowerCase(),

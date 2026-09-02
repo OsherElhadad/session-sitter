@@ -364,6 +364,33 @@ async function readTierFile(
   }
 }
 
+/**
+ * How long a cloned set of tier files stays good. Knowledge changes on the order of days; the
+ * supervisor reads it on the order of seconds.
+ */
+export const CLONE_CACHE_TTL_MS = 5 * 60_000;
+
+/**
+ * Fetched tier files, cached per (repo, ref, routing triple).
+ *
+ * Without this, `git clone --depth 1` ran on EVERY classification — the latency audit estimates
+ * 1-5s in front of every decision, to fetch three small markdown files that change maybe weekly.
+ * That was plausibly a larger cost than the model call it preceded.
+ *
+ * The local-checkout path is deliberately NOT cached: it is three file reads, and someone editing
+ * their own knowledge repo should see the edit on the next decision, not in five minutes.
+ *
+ * ponytail: one in-process Map with a TTL and no eviction — the key space is one entry per routing
+ * triple, so it cannot grow meaningfully. Add an LRU if that ever stops being true, and a
+ * cross-process cache only if the CLI's per-invocation cost turns out to matter.
+ */
+const cloneCache = new Map<string, { at: number; files: Record<Tier, TierFile> }>();
+
+/** Drop the cached clones. For tests, and for a caller that knows the knowledge just changed. */
+export function clearKnowledgeCache(): void {
+  cloneCache.clear();
+}
+
 export interface FetchOptions {
   /** Local checkout to read directly, skipping any clone. Preferred — offline and instant. */
   localRepo?: string;
@@ -397,15 +424,23 @@ export async function fetchBdiFiles(
       'no knowledge source configured: set a local knowledge repo path or a git URL');
   }
 
+  const ref = opts.ref ?? DEFAULT_KNOWLEDGE_REF;
+  const key = [opts.repo, ref, user, project, team].join('\u0000');
+  const hit = cloneCache.get(key);
+  if (hit && Date.now() - hit.at < CLONE_CACHE_TTL_MS) { return hit.files; }
+
   const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'kb-sitter-'));
   const clone = path.join(tmp, 'clone');
   try {
     try {
-      await shallowClone(opts.repo, opts.ref ?? DEFAULT_KNOWLEDGE_REF, clone);
+      await shallowClone(opts.repo, ref, clone);
     } catch (err) {
       throw new KnowledgeError(`git clone failed: ${String(err).slice(0, 300)}`);
     }
     for (const tier of TIER_ORDER) { out[tier] = await readTierFile(clone, tier, slugs); }
+    // Only a successful fetch is cached, so a transient git failure is retried rather than
+    // remembered for five minutes.
+    cloneCache.set(key, { at: Date.now(), files: out });
     return out;
   } finally {
     await fs.promises.rm(tmp, { recursive: true, force: true }).catch(() => { /* best-effort */ });

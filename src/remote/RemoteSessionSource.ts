@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import type { ClaudeSession } from '../SessionManager';
+import type { ClaudeSession } from '../sessionScan';
 import type { WindowEntry } from '../WindowRegistry';
 import { bobRowToSession, type BobTaskRow } from '../sessionRows';
 import type { PeerAddress } from './PeerDiscovery';

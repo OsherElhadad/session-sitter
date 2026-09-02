@@ -8,6 +8,8 @@
  * reader keeps working.
  */
 
+import { redactSecrets } from '../corpus/mask';
+
 export const TrafficLight = {
   GREEN: 'green',
   YELLOW: 'yellow',
@@ -76,6 +78,54 @@ export interface RuleTrace {
   response?: string | null;
   /** The pending tool name, when known. */
   tool_name?: string | null;
+}
+
+/**
+ * The tool call a decision judged, as persisted (snake_case on disk, like every record field).
+ *
+ * `input` holds the tool's arguments **after masking** — a record is not file content, so a
+ * credential in a command line or an env assignment is redacted, not shape-preserved.
+ */
+export interface RecordedCall {
+  tool_name: string;
+  input: Record<string, unknown> | null;
+}
+
+/**
+ * Build the record's call from a tool name and its arguments, masking the arguments on the way in.
+ *
+ * Both record writers go through here — the orchestrator's pending action and the deterministic
+ * tier's rule decision — so there is exactly one place where a tool input is redacted before it
+ * reaches disk. No tool name means no call: a call is never invented, and never reconstructed
+ * from an assessment's prose.
+ *
+ * The masking is load-bearing, not incidental: this is a NEW path along which a tool input reaches
+ * a durable file. Today's rules in `src/corpus/mask.ts` miss `sk-ant-`/`sk-proj-` keys containing
+ * an underscore *entirely* (the character sets are `[A-Za-z0-9-]` / `[A-Za-z0-9]`), so such a key
+ * in a command line is written to the record unmasked. Upstream PR #40 fixes exactly those two
+ * character sets; this field's masking is only as good as that. Fix it there, never here — a
+ * second masker would drift out of step with the first.
+ */
+export function recordedCall(
+  toolName: string | null | undefined,
+  args: Record<string, unknown> | null,
+): RecordedCall | null {
+  if (!toolName) { return null; }
+  return {
+    tool_name: toolName,
+    input: args === null ? null : redactDeep(args) as Record<string, unknown>,
+  };
+}
+
+/** Redact credentials in every string the input holds, at any depth. */
+function redactDeep(v: unknown): unknown {
+  if (typeof v === 'string') { return redactSecrets(v); }
+  if (Array.isArray(v)) { return v.map(redactDeep); }
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, redactDeep(x)]));
+  }
+  return v;
 }
 
 export interface EvidenceRef {
@@ -211,6 +261,17 @@ export interface SupervisionRecord {
   decided_by: string;
   /** Present only when `decided_by === 'rule'`: which rule fired and what it did. */
   rule: RuleTrace | null;
+  /**
+   * The tool call this decision judged, when known. Additive and nullable: records written before
+   * this field existed have none, and a pending action the transcript never showed leaves it null
+   * — so no reader may assume it is set. It is the only structured tool identity a
+   * supervisor-decided record carries (`source` is the channel; `rule.tool_name` exists only for
+   * the deterministic tier), which is what lets the audit trail say what was actually allowed.
+   *
+   * TODO: the normalised call *shape* an offline miner keys on belongs with
+   * `src/policy/generalise.ts`, not here — this field is the seam it reads.
+   */
+  call: RecordedCall | null;
   created_at: string; // ISO 8601, UTC
   updated_at: string; // ISO 8601, UTC
   // Resolved knowledge routing triple.
@@ -265,6 +326,7 @@ export function newRecord(fields: {
     host: null,
     decided_by: DecidedBy.SUPERVISOR,
     rule: null,
+    call: null,
     user: null,
     project: null,
     team: null,
@@ -308,5 +370,17 @@ export function recordFrom(d: Record<string, unknown>): SupervisionRecord {
     created_at: String(d.created_at ?? ''),
     updated_at: String(d.updated_at ?? ''),
     decided_by: String(d.decided_by ?? DecidedBy.SUPERVISOR),
+    call: callFrom(d.call),
   });
+}
+
+/** Parse a persisted call. An older record has none, and a hand-edited one may hold anything. */
+function callFrom(v: unknown): RecordedCall | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) { return null; }
+  const d = v as Record<string, unknown>;
+  const toolName = nullableStr(d.tool_name);
+  if (toolName === null) { return null; } // a call with no tool identity records nothing
+  const input = d.input;
+  const isPlainObject = input !== null && typeof input === 'object' && !Array.isArray(input);
+  return { tool_name: toolName, input: isPlainObject ? input as Record<string, unknown> : null };
 }
