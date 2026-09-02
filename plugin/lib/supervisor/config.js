@@ -45,7 +45,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_BOB_CLI_PATH = exports.DEFAULT_SUPERVISOR_ENGINE = exports.DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = exports.DEFAULT_CLAUDE_CLI_PATH = exports.DEFAULT_ORANGE_TIMEOUT_MINUTES = void 0;
+exports.DEFAULT_BOB_CLI_PATH = exports.DEFAULT_FAST_CLASSIFIER_TIMEOUT_SECONDS = exports.DEFAULT_SUPERVISOR_ENGINE = exports.DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = exports.DEFAULT_CLAUDE_CLI_PATH = exports.DEFAULT_ORANGE_TIMEOUT_MINUTES = void 0;
 exports.historyDir = historyDir;
 exports.outboxDir = outboxDir;
 exports.inboxDir = inboxDir;
@@ -62,6 +62,8 @@ exports.DEFAULT_CLAUDE_CLI_PATH = 'claude';
 exports.DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = 300;
 /** "bob" (IBM Bob Shell) | "claude" (Claude Code) */
 exports.DEFAULT_SUPERVISOR_ENGINE = 'bob';
+/** The fast tier is a single HTTP call; past this it is no longer the fast path. */
+exports.DEFAULT_FAST_CLASSIFIER_TIMEOUT_SECONDS = 10;
 exports.DEFAULT_BOB_CLI_PATH = 'bob';
 function historyDir(c) { return path.join(c.stateDir, 'history'); }
 function outboxDir(c) { return path.join(c.stateDir, 'outbox'); }
@@ -150,6 +152,11 @@ function loadConfig(overrides = {}) {
         bobShellApiKey: get(env, 'BOBSHELL_API_KEY') ?? get(env, 'BOB_API_KEY') ?? null,
         anthropicBaseUrl: get(env, 'ANTHROPIC_BASE_URL') ?? null,
         anthropicAuthToken: get(env, 'ANTHROPIC_AUTH_TOKEN') ?? null,
+        agentModel: get(env, 'ANTHROPIC_MODEL') ?? null,
+        fastClassifierEnabled: getBool(env, 'FAST_CLASSIFIER', true),
+        fastClassifierModel: get(env, 'FAST_CLASSIFIER_MODEL') ?? null,
+        fastClassifierTimeoutSeconds: getInt(env, 'FAST_CLASSIFIER_TIMEOUT_SECONDS', exports.DEFAULT_FAST_CLASSIFIER_TIMEOUT_SECONDS),
+        fastClassifierBaseUrl: get(env, 'FAST_CLASSIFIER_BASE_URL') ?? null,
         messagingChannel: (get(env, 'MESSAGING_CHANNEL', 'stub') ?? 'stub').toLowerCase(),
         redNotify: getBool(env, 'RED_NOTIFY', true),
         notifyRuleDecisions: getBool(env, 'NOTIFY_RULE_DECISIONS', true),

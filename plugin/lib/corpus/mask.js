@@ -76,16 +76,21 @@ const B64URL = `${B62}-_`;
  */
 exports.RULES = [
     { name: 'pem_private_key', regex: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g, group: 0 },
-    { name: 'github_pat_fine', regex: /\bgithub_pat_[A-Za-z0-9_]{82}\b/g, group: 0 },
-    { name: 'github_pat_classic', regex: /\bghp_[A-Za-z0-9]{36}\b/g, group: 0 },
-    { name: 'github_oauth', regex: /\bgh[ousr]_[A-Za-z0-9]{36}\b/g, group: 0 },
-    { name: 'anthropic_key', regex: /\bsk-ant-[A-Za-z0-9-]{20,}\b/g, group: 0 },
-    { name: 'openai_key', regex: /\bsk-(?:proj-)?[A-Za-z0-9]{20,}\b/g, group: 0 },
-    { name: 'aws_access_key_id', regex: /\bAKIA[0-9A-Z]{16}\b/g, group: 0 },
-    { name: 'aws_secret_access_key', regex: /(?:aws_secret_access_key|aws_secret_key)\s*[:=]\s*['"]?([A-Za-z0-9/+]{40})\b/gi, group: 1 },
-    { name: 'google_api_key', regex: /\bAIza[0-9A-Za-z_-]{35}\b/g, group: 0 },
-    { name: 'slack_token', regex: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g, group: 0 },
-    { name: 'jwt', regex: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b/g, group: 0 },
+    { name: 'github_pat_fine', regex: /\bgithub_pat_[A-Za-z0-9_]{82}(?![A-Za-z0-9_])/g, group: 0 },
+    { name: 'github_pat_classic', regex: /\bghp_[A-Za-z0-9]{36}(?![A-Za-z0-9])/g, group: 0 },
+    { name: 'github_oauth', regex: /\bgh[ousr]_[A-Za-z0-9]{36}(?![A-Za-z0-9])/g, group: 0 },
+    // `sk-ant-` and `sk-proj-` bodies are base64url, so they contain `_` as well as `-`. Omitting
+    // `_` from the class did not merely truncate the match, it lost the key entirely: the run before
+    // the first `_` is shorter than the {20,} minimum, so nothing matched at all.
+    { name: 'anthropic_key', regex: /\bsk-ant-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g, group: 0 },
+    // `(?!ant-)` stops this rule swallowing an Anthropic key now that its class includes `-`.
+    // Either rule would mask the value; only this one would mislabel it in the report.
+    { name: 'openai_key', regex: /\bsk-(?!ant-)(?:proj-)?[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g, group: 0 },
+    { name: 'aws_access_key_id', regex: /\bAKIA[0-9A-Z]{16}(?![0-9A-Z])/g, group: 0 },
+    { name: 'aws_secret_access_key', regex: /(?:aws_secret_access_key|aws_secret_key)\s*[:=]\s*['"]?([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+])/gi, group: 1 },
+    { name: 'google_api_key', regex: /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g, group: 0 },
+    { name: 'slack_token', regex: /\bxox[baprs]-[0-9A-Za-z-]{10,}(?![0-9A-Za-z-])/g, group: 0 },
+    { name: 'jwt', regex: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}(?![A-Za-z0-9_-])/g, group: 0 },
     { name: 'bearer_token', regex: /(?:bearer|token)\s+([A-Za-z0-9._-]{20,})/gi, group: 1 },
 ];
 /** Deterministic pseudo-random string of `length` chars drawn from `charset`. */
@@ -118,9 +123,9 @@ function makeReplacement(name, secret) {
         case 'github_pat_fine': return fill('github_pat_', secret, B62);
         case 'github_pat_classic': return fill('ghp_', secret, B62);
         case 'github_oauth': return fill(secret.slice(0, 4), secret, B62); // keep gho_/ghu_/ghs_/ghr_
-        case 'anthropic_key': return fill('sk-ant-', secret, `${B62}-`);
+        case 'anthropic_key': return fill('sk-ant-', secret, B64URL);
         case 'openai_key':
-            return fill(secret.startsWith('sk-proj-') ? 'sk-proj-' : 'sk-', secret, B62);
+            return fill(secret.startsWith('sk-proj-') ? 'sk-proj-' : 'sk-', secret, B64URL);
         case 'aws_access_key_id': return fill('AKIA', secret, B62_UPPER);
         case 'aws_secret_access_key': return fill('', secret, B62);
         case 'google_api_key': return fill('AIza', secret, B64URL);
