@@ -165,8 +165,10 @@ export function canonicalJson(value: unknown): string {
  *  - `built_at` — a timestamp in the hash would give every recompile a new revision and defeat the
  *    entire point: recompiling an unchanged corpus must leave the cache warm.
  *  - `corpus_ref` — the git SHA is *recorded* so the markdown stays recoverable, but it is not the
- *    identity. Two commits with identical clause content must compile to the same revision, or a
- *    no-op commit invalidates every running session's prefix for nothing.
+ *    identity. It is volatile in exactly the way that matters: two commits with identical clause
+ *    content must compile to the same revision, or a no-op commit moves the revision and invalidates
+ *    every running session's cached prefix for nothing. Excluding it is what makes a content hash a
+ *    content hash. **Do not add it back for completeness.**
  *
  * `prompt_core` **is** inside the hash, because it is the bytes the cache holds. If the core
  * changes the revision must change — the cache is supposed to be invalidated then.
@@ -251,6 +253,11 @@ export interface CompileInput {
   corpusRef?: string | null;
   /** ISO date. Expiry is evaluated against it, never against a clock inside the hash. */
   today: string;
+  /**
+   * The revision the runtime is serving right now, named in an expiry error so whoever reads it at
+   * 02:00 knows a refused compile changed nothing. Null when nothing is published yet.
+   */
+  servingRevision?: string | null;
   /** Injected so a test can pin it. Outside the hash either way. */
   builtAt?: string;
 }
@@ -331,6 +338,32 @@ function learnedClause(file: LearnedClauseFile): { clause: CompiledClause; specs
   };
 }
 
+function daysBetween(from: string, to: string): number {
+  return Math.round((Date.parse(to) - Date.parse(from)) / 86400000);
+}
+
+/**
+ * The expiry finding, written to be actionable at 02:00 rather than merely correct.
+ *
+ * Someone hitting this is blocked from publishing and needs four things in the text itself, not in a
+ * doc they have to go find: which clause and where it lives, how stale it is, both remedies, and —
+ * the part that stops a panic — that nothing is live-broken. A refused compile changes nothing: the
+ * runtime keeps serving the revision it already has, and `policy block` is a channel outside the
+ * artifact, so incident response never waits on a compile.
+ */
+function expiredMessage(clause: CompiledClause, input: CompileInput): string {
+  const stale = daysBetween(clause.expires ?? input.today, input.today);
+  const serving = input.servingRevision
+    ? `the runtime keeps serving ${input.servingRevision}`
+    : 'nothing is published yet, so no live policy changes';
+  return `${clause.citation}: expired on ${clause.expires} (${stale} day${stale === 1 ? '' : 's'} `
+    + `ago), ${clause.source_file ?? 'unknown file'}.\n`
+    + '    Two remedies, both a reviewed diff: extend `expires:` through review, or retire it '
+    + '(`status: retired` + `retired_reason: manual`).\n'
+    + `    A refused compile blocks nothing that is already live — ${serving}, and \`policy block\` `
+    + 'is outside the artifact, so incident response does not wait on this.';
+}
+
 /**
  * Compile the corpus, or refuse.
  *
@@ -403,8 +436,10 @@ export function compilePolicy(input: CompileInput): CompileResult {
         warnings.push(`${clause.citation}: \`expires: ${clause.expires}\` is not an ISO date, so `
           + 'it will never expire');
       } else if (clause.expires < input.today) {
-        errors.push(`${clause.citation}: expired on ${clause.expires}. Renew it (\`expires\`) or `
-          + 'retire it — a rule leaving service is a reviewed diff, not the passage of time');
+        // An audit clause is inert — never rendered, and its verdict never counted. It does not get
+        // to halt a publish; it simply refuses to be promoted while it is lapsed.
+        const message = expiredMessage(clause, input);
+        if (clause.status === 'audit') { warnings.push(message); } else { errors.push(message); }
       }
     }
 
@@ -561,6 +596,10 @@ export function loadPolicy(
   }
   if (!Array.isArray(policy.clauses)) { return { policy: null, reason: 'no clauses array' }; }
   // The revision is deliberately *not* recomputed here — see `verifyPolicy` for the measurement.
+  // What *does* run on every load, and is now the only structural check between the file and a
+  // decision: `JSON.parse`, the `schema_version` match, the clauses-array shape, and the routing
+  // triple below. The residual is stated plainly so nobody discovers it later — a corrupt but
+  // *parsable* artifact with a matching schema and routing is trusted on the hot path.
   if (expected && (policy.routing.user !== expected.user
     || policy.routing.project !== expected.project
     || policy.routing.team !== expected.team)) {

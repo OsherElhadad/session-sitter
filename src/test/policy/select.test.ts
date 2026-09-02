@@ -175,7 +175,7 @@ describe('expiry prunes the prompt and never disarms a block', () => {
 describe('the fill order is total', () => {
   const patternless = (over: Partial<CompiledClause>) => clause({ patterns: [], ...over });
 
-  it('orders by tier, then frozen weight, then id', () => {
+  it('orders by origin, then tier, then frozen weight, then id', () => {
     const s = select([
       patternless({ id: 'c-team-low', tier: 'team', weight: 1 }),
       patternless({ id: 'a-user', tier: 'user', weight: 0 }),
@@ -184,6 +184,16 @@ describe('the fill order is total', () => {
     ]);
     expect(s.selected.map(c => c.id))
       .toEqual(['a-user', 'a-project', 'b-team-high', 'c-team-low']);
+  });
+
+  it('never renders a machine clause above a human one, whatever the weight says', () => {
+    // Rendering order only — precedence is the ladder's job. But a reviewer seeing a learned clause
+    // listed first will conclude precedence is broken, so the rendered order agrees with the ladder.
+    const s = select([
+      patternless({ id: 'learned-heavy', origin: 'learned', tier: 'user', weight: 100 }),
+      patternless({ id: 'human-light', origin: 'human', tier: 'team', weight: 0 }),
+    ]);
+    expect(s.selected.map(c => c.id)).toEqual(['human-light', 'learned-heavy']);
   });
 
   it('puts matched clauses before the patternless fill', () => {

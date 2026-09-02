@@ -321,8 +321,32 @@ describe('compile refuses, and emits nothing at all', () => {
   });
 
   it('refuses an expired accepted clause: leaving service is a diff, not the passage of time', () => {
-    const errors = refused({ learned: [learned({ frontmatter: 'expires: 2026-01-01\n' })] });
-    expect(errors).toContain('expired on 2026-01-01');
+    const errors = refused({
+      learned: [learned({ frontmatter: 'expires: 2026-01-01\n' })],
+      servingRevision: 'sha256:abc1234',
+    });
+    // Actionable at 02:00, not merely correct: how stale, which file, both remedies, and the fact
+    // that a refused compile has changed nothing that is live.
+    expect(errors).toContain('expired on 2026-01-01 (244 days ago)');
+    expect(errors).toContain('learned/no-force-push.md');
+    expect(errors).toContain('extend `expires:` through review');
+    expect(errors).toContain('`retired_reason: manual`');
+    expect(errors).toContain('the runtime keeps serving sha256:abc1234');
+    expect(errors).toContain('`policy block` is outside the artifact');
+  });
+
+  it('says so plainly when nothing is published yet', () => {
+    expect(refused({ learned: [learned({ frontmatter: 'expires: 2026-01-01\n' })] }))
+      .toContain('nothing is published yet');
+  });
+
+  it('does not let a lapsed audit clause halt a publish — an inert clause has no such power', () => {
+    const result = compilePolicy(input({
+      learned: [learned({ status: 'audit', frontmatter: 'expires: 2026-01-01\n' })],
+    }));
+    expect(result.errors).toEqual([]);
+    expect(result.warnings.join('\n')).toContain('expired on 2026-01-01');
+    expect(result.policy?.clauses).toHaveLength(1);
   });
 
   it('accepts a clause whose expiry is still ahead', () => {
