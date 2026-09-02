@@ -74,7 +74,7 @@ status: ${status}
 level: ${level}
 evidence: EXTRACTED
 support: 47
-weight: 47
+weight: high
 contradictions: 0
 learned_at: 2026-08-30
 adopted_at: 2026-09-01
@@ -244,9 +244,23 @@ describe('what reaches the artifact', () => {
     }
   });
 
+  it('rejects a numeric weight, because three buckets are what cannot be recomputed', () => {
+    const parsed = parseLearnedClause(learnedText().replace('weight: high', 'weight: 47'), 'team',
+      'data/knowledge/teams/payments/learned/no-force-push.md');
+    expect(parsed.findings.some(f => f.severity === 'error' && f.message.includes('weight: 47')))
+      .toBe(true);
+  });
+
+  it('reads an absent weight as the lowest bucket', () => {
+    const text = learnedText().replace('weight: high\n', '');
+    const parsed = parseLearnedClause(text, 'team',
+      'data/knowledge/teams/payments/learned/no-force-push.md');
+    expect(parsed.clause?.weight).toBe('low');
+  });
+
   it('carries the frozen weight and the deletion dossier', () => {
     const clause = ok({ learned: [learned()] }).clauses[0];
-    expect(clause.weight).toBe(47);
+    expect(clause.weight).toBe('high');
     expect(clause.deletable).toEqual({ decisions: ['d-8f21e0', 'd-8f2244'], validation: null });
   });
 

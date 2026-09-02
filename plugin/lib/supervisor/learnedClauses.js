@@ -92,6 +92,7 @@ exports.CLAUSE_STATUSES = [
     'proposed', 'audit', 'accepted', 'declined', 'superseded', 'retired',
 ];
 const RETIRED_REASONS = ['ablation', 'displacement', 'manual'];
+const CLAUSE_WEIGHTS = ['high', 'medium', 'low'];
 const EVIDENCE_TAGS = ['EXTRACTED', 'INFERRED', 'AMBIGUOUS'];
 const CLAUSE_LEVELS = ['red', 'orange', 'yellow', 'green'];
 function hasErrors(findings) {
@@ -448,7 +449,16 @@ function parseLearnedClause(text, tier, sourceFile) {
     };
     const support = count('support');
     const contradictions = count('contradictions');
-    const weight = count('weight');
+    const weightRaw = scalar('weight');
+    let weight = 'low';
+    if (weightRaw !== null) {
+        if (CLAUSE_WEIGHTS.includes(weightRaw)) {
+            weight = weightRaw;
+        }
+        else {
+            err(at('weight'), `unknown \`weight: ${weightRaw}\` (expected ${CLAUSE_WEIGHTS.join(', ')})`);
+        }
+    }
     if (scalar('contradictions') === null) {
         // A missing count is the *optimistic* reading, so it is worth saying out loud.
         warn(null, 'no `contradictions` count — absent reads as 0, which is the optimistic assumption');

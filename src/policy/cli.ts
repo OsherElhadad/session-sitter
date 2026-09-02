@@ -37,7 +37,8 @@ const USAGE = `session-sitter policy — lint a practices file, or compile the c
 
 Usage:
   check <practices.md> [--replay] [--limit N]
-  compile [--corpus DIR] [--user U] [--project P] [--team T] [--registry FILE] [--dry-run]
+  compile [--corpus DIR] [--user U] [--project P] [--team T] [--registry FILE]
+          [--data-dir DIR] [--dry-run]
 
 Options:
   --replay        re-decide the recorded decisions with this file's clauses
@@ -47,6 +48,8 @@ Options:
   --project P
   --team T
   --registry FILE registry markdown validating the triple
+  --data-dir DIR  where to publish the artifact (default: $SESSION_SITTER_DATA_DIR,
+                  else ~/.claude/session-sitter)
   --dry-run       compile and report, write no artifact
   -h, --help      show this help
 `;
@@ -142,6 +145,32 @@ function flag(argv: string[], name: string): string | null {
 }
 
 /**
+ * Refuse a flag this command does not know.
+ *
+ * Accepting one and ignoring it is the worst available behaviour for a tool whose entire pitch is
+ * not surprising the user: the command looks like it worked, and it wrote somewhere else. That is
+ * not hypothetical — `--data-dir` was not a flag, so a compile aimed at a scratch directory silently
+ * published into the user's live `~/.claude/session-sitter/`, and cleaning it up needed a `rm -rf`
+ * inside a live config tree.
+ */
+function unknownFlag(argv: string[], known: readonly string[]): string | null {
+  return argv.find(a => a.startsWith('--') && !known.includes(a.slice(2))) ?? null;
+}
+
+function rejectUnknownFlags(argv: string[], known: readonly string[]): number | null {
+  const bad = unknownFlag(argv, known);
+  if (bad === null) { return null; }
+  process.stderr.write(`unknown option: ${bad}\n\n`
+    + `known options: ${known.map(k => `--${k}`).join(', ')}\n\n${USAGE}`);
+  return 2;
+}
+
+const COMPILE_FLAGS = [
+  'corpus', 'user', 'project', 'team', 'registry', 'data-dir', 'dry-run',
+] as const;
+const CHECK_FLAGS = ['replay', 'limit'] as const;
+
+/**
  * Compile the corpus into the artifact, or refuse.
  *
  * Exit 1 with nothing written is the *designed* outcome for a malformed corpus, and the asymmetry
@@ -150,6 +179,14 @@ function flag(argv: string[], name: string): string | null {
  * proposal from weakening production for even one decision.
  */
 export async function compile(argv: string[]): Promise<number> {
+  const rejected = rejectUnknownFlags(argv, COMPILE_FLAGS);
+  if (rejected !== null) { return rejected; }
+
+  // `dataDir()` reads the environment, so the flag is the front door onto the same mechanism rather
+  // than a second one. Set before anything resolves a path.
+  const dataDirFlag = flag(argv, 'data-dir');
+  if (dataDirFlag) { process.env.SESSION_SITTER_DATA_DIR = dataDirFlag; }
+
   const settings = loadSettings(process.env);
   const corpus = flag(argv, 'corpus') ?? settings.supervisor.knowledgeLocalRepo;
   const user = flag(argv, 'user') ?? settings.user;
@@ -213,6 +250,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     process.stderr.write(`check needs a practices file\n\n${USAGE}`);
     return 2;
   }
+  const badFlag = rejectUnknownFlags(argv.slice(2), CHECK_FLAGS);
+  if (badFlag !== null) { return badFlag; }
   const wantReplay = argv.includes('--replay');
   const limitAt = argv.indexOf('--limit');
   const limit = limitAt >= 0 ? Number.parseInt(argv[limitAt + 1] ?? '50', 10) || 50 : 50;

@@ -42,7 +42,7 @@ function clause(over: Partial<CompiledClause> = {}): CompiledClause {
     body: 'Rewriting history on a branch other people build on destroys their work.',
     patterns: [{ raw: 'git push --force', is_regex: false, flags: 'i' }],
     fix: null,
-    weight: 0,
+    weight: 'low',
     expires: null,
     supersedes: [],
     source_file: `data/knowledge/teams/payments/learned/${id}.md`,
@@ -175,12 +175,12 @@ describe('expiry prunes the prompt and never disarms a block', () => {
 describe('the fill order is total', () => {
   const patternless = (over: Partial<CompiledClause>) => clause({ patterns: [], ...over });
 
-  it('orders by origin, then tier, then frozen weight, then id', () => {
+  it('orders by origin, then tier, then the frozen weight bucket, then id', () => {
     const s = select([
-      patternless({ id: 'c-team-low', tier: 'team', weight: 1 }),
-      patternless({ id: 'a-user', tier: 'user', weight: 0 }),
-      patternless({ id: 'b-team-high', tier: 'team', weight: 90 }),
-      patternless({ id: 'a-project', tier: 'project', weight: 0 }),
+      patternless({ id: 'c-team-low', tier: 'team', weight: 'low' }),
+      patternless({ id: 'a-user', tier: 'user', weight: 'low' }),
+      patternless({ id: 'b-team-high', tier: 'team', weight: 'high' }),
+      patternless({ id: 'a-project', tier: 'project', weight: 'low' }),
     ]);
     expect(s.selected.map(c => c.id))
       .toEqual(['a-user', 'a-project', 'b-team-high', 'c-team-low']);
@@ -190,8 +190,8 @@ describe('the fill order is total', () => {
     // Rendering order only — precedence is the ladder's job. But a reviewer seeing a learned clause
     // listed first will conclude precedence is broken, so the rendered order agrees with the ladder.
     const s = select([
-      patternless({ id: 'learned-heavy', origin: 'learned', tier: 'user', weight: 100 }),
-      patternless({ id: 'human-light', origin: 'human', tier: 'team', weight: 0 }),
+      patternless({ id: 'learned-heavy', origin: 'learned', tier: 'user', weight: 'high' }),
+      patternless({ id: 'human-light', origin: 'human', tier: 'team', weight: 'low' }),
     ]);
     expect(s.selected.map(c => c.id)).toEqual(['human-light', 'learned-heavy']);
   });
@@ -203,7 +203,8 @@ describe('the fill order is total', () => {
 
   it('is a pure function of its inputs, whatever order the clauses arrive in', () => {
     const clauses = Array.from({ length: 12 }, (_, i) => patternless({
-      id: `pay-fill-${String(i).padStart(2, '0')}`, weight: i % 4, tier: ['team', 'project', 'user'][i % 3],
+      id: `pay-fill-${String(i).padStart(2, '0')}`,
+      weight: (['high', 'medium', 'low'] as const)[i % 3], tier: ['team', 'project', 'user'][i % 3],
     }));
     const forward = select(clauses).selected.map(c => c.id);
     const backward = select([...clauses].reverse()).selected.map(c => c.id);

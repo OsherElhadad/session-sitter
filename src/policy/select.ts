@@ -101,6 +101,7 @@ export function matchingClauses(
 
 const TIER_RANK: Record<string, number> = { user: 2, project: 1, team: 0 };
 const ORIGIN_RANK: Record<string, number> = { human: 0, learned: 1 };
+const WEIGHT_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
 /**
  * The fill order: **origin**, then narrowness, then the frozen weight, then the id. A total order,
@@ -121,7 +122,7 @@ const ORIGIN_RANK: Record<string, number> = { human: 0, learned: 1 };
 export function compareFill(a: CompiledClause, b: CompiledClause): number {
   return ((ORIGIN_RANK[a.origin] ?? 9) - (ORIGIN_RANK[b.origin] ?? 9))
     || ((TIER_RANK[b.tier] ?? 0) - (TIER_RANK[a.tier] ?? 0))
-    || (b.weight - a.weight)
+    || ((WEIGHT_RANK[a.weight] ?? 9) - (WEIGHT_RANK[b.weight] ?? 9))
     || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 

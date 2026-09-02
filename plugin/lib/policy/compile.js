@@ -241,7 +241,9 @@ function humanClause(entry) {
             body: (0, learnedClauses_1.rationaleOf)(entry),
             patterns: patternsOf(specs),
             fix: null,
-            weight: 0,
+            // A hand-written clause has no evidence to weigh. It does not sort last for it: `origin` leads
+            // the rendering order, so a human clause is above every learned one whatever its bucket.
+            weight: 'low',
             expires: entry.expires,
             supersedes: splitList(entry.supersedes),
             source_file: entry.sourceFile,
