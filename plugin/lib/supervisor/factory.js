@@ -44,11 +44,13 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildChannel = buildChannel;
 exports.buildEngine = buildEngine;
+exports.buildFastClassifier = buildFastClassifier;
 exports.buildOrchestrator = buildOrchestrator;
 const path = __importStar(require("path"));
 const agentControl_1 = require("./agentControl");
 const config_1 = require("./config");
 const engine_1 = require("./engine");
+const fastClassifier_1 = require("./fastClassifier");
 const messaging_1 = require("./messaging");
 const orchestrator_1 = require("./orchestrator");
 const store_1 = require("./store");
@@ -95,6 +97,33 @@ function buildEngine(config) {
         apiKey: config.bobShellApiKey,
     });
 }
+/**
+ * The fast HTTP tier, or undefined when it cannot run — disabled, or missing the gateway, token
+ * or model it needs. Undefined is not a failure: the orchestrator simply keeps the two tiers it
+ * always had, and the agent CLI classifies ambiguous actions as before.
+ */
+function buildFastClassifier(config, log = () => { }) {
+    if (!config.fastClassifierEnabled) {
+        return undefined;
+    }
+    const baseUrl = config.fastClassifierBaseUrl || config.anthropicBaseUrl;
+    const model = (0, fastClassifier_1.supervisorModel)(config.agentModel, config.fastClassifierModel);
+    const missing = [
+        baseUrl ? '' : 'a gateway base URL',
+        config.anthropicAuthToken ? '' : 'an auth token',
+        model ? '' : "the agent's model",
+    ].filter(m => m !== '');
+    if (missing.length > 0) {
+        log(`fast classifier: off — missing ${missing.join(', ')}`);
+        return undefined;
+    }
+    return new fastClassifier_1.HttpFastClassifier({
+        baseUrl: baseUrl,
+        authToken: config.anthropicAuthToken,
+        model: model,
+        timeoutSeconds: config.fastClassifierTimeoutSeconds,
+    });
+}
 function buildOrchestrator(opts) {
     const { config } = opts;
     (0, config_1.ensureDirs)(config);
@@ -104,6 +133,7 @@ function buildOrchestrator(opts) {
         store: new store_1.StateStore((0, config_1.recordsDir)(config)),
         transcriptSource: new transcript_1.FileTranscriptSource((0, config_1.historyDir)(config), opts.transcriptOverride),
         engine: opts.engine ?? buildEngine(config),
+        fastClassifier: opts.fastClassifier ?? buildFastClassifier(config, log),
         channel: opts.channel ?? buildChannel(config, log),
         agentController: opts.agentController
             ?? new agentControl_1.OutboxAgentController((0, config_1.outboxDir)(config), opts.onDelivered),

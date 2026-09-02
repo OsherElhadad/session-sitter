@@ -12,6 +12,9 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.OUTPUT_SCHEMA = void 0;
+exports.renderKnowledge = renderKnowledge;
+exports.renderTurn = renderTurn;
+exports.renderPending = renderPending;
 exports.buildSupervisionPrompt = buildSupervisionPrompt;
 exports.buildResolutionPrompt = buildResolutionPrompt;
 exports.buildTimeoutFallbackPrompt = buildTimeoutFallbackPrompt;
@@ -131,23 +134,28 @@ function renderKnowledge(entries) {
         return `- ${meta}\n  ${e.title}: ${e.text}`.replace(/\s+$/, '');
     }).join('\n');
 }
+/**
+ * One turn's body, without its `[index] role` header. Shared with the fast tier, which carries
+ * the role on the message itself and so needs the body alone.
+ */
+function renderTurn(t) {
+    let body = t.text.trim();
+    if (t.toolCalls.length) {
+        const calls = t.toolCalls.map(c => `${c.name}(${JSON.stringify(c.arguments).slice(0, 400)})`
+            + (c.permission ? ` perm=${c.permission}` : '')).join('; ');
+        body = `${body}\n    tool_calls: ${calls}`.trim();
+    }
+    if (t.toolResult !== null) {
+        body = `${body}\n    tool_result[${t.toolResult.name}] `
+            + `error=${t.toolResult.isError ? 'True' : 'False'}: ${t.toolResult.content.slice(0, 400)}`;
+        body = body.trim();
+    }
+    return body;
+}
 function renderTurns(session, maxTurns = 40) {
-    const turns = session.turns.slice(-maxTurns);
-    return turns.map(t => {
-        const header = `[${t.index}] ${t.role}`;
-        let body = t.text.trim();
-        if (t.toolCalls.length) {
-            const calls = t.toolCalls.map(c => `${c.name}(${JSON.stringify(c.arguments).slice(0, 400)})`
-                + (c.permission ? ` perm=${c.permission}` : '')).join('; ');
-            body = `${body}\n    tool_calls: ${calls}`.trim();
-        }
-        if (t.toolResult !== null) {
-            body = `${body}\n    tool_result[${t.toolResult.name}] `
-                + `error=${t.toolResult.isError ? 'True' : 'False'}: ${t.toolResult.content.slice(0, 400)}`;
-            body = body.trim();
-        }
-        return `${header}: ${body}`;
-    }).join('\n');
+    return session.turns.slice(-maxTurns)
+        .map(t => `[${t.index}] ${t.role}: ${renderTurn(t)}`)
+        .join('\n');
 }
 function renderPending(session) {
     const p = session.pendingAction;

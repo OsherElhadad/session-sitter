@@ -6,11 +6,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
   EMPTY_REGISTRY,
   KnowledgeError,
+  clearKnowledgeCache,
   entryPrecedence,
   fetchBdiFiles,
   isEmptyRegistry,
@@ -222,6 +224,65 @@ describe('fetchBdiFiles from a local checkout', () => {
   it('fails loud when no source is configured at all', async () => {
     await expect(fetchBdiFiles(USER, PROJECT, TEAM, {}))
       .rejects.toThrow(/no knowledge source configured/);
+  });
+});
+
+describe('fetchBdiFiles from a git URL', () => {
+  /** A real git repo holding the three tier files on `main`. No network: cloned by path. */
+  function makeGitRepo(root: string, marker: string): string {
+    makeKnowledgeRepo(root);
+    fs.writeFileSync(
+      path.join(root, `data/knowledge/users/${USER}/bottom-line.md`),
+      bottomLine('user', marker, 'green'), 'utf8');
+    const git = (...args: string[]): void => {
+      execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@e', ...args], { cwd: root });
+    };
+    execFileSync('git', ['init', '-q', '-b', 'main', root]);
+    git('add', '-A');
+    git('commit', '-qm', marker);
+    return root;
+  }
+
+  beforeEach(() => { clearKnowledgeCache(); });
+  afterEach(() => { clearKnowledgeCache(); });
+
+  it('clones once and serves later calls from cache, instead of cloning per decision', async () => {
+    // The audit measured a `git clone --depth 1` on EVERY classification — 1-5s in front of every
+    // decision. The proof that it is gone is that a change committed upstream is NOT picked up
+    // while the entry is still warm: that can only happen if no second clone ran.
+    const repo = makeGitRepo(path.join(tmp, 'repo'), 'user-before');
+    const first = await fetchBdiFiles(USER, PROJECT, TEAM, { repo, ref: 'main' });
+    expect(first.user.content).toContain('user-before');
+
+    fs.writeFileSync(
+      path.join(repo, `data/knowledge/users/${USER}/bottom-line.md`),
+      bottomLine('user', 'user-after', 'green'), 'utf8');
+    execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@e', 'commit', '-qam', 'after'],
+      { cwd: repo });
+
+    const cached = await fetchBdiFiles(USER, PROJECT, TEAM, { repo, ref: 'main' });
+    expect(cached.user.content).toContain('user-before'); // no second clone ran
+
+    clearKnowledgeCache();
+    const fresh = await fetchBdiFiles(USER, PROJECT, TEAM, { repo, ref: 'main' });
+    expect(fresh.user.content).toContain('user-after');
+  });
+
+  it('keys the cache by routing triple, so a different session is not served the wrong files', async () => {
+    const repo = makeGitRepo(path.join(tmp, 'repo'), 'user-x');
+    await fetchBdiFiles(USER, PROJECT, TEAM, { repo, ref: 'main' });
+    const other = await fetchBdiFiles('nobody', PROJECT, TEAM, { repo, ref: 'main' });
+    expect(other.user.exists).toBe(false); // its own clone+read, not the first triple's answer
+  });
+
+  it('does not cache a failed clone, so a transient git error is retried', async () => {
+    const missing = path.join(tmp, 'no-such-repo');
+    await expect(fetchBdiFiles(USER, PROJECT, TEAM, { repo: missing, ref: 'main' }))
+      .rejects.toThrow(/git clone failed/);
+    const repo = makeGitRepo(path.join(tmp, 'repo'), 'user-ok');
+    fs.renameSync(repo, missing);
+    const files = await fetchBdiFiles(USER, PROJECT, TEAM, { repo: missing, ref: 'main' });
+    expect(files.user.content).toContain('user-ok');
   });
 });
 

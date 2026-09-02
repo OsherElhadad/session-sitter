@@ -19,10 +19,12 @@ import { DeliveryError, MessagingChannel } from './messaging';
 import {
   AssessmentInput,
   DecidedBy,
+  RecordedCall,
   RuleTrace,
   SupervisionRecord,
   SupervisionState,
   TrafficLight,
+  recordedCall,
 } from './models';
 import { hostFromPeer, localHostName, sessionNameFrom, shortHost } from './sessionIdentity';
 import { StateStore } from './store';
@@ -107,6 +109,33 @@ export function ruleActionLabel(d: RuleDecision): string {
 function truncate(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+/**
+ * The pending call a rule acted on, for the record's `call` field.
+ *
+ * `rule.tool_name` alone cannot answer "what exactly ran?" any better than a supervisor record
+ * could without this, so the deterministic tier records the call in the same shape. The arguments
+ * arrive as a JSON string (that is all the auto-responder carries); if they do not parse, the tool
+ * name is still recorded with a null input — a field that is sometimes structured and sometimes a
+ * raw string is worse than one that is sometimes absent. Text rules resolve no tool, so they have
+ * no call.
+ */
+export function ruleCall(d: RuleDecision): RecordedCall | null {
+  if (d.kind === 'text') { return null; }
+  let args: Record<string, unknown> | null = null;
+  const text = (d.argsText ?? '').trim();
+  if (text) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        args = parsed as Record<string, unknown>;
+      }
+    } catch {
+      args = null; // unparsable arguments are dropped, never stored raw
+    }
+  }
+  return recordedCall(d.toolName, args);
 }
 
 /** The rule trace persisted on the record (snake_case, like every other record field). */
@@ -204,6 +233,7 @@ export class RuleDecisionRecorder {
       });
       record.decided_by = DecidedBy.RULE;
       record.rule = ruleTrace(d);
+      record.call = ruleCall(d);
       record.pending_request_id = d.requestId ?? null;
       record.assessment = ruleAssessment(d);
       record.state = SupervisionState.RULE_APPLIED;

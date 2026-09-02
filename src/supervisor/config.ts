@@ -17,6 +17,8 @@ export const DEFAULT_CLAUDE_CLI_PATH = 'claude';
 export const DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = 300;
 /** "bob" (IBM Bob Shell) | "claude" (Claude Code) */
 export const DEFAULT_SUPERVISOR_ENGINE = 'bob';
+/** The fast tier is a single HTTP call; past this it is no longer the fast path. */
+export const DEFAULT_FAST_CLASSIFIER_TIMEOUT_SECONDS = 10;
 export const DEFAULT_BOB_CLI_PATH = 'bob';
 
 export interface SupervisorConfig {
@@ -38,6 +40,19 @@ export interface SupervisorConfig {
    */
   anthropicBaseUrl: string | null;
   anthropicAuthToken: string | null;
+  /**
+   * The AGENT's own model id, as its harness was configured with it (`ANTHROPIC_MODEL`). The fast
+   * tier judges with this model by default, so the supervisor thinks with the same model as the
+   * agent it supervises. Any trailing context-window suffix is stripped — see `supervisorModel`.
+   */
+  agentModel: string | null;
+  /** Whether the fast HTTP classifier runs between the deterministic tier and the agent CLI. */
+  fastClassifierEnabled: boolean;
+  /** Override the fast tier's model. Empty derives it from `agentModel`. */
+  fastClassifierModel: string | null;
+  fastClassifierTimeoutSeconds: number;
+  /** Gateway for the fast tier's `POST /v1/messages`. Empty falls back to `anthropicBaseUrl`. */
+  fastClassifierBaseUrl: string | null;
   /** "stub" (writes to files) | "telegram" (real decision cards). */
   messagingChannel: string;
   /**
@@ -167,6 +182,12 @@ export function loadConfig(overrides: LoadConfigOverrides = {}): SupervisorConfi
     bobShellApiKey: get(env, 'BOBSHELL_API_KEY') ?? get(env, 'BOB_API_KEY') ?? null,
     anthropicBaseUrl: get(env, 'ANTHROPIC_BASE_URL') ?? null,
     anthropicAuthToken: get(env, 'ANTHROPIC_AUTH_TOKEN') ?? null,
+    agentModel: get(env, 'ANTHROPIC_MODEL') ?? null,
+    fastClassifierEnabled: getBool(env, 'FAST_CLASSIFIER', true),
+    fastClassifierModel: get(env, 'FAST_CLASSIFIER_MODEL') ?? null,
+    fastClassifierTimeoutSeconds: getInt(
+      env, 'FAST_CLASSIFIER_TIMEOUT_SECONDS', DEFAULT_FAST_CLASSIFIER_TIMEOUT_SECONDS),
+    fastClassifierBaseUrl: get(env, 'FAST_CLASSIFIER_BASE_URL') ?? null,
     messagingChannel: (get(env, 'MESSAGING_CHANNEL', 'stub') ?? 'stub').toLowerCase(),
     redNotify: getBool(env, 'RED_NOTIFY', true),
     notifyRuleDecisions: getBool(env, 'NOTIFY_RULE_DECISIONS', true),

@@ -16,6 +16,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.Orchestrator = exports.ACTIVE_SESSION = void 0;
 exports.alternativesMessage = alternativesMessage;
 const engine_1 = require("./engine");
+const fastClassifier_1 = require("./fastClassifier");
 const knowledge_1 = require("./knowledge");
 const messaging_1 = require("./messaging");
 const models_1 = require("./models");
@@ -36,6 +37,7 @@ class Orchestrator {
         this.store = opts.store;
         this.transcript = opts.transcriptSource;
         this.engine = opts.engine;
+        this.fast = opts.fastClassifier;
         this.channel = opts.channel;
         this.agent = opts.agentController;
         this.clock = opts.clock ?? timeutil_1.nowUtc;
@@ -127,6 +129,18 @@ class Orchestrator {
                 loadedFiles: [], missingFiles: ['(knowledge routing not configured)'],
             };
         }
+        // With a user but no source to fetch from (no local checkout, no git URL, and no injected
+        // fetch — tests supply one to bypass config-based routing), `loadKnowledge` would throw
+        // `KnowledgeError('no knowledge source configured...')`. That must degrade, not fail the
+        // decision — failing here would strand the agent over a missing setting, same as the
+        // no-user case above.
+        if (!this.knowledgeFetch && !this.config.knowledgeLocalRepo && !this.config.knowledgeRepo) {
+            this.log('knowledge: no knowledge source configured; classifying without BDI knowledge');
+            return {
+                user: record.user, project: record.project ?? '', team: record.team ?? '', entries: [],
+                loadedFiles: [], missingFiles: ['(knowledge source not configured)'],
+            };
+        }
         return (0, knowledge_1.loadKnowledge)({
             user: record.user,
             project: record.project,
@@ -188,6 +202,9 @@ class Orchestrator {
             // decision belongs to, and by then the transcript is long gone.
             session_name: (0, sessionIdentity_1.sessionNameFrom)(session),
             host: (0, sessionIdentity_1.localHostName)() || null,
+            // What was judged, not just the verdict: without the call the audit trail cannot answer
+            // "what exactly was allowed?" for anything the deterministic tier did not decide.
+            call: (0, models_1.recordedCall)(session.pendingAction?.name, session.pendingAction?.arguments ?? null),
         });
         if (session.pendingAction) {
             record.pending_request_id = session.pendingAction.requestId;
@@ -228,6 +245,24 @@ class Orchestrator {
         record.user = bundle.user;
         record.project = bundle.project;
         record.team = bundle.team;
+        // Tier 2 (fast LLM): one prompt-cached HTTP call over the agent's own conversation, ~3-4s
+        // against the ~13.5s the agent CLI below costs. Best-effort — a timeout, a malformed verdict
+        // or low confidence falls through to the CLI, and never to an approval.
+        if (this.fast !== undefined) {
+            try {
+                const fast = await this.fast.judge(session, bundle);
+                this.event(record, 'tier_fast_llm', { ...fast.telemetry });
+                record.assessment = fast.assessment;
+                return this.act(record, record.assessment, fast.assessment.traffic_light);
+            }
+            catch (err) {
+                if (!(err instanceof fastClassifier_1.FastClassifierError)) {
+                    throw err;
+                }
+                this.log(`fast classifier: falling back to the agent classifier — ${err.message}`);
+                this.event(record, 'fast_llm_fell_back', { error: err.message, ...(err.telemetry ?? {}) });
+            }
+        }
         const prompt = (0, prompt_1.buildSupervisionPrompt)(session, bundle);
         let result;
         try {
