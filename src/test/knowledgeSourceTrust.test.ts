@@ -9,7 +9,7 @@ import * as path from 'path';
  * read from it. The workspace is the one tree the supervised agent can write — so a fallback from
  * the corpus to the workspace let an agent write the clauses that govern its own next tool call,
  * at the tier that outranks the team's. With no source configured, supervision classifies without
- * BDI (`Orchestrator.loadKnowledgeFor` handles an unrouted session already), which is the same
+ * BDI (`Orchestrator.loadBundle` degrades to no-BDI rather than failing), which is the same
  * never-substitute-a-guess rule the slug routing follows.
  *
  * This is a source-shape guard because the wiring lives in `activate()`, which needs a real

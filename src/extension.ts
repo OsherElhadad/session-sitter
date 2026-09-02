@@ -270,7 +270,7 @@ export function activate(context: vscode.ExtensionContext) {
     // workspace. The workspace is the tree the supervised agent can write, so defaulting policy
     // to it let an agent author the clauses that govern it — highest-precedence tier included.
     // With `sessionSitter.dataRepoPath` unset, supervision runs without BDI (see
-    // `Orchestrator.loadKnowledgeFor`) rather than trusting a writable source: the same
+    // `Orchestrator.loadBundle`) rather than trusting a writable source: the same
     // never-substitute-a-guess rule the slug routing already follows.
     if (!base.knowledgeLocalRepo && !base.knowledgeRepo) {
       log('[knowledge] no knowledge source configured (sessionSitter.dataRepoPath is empty); '
