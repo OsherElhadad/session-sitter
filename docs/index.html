@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Session Sitter — agents run unattended, your written rules decide</title>
+<meta name="description" content="Session Sitter answers every coding-agent permission prompt against your team's own written practices — naming the clause it applied, rewriting an unsafe command instead of blocking the run, and writing one durable record per decision. Silence is never approval.">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Session Sitter">
+<meta property="og:title" content="Session Sitter — agents run unattended, your written rules decide">
+<meta property="og:description" content="Every permission prompt answered against your team's own written practices: the clause named, the unsafe command rewritten rather than blocked, one durable record per decision. Silence is never approval.">
+<meta property="og:url" content="https://eranra.github.io/session-sitter/">
+<meta property="og:image" content="https://eranra.github.io/session-sitter/branding/social-preview.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="Session Sitter">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Session Sitter — agents run unattended, your written rules decide">
+<meta name="twitter:description" content="Every permission prompt answered against your team's own written practices: the clause named, the unsafe command rewritten rather than blocked, one durable record per decision.">
+<meta name="twitter:image" content="https://eranra.github.io/session-sitter/branding/social-preview.png">
+<meta name="twitter:image:alt" content="Session Sitter">
+
+<link rel="icon" type="image/svg+xml" href="branding/logo.svg">
+<link rel="icon" type="image/png" sizes="256x256" href="branding/logo-256.png">
+<link rel="stylesheet" href="site/site.css">
+
+<script>
+  /* Stamp the saved theme before first paint, so there is no flash. */
+  try { var t = localStorage.getItem('ssTheme'); if (t === 'light' || t === 'dark') { document.documentElement.dataset.theme = t; } } catch (e) {}
+  document.documentElement.classList.remove('no-js');
+</script>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img class="shot-light" src="branding/wordmark-light.svg" alt="" height="20">
+      <img class="shot-dark" src="branding/wordmark-dark.svg" alt="" height="20">
+      <span class="visually-hidden">Session Sitter</span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a class="nav-wide" href="#top">Demo</a>
+      <a class="nav-wide" href="#why">Why</a>
+      <a class="nav-wide" href="#practices">Practices</a>
+      <a class="nav-wide" href="#install">Install</a>
+      <a href="#docs">Docs</a>
+      <a href="https://github.com/eranra/session-sitter">GitHub</a>
+      <button class="theme-toggle js-only" type="button" id="theme-toggle" aria-live="polite">
+        <span aria-hidden="true">◐</span><span id="theme-label">System</span>
+      </button>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ==================== 1 · HERO ==================== -->
+<section class="hero" id="top" aria-labelledby="hero-h">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Agent governance for coding agents</p>
+      <h1 id="hero-h">Agents run unattended.<br>Your written rules decide.</h1>
+      <p class="lead">Session Sitter answers every permission prompt against your team's own
+        practices — naming the clause it applied, rewriting an unsafe command into the safe one
+        instead of blocking the run, and writing one durable record per decision.</p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="#demo" id="cta-demo">Watch a force-push get corrected</a>
+        <a class="btn btn-secondary" href="https://github.com/eranra/session-sitter/tree/main/docs">Read the docs →</a>
+      </div>
+      <p class="tertiary"><a href="#install">Install the extension</a></p>
+      <p class="credibility">Claude Code · IBM Bob IDE · Codex CLI · VS Code Chat — across windows,
+        across machines.<br>Zero runtime dependencies · TypeScript only · 904 tests · MIT</p>
+      <div class="hero-shot">
+        <img src="screenshots/panel-wide-dark.png" width="1240" height="1960" loading="lazy" decoding="async"
+             alt="The panel open beside an editor, showing the session list in context.">
+      </div>
+    </div>
+
+    <div class="demo" id="demo" data-demo data-scenes="a,b" data-autoplay="a">
+      <div class="term" id="demo-panel" role="tabpanel" aria-labelledby="tab-a">
+        <div class="term-chrome">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="chip">Demonstration · not a recording</span>
+        </div>
+        <pre class="term-body" data-term aria-hidden="true"></pre>
+      </div>
+      <div class="tabs js-only" role="tablist" aria-label="Demo scenes" data-tabs>
+        <button type="button" role="tab" data-scene="a" aria-selected="true" aria-controls="demo-panel" id="tab-a">A force-push, corrected</button>
+        <button type="button" role="tab" data-scene="b" aria-selected="false" tabindex="-1" aria-controls="demo-panel" id="tab-b">Nobody answered</button>
+      </div>
+      <p class="caption" data-caption aria-live="polite"></p>
+      <div class="demo-controls js-only">
+        <span class="frame-dots" data-dots></span>
+        <button class="replay" type="button" data-replay>▶ Replay</button>
+      </div>
+      <p class="keyhint js-only">With the demo focused: <kbd>Space</kbd> play / pause ·
+        <kbd>←</kbd> <kbd>→</kbd> step a frame · <kbd>Home</kbd> restart</p>
+
+      <details class="transcript" data-transcript open>
+        <summary>Read the demo as text</summary>
+        <h3>Scene A — a force-push, corrected</h3>
+<pre>~/w/payments-api  release/2.4  ·  claude code
+
+&gt; ship the retry-backoff fix to the release branch
+
+● Bash(git push --force origin release/2.4)
+  dropping the reverted commit from the branch
+
+⟳ session-sitter · PermissionRequest
+  deterministic tier · no model call · 4 ms
+
+🟡 corrected — practices §4
+   "Never force-push a shared branch. Use
+    --force-with-lease, so a concurrent push
+    fails loudly instead of being overwritten."
+   team/bottom-line.md · team-git-004 · high
+
+  decision.updatedInput
+- git push --force origin release/2.4
++ git push --force-with-lease origin release/2.4
+  re-checked against your deny rules · allowed
+
+To github.com:acme/payments-api.git
+ + 9f1c2ad...4b7e0d1 release/2.4 -&gt; release/2.4
+✓ Bash completed · no human was woken
+
+$ tail -1 ~/.session-sitter/audit.jsonl
+{"request_id":"req-8f3c1a","state":"yellow_delivered",
+ "session_name":"payments-api","host":"nomad",
+ "source":"claude-code","decided_by":"rule",
+ "clause":"team-git-004","tool":"Bash","latency_ms":4,
+ "from":"git push --force origin release/2.4",
+ "to":"git push --force-with-lease origin release/2.4",
+ "at":"2026-09-02T02:14:37Z"}
+
+$ session-sitter log --since 22:00 --corrected
+02:14  corrected  §4  --force → --force-with-lease
+03:02  corrected  §7  rm -rf → git clean -nd
+04:41  denied     §2  Write .github/workflows/
+3 decisions · 2 corrected · 1 denied · 0 escalated
+
+Silence is never approval.</pre>
+        <h3>Scene B — nobody answered</h3>
+<pre>~/w/payments-api  release/2.4  ·  claude code
+
+● Bash(gh release create v2.4.0 --latest)
+  publishing the release the fix went into
+
+⟳ session-sitter · PermissionRequest
+🟠 escalated — no clause covers a public release
+   decision card sent · nomad · replies to you
+
+   waiting on you   00:00
+   Approve · Deny · Deny and tell it why
+
+🔴 denied — timeout · 15:00 elapsed, no answer
+   the agent was handed the alternatives:
+    · open a draft release and stop
+    · wait for a human at 09:00
+✓ the run continued on the safe path
+
+An unanswered card denies. It never approves.</pre>
+        <p class="tertiary">Both scenes are illustrations in a fictional repository, which is what
+          the <em>Demonstration · not a recording</em> chip declares. The record's field names are
+          real: <code>request_id</code>, <code>session_name</code>, <code>host</code>,
+          <code>source</code>, <code>state</code> and <code>decided_by</code> are the on-disk fields
+          of <code>SupervisionRecord</code>.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 2 · THE FOUR CLAIMS ==================== -->
+<section id="claims" aria-labelledby="claims-h">
+  <div class="wrap">
+    <h2 id="claims-h">Four claims, and the output that backs each one</h2>
+    <p class="lead section-intro">Everything below this line is one of these four.</p>
+    <div class="cards claims-grid">
+
+      <article class="card claim claim-green">
+        <h3>It cites the clause</h3>
+        <p>A decision names the practice it applied, by id, from your own
+          <code>bottom-line.md</code> — not “blocked by classifier”.</p>
+        <pre class="frag"><span class="g">🟢 allowed</span> <span class="d">— practices §1 · team-git-002</span></pre>
+      </article>
+
+      <article class="card claim claim-yellow">
+        <h3>It doesn't block the run. It fixes the call.</h3>
+        <p>The unsafe command is rewritten into the safe one and re-checked against your deny
+          rules, so the agent keeps going.</p>
+        <pre class="frag"><span class="r">- git push --force</span>
+<span class="g">+ git push --force-with-lease</span></pre>
+      </article>
+
+      <article class="card claim claim-orange">
+        <h3>It survives the night</h3>
+        <p>A judgment call becomes a decision card with a countdown. Nobody answers, and it is
+          <span class="state state-red">denied</span> — never approved.</p>
+        <pre class="frag"><span class="o">🟠 waiting on you   15:00</span>
+<span class="r">🔴 denied — timeout, no answer</span></pre>
+      </article>
+
+      <article class="card claim claim-red">
+        <h3>It leaves an audit trail</h3>
+        <p>One durable JSON record per decision, written at the time, queryable in the morning
+          across every machine.</p>
+        <pre class="frag"><span class="d">{"state":"yellow_delivered",</span>
+<span class="d"> "decided_by":"rule", …}</span></pre>
+      </article>
+    </div>
+
+    <details class="provenance">
+      <summary>Where the numbers on this page come from</summary>
+      <p>Measured on 2026-09-02 on one developer machine. <strong>Cost is the robust number here,
+        not speed</strong> — 7.8× cheaper per judgement reproduces; the latency win is a noisy
+        2.5–3.5× on the median with a tail that sometimes loses the race outright. Latencies are
+        wall-clock and vary with your host, your network and your model choice; they are not a
+        service level.</p>
+      <table>
+        <tbody>
+          <tr>
+            <th scope="row">Deterministic tier</th>
+            <td>The <code>PermissionRequest</code> hook round trip that resolves a call by rule
+              alone, with no model involved: <strong>3–4 ms</strong> end to end. The classifying
+              function itself, in process, is <strong>0.0005 ms</strong>. Most read-only calls end
+              here. This is the number the demo shows.</td>
+          </tr>
+          <tr>
+            <th scope="row">Cost per judgement</th>
+            <td>Uncached → cached: <code>claude-opus-5</code>
+              <strong>$0.042799 → $0.005463</strong> (7.8× cheaper) ·
+              <code>claude-sonnet-5</code> $0.017234 → $0.002302 ·
+              <code>claude-haiku-4-5</code> $0.006122 → $0.000261 (23×).</td>
+          </tr>
+          <tr>
+            <th scope="row">Model tier</th>
+            <td>When a call needs judgment, a direct API call with a warm prompt cache:
+              <strong>5,559 ms median</strong> for <code>claude-opus-5</code> (n=12, min 3,977 ms,
+              <strong>max 15,180 ms</strong>) · 3,117 ms median for <code>claude-haiku-4-5</code>
+              (n=5, min 2,825 ms, <strong>max 13,385 ms</strong>). The
+              median is not a guarantee: the tail is real, and roughly <strong>1 in 12</strong>
+              samples exceeded the tier's 10 s timeout and fell through to the subprocess below,
+              paying its full cost. <code>claude-sonnet-5</code> measured 10,033 ms median — above
+              that timeout, so it is the wrong choice here despite being cheaper.</td>
+          </tr>
+          <tr>
+            <th scope="row">What that replaced</th>
+            <td>Shelling out to a <code>claude -p</code> subprocess per judgement:
+              <strong>~13.5 s</strong> (range 11.2–16.7 s, n=3), of which fixed boot, auth and
+              round trip alone was ~7.5 s median (n=6). So the honest speedup is
+              <strong>roughly 2.5–3.5× on the median — not an order of magnitude.</strong> Process
+              boot was never the whole cost.</td>
+          </tr>
+          <tr>
+            <th scope="row">Prompt cache</th>
+            <td>After the first judgement, <strong>11,286 tokens</strong> of the prefix are read
+              from cache against <strong>~770</strong> newly written — a
+              <strong>98.9%</strong> cache hit. This only applies to sessions long enough to cache:
+              the minimum cacheable prefix is model-dependent (~2,048 tokens on Haiku) and a shorter
+              one silently caches nothing at all, with no error.</td>
+          </tr>
+          <tr>
+            <th scope="row">904 tests · zero dependencies</th>
+            <td><code>904 passed (904)</code> across 42 files from <code>make check</code> on
+              2026-09-02. <code>package.json</code> declares no <code>dependencies</code> field at
+              all, so nothing ships alongside the extension. TypeScript-only is enforced in CI by
+              <code>ci/check-no-python.sh</code> and <code>ci/check-naming.sh</code>.</td>
+          </tr>
+        </tbody>
+      </table>
+    </details>
+  </div>
+</section>
+
+<!-- ==================== 3 · SILENCE IS NEVER APPROVAL ==================== -->
+<section class="band" id="silence" aria-labelledby="silence-h">
+  <div class="wrap">
+    <h2 class="slogan" id="silence-h">Silence is never approval.</h2>
+    <p class="lead silence-lead">An orange card that nobody answers denies the action. It never
+      writes an approval. A red one that nobody answers stays blocked. That is the whole rule, and
+      every other behaviour on this page follows from it.</p>
+
+    <div class="diagram scroll-x">
+      <img src="diagrams/traffic-lights.svg" width="1200" height="440" loading="lazy" decoding="async"
+           alt="The four supervision lights. Green: the action is fine — approve, record, no human contact. Yellow: a safe correction — inject labeled guidance and the agent self-corrects. Orange: your call — block it and send a decision card with a countdown; on timeout, deny and hand over safe alternatives. Red: policy, not judgment — block outright and alert; on timeout the block stands. Silence is never approval: an unanswered card denies the action and never writes an approval.">
+    </div>
+
+    <h3>Watch a card go unanswered</h3>
+    <div class="demo" id="demo-b" data-demo data-scenes="b">
+      <div class="term">
+        <div class="term-chrome">
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="chip">Demonstration · not a recording</span>
+        </div>
+        <pre class="term-body" data-term aria-hidden="true"></pre>
+      </div>
+      <p class="caption" data-caption aria-live="polite"></p>
+      <div class="demo-controls js-only">
+        <span class="frame-dots" data-dots></span>
+        <button class="replay" type="button" data-replay>▶ Play the timeout case</button>
+      </div>
+      <p class="tertiary js-only">The same five frames are written out under
+        <a href="#demo">Read the demo as text</a>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 4 · ISN'T THIS ALREADY IN CLAUDE CODE? ==================== -->
+<section id="why" aria-labelledby="why-h">
+  <div class="wrap">
+    <h2 id="why-h">Isn't this already in Claude Code?</h2>
+    <p class="lead section-intro">Partly, and it is worth being exact about which parts — the answer
+      is the reason this project still has a shape.</p>
+
+    <div class="compare">
+      <div class="first-party">
+        <h3>First-party today</h3>
+        <p><strong>Agent view</strong> (<code>claude agents</code>) is a first-party worklist of
+          Claude Code sessions — grouped by <em>Needs input</em> / <em>Working</em> /
+          <em>Completed</em>, with waiting timers, peek and attach. It is good, and if you only run
+          Claude Code on one machine it is probably all the worklist you need. Its sessions are
+          local to that machine and to that one agent.</p>
+      </div>
+      <div class="left-over">
+        <h3>What is left over</h3>
+        <p>Four agents wide — Claude Code, IBM Bob IDE, Codex CLI, VS Code Chat — unioned across
+          every window you have open and across peer machines reached over SSH, with one click
+          focusing the window that owns the session even when that window is on the other box.</p>
+      </div>
+    </div>
+
+    <div class="compare">
+      <div class="first-party">
+        <h3>First-party today</h3>
+        <p><strong>Auto mode</strong> is a first-party classifier that reviews every tool call and
+          blocks the irreversible ones. It is on by default on Pro, Max and Team plans, it reads
+          your <code>CLAUDE.md</code>, and <strong>you should leave it on</strong>: it is a strictly
+          better default than approving everything by reflex. What it does not do is tell you
+          <em>which</em> of your rules it applied — a blocked call reports
+          <code>Blocked by classifier</code> — and it keeps no record you can hand to anyone
+          afterwards.</p>
+      </div>
+      <div class="left-over">
+        <h3>What is left over</h3>
+        <p>Your clause, by name. The rewrite, so a blocked agent is handed the safe call and the run
+          continues. The explicit deny-on-timeout for the genuine judgment calls. One durable record
+          per decision. Both layers can be on at once, and the supervision half of the extension is
+          off until you turn it on.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 5 · SEE IT IN YOUR EDITOR ==================== -->
+<section id="panel" aria-labelledby="panel-h">
+  <div class="wrap">
+    <h2 id="panel-h">See it in your editor</h2>
+    <p class="lead section-intro">The shipped surface: one panel, every live session, and what the
+      supervisor decided about each.</p>
+    <div class="rail">
+      <figure>
+        <img class="shot-light" src="screenshots/panel-light.png" width="680" height="1960" loading="lazy" decoding="async"
+             alt="The Session Sitter panel: a worklist of live sessions across four agents, above the supervision activity feed.">
+        <img class="shot-dark" src="screenshots/panel-dark.png" width="680" height="1960" loading="lazy" decoding="async"
+             alt="The Session Sitter panel: a worklist of live sessions across four agents, above the supervision activity feed.">
+        <figcaption>The worklist and the activity feed, in one panel.</figcaption>
+      </figure>
+      <figure>
+        <img class="shot-light" src="screenshots/panel-needs-you-light.png" width="680" height="1960" loading="lazy" decoding="async"
+             alt="The worklist sorted needs-you-first, with one session waiting on a human decision.">
+        <img class="shot-dark" src="screenshots/panel-needs-you-dark.png" width="680" height="1960" loading="lazy" decoding="async"
+             alt="The worklist sorted needs-you-first, with one session waiting on a human decision.">
+        <figcaption>Sorted needs-you-first, so the blocked session is the top row.</figcaption>
+      </figure>
+      <figure>
+        <img class="shot-light" src="screenshots/activity-light.png" width="680" height="1552" loading="lazy" decoding="async"
+             alt="The supervision activity feed, one card per decision, each naming its light and whether an AI or a rule decided it.">
+        <img class="shot-dark" src="screenshots/activity-dark.png" width="680" height="1552" loading="lazy" decoding="async"
+             alt="The supervision activity feed, one card per decision, each naming its light and whether an AI or a rule decided it.">
+        <figcaption>One card per decision, each naming its light and who decided.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 6 · YOUR PRACTICES ARE THE POLICY ==================== -->
+<section id="practices" aria-labelledby="practices-h">
+  <div class="wrap">
+    <h2 id="practices-h">Your practices are the policy</h2>
+    <p class="lead section-intro">A BDI entry in a markdown file on the left. The decision it caused
+      on the right. Nothing between them is configuration you have to learn.</p>
+    <div class="io">
+      <div class="panel-code">
+        <h3>team/bottom-line.md</h3>
+<pre>### Intention: never force-push a shared branch
+
+| Field | Value |
+|---|---|
+| id | team-git-004 |
+| level | yellow |
+| confidence | high |
+| scope | team |
+| source | 2026-06 PR review thread |
+| tags | git, review |
+| added | 2026-06-14 |
+
+Never force-push a shared branch. Use
+--force-with-lease, so a concurrent push fails
+loudly instead of being overwritten.</pre>
+      </div>
+      <p class="io-arrow" aria-hidden="true">→</p>
+      <div class="panel-code">
+        <h3>the decision it produced</h3>
+<pre><span class="state state-yellow">🟡 corrected</span> — practices §4
+   team-git-004 · confidence high
+
+<span class="state state-red">- git push --force origin release/2.4</span>
+<span class="state state-green">+ git push --force-with-lease origin release/2.4</span>
+
+{"request_id":"req-8f3c1a",
+ "state":"yellow_delivered",
+ "decided_by":"rule",
+ "clause":"team-git-004",
+ "tool":"Bash",
+ "latency_ms":4,
+ "at":"2026-09-02T02:14:37Z"}</pre>
+      </div>
+    </div>
+    <p class="tertiary"><code>latency_ms</code> is the measured deterministic-tier round trip,
+      3–4 ms. <a href="https://github.com/eranra/session-sitter/blob/main/docs/KNOWLEDGE.md">The
+      entry format, the three tiers and how a session is routed to them →</a></p>
+  </div>
+</section>
+
+<!-- ==================== 7 · ONE ENGINE, THREE FRONT ENDS ==================== -->
+<section class="band" id="engine" aria-labelledby="engine-h">
+  <div class="wrap">
+    <h2 id="engine-h">One engine, three front ends</h2>
+    <p class="lead section-intro">One supervision engine decides, records and notifies. The front
+      ends only carry the prompt to it — and one of the three is not built yet.</p>
+    <div class="diagram scroll-x">
+      <img src="diagrams/architecture.svg" width="1200" height="560" loading="lazy" decoding="async"
+           alt="One supervision engine beneath three front ends — the VS Code panel, the Claude Code plugin's hooks, and the terminal CLI — driving the decision, the record, and the notification.">
+    </div>
+    <div class="status-rows">
+      <div class="status-row">
+        <span class="name">VS Code panel</span>
+        <span class="pill pill-shipping">shipping</span>
+        <span class="note">What this repo installs. The worklist and the activity feed.</span>
+      </div>
+      <div class="status-row">
+        <span class="name">Supervisor CLI</span>
+        <span class="pill pill-shipping">shipping</span>
+        <span class="note">For offline runs and replays.</span>
+      </div>
+      <div class="status-row">
+        <span class="name">Claude Code plugin</span>
+        <span class="pill pill-designed">designed, not built</span>
+        <span class="note">So the same engine governs a bare terminal session.
+          <a href="https://github.com/eranra/session-sitter/blob/main/docs/superpowers/specs/2026-09-01-claude-code-plugin-design.md">Read the design record →</a></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 8 · INSTALL ==================== -->
+<section id="install" aria-labelledby="install-h">
+  <div class="wrap">
+    <h2 id="install-h">Install</h2>
+    <div class="install-grid">
+      <div>
+        <div class="callout">
+          <span aria-hidden="true">⚠</span>
+          <p><strong>The Claude Code plugin is the plan, and is not built yet.</strong> When it
+            lands, install will be two slash commands. Until then the VS Code extension is the way
+            in, and this page will not pretend otherwise. Not on the Marketplace yet either, so
+            installation is by VSIX.</p>
+        </div>
+
+        <div class="copy-block">
+          <h3>From the latest release</h3>
+<pre id="cmd-vsix">code --install-extension session-sitter-*.vsix</pre>
+          <button class="copy-btn js-only" type="button" data-copy="cmd-vsix">Copy</button>
+        </div>
+        <p class="tertiary">Grab the <code>.vsix</code> from the
+          <a href="https://github.com/eranra/session-sitter/releases/latest">latest release</a>, or
+          use the IDE: Extensions panel → <code>···</code> → <strong>Install from VSIX…</strong>
+          Every pull request also attaches a build under the CI run's <strong>Artifacts</strong>.</p>
+
+        <div class="copy-block">
+          <h3>Or from source</h3>
+<pre id="cmd-source">git clone https://github.com/eranra/session-sitter.git
+cd session-sitter
+make install</pre>
+          <button class="copy-btn js-only" type="button" data-copy="cmd-source">Copy</button>
+        </div>
+        <p class="tertiary">Then reload the window — <kbd>Ctrl+Shift+P</kbd> →
+          <strong>Developer: Reload Window</strong>. For another VS Code build, point
+          <code>make install</code> at its CLI: <code>make install CODE=bobide</code> for IBM Bob
+          IDE, or <code>CODE=cursor</code>, <code>CODE=code-insiders</code>.</p>
+      </div>
+
+      <div>
+        <h3>What you need</h3>
+        <dl class="reqs">
+          <dt>VS Code or IBM Bob IDE</dt><dd>1.65 or later</dd>
+          <dt>Linux, WSL or macOS</dt><dd>for Claude liveness detection — <code>/proc/&lt;pid&gt;/stat</code> on Linux, <code>ps</code> elsewhere</dd>
+          <dt><code>python3</code></dt><dd>to read IBM Bob's SQLite store. Only needed for Bob sessions.</dd>
+          <dt>Node 20+</dt><dd>only to build from source</dd>
+        </dl>
+        <p class="tertiary">Zero runtime dependencies — <code>package.json</code> declares no
+          <code>dependencies</code> at all. Nothing is installed alongside it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 9 · DOCS ==================== -->
+<section id="docs" aria-labelledby="docs-h">
+  <div class="wrap">
+    <h2 id="docs-h">Documentation</h2>
+    <p class="lead section-intro">Rendered on GitHub, where the diagrams and the mermaid blocks
+      work.</p>
+    <div class="cards">
+      <a class="card doc-card" href="https://github.com/eranra/session-sitter/blob/main/docs/ARCHITECTURE.md">
+        <h3>ARCHITECTURE.md</h3>
+        <p>How sessions are detected, what each component does, how a click switches a session, how
+          peer machines are reached, and how a blocked prompt is resolved through the agent
+          bridges.</p>
+      </a>
+      <a class="card doc-card" href="https://github.com/eranra/session-sitter/blob/main/docs/SUPERVISION.md">
+        <h3>SUPERVISION.md</h3>
+        <p>What the four lights mean, how to turn supervision on, the record lifecycle, how a reply
+          is interpreted, and what to check when a decision does not land.</p>
+      </a>
+      <a class="card doc-card" href="https://github.com/eranra/session-sitter/blob/main/docs/KNOWLEDGE.md">
+        <h3>KNOWLEDGE.md</h3>
+        <p>The BDI entry format, the three <code>bottom-line.md</code> tiers and how a session is
+          routed to them.</p>
+      </a>
+      <a class="card doc-card" href="https://github.com/eranra/session-sitter/blob/main/docs/CORPUS.md">
+        <h3>CORPUS.md</h3>
+        <p>How sessions are collected into the store the rules are learned from, bulk import, and
+          how secrets are redacted first.</p>
+      </a>
+      <a class="card doc-card" href="https://github.com/eranra/session-sitter/blob/main/docs/CONFIGURATION.md">
+        <h3>CONFIGURATION.md</h3>
+        <p>Every setting, every environment-variable fallback, every CLI flag and every command —
+          the reference, not a tutorial.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <img class="shot-light" src="branding/wordmark-light.svg" alt="" height="18">
+      <img class="shot-dark" src="branding/wordmark-dark.svg" alt="" height="18">
+      <span class="visually-hidden">Session Sitter</span>
+    </a>
+    <nav aria-label="Project">
+      <a href="https://github.com/eranra/session-sitter/blob/main/LICENSE">MIT</a>
+      <a href="https://github.com/eranra/session-sitter">GitHub</a>
+      <a href="https://github.com/eranra/session-sitter/blob/main/SECURITY.md">Security</a>
+      <a href="https://github.com/eranra/session-sitter/blob/main/CONTRIBUTING.md">Contributing</a>
+    </nav>
+    <p class="slogan-small">Silence is never approval.</p>
+  </div>
+</footer>
+
+<script src="site/demo.js"></script>
+</body>
+</html>
