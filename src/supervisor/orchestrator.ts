@@ -171,6 +171,18 @@ export class Orchestrator {
         loadedFiles: [], missingFiles: ['(knowledge routing not configured)'],
       };
     }
+    // With a user but no source to fetch from (no local checkout, no git URL, and no injected
+    // fetch — tests supply one to bypass config-based routing), `loadKnowledge` would throw
+    // `KnowledgeError('no knowledge source configured...')`. That must degrade, not fail the
+    // decision — failing here would strand the agent over a missing setting, same as the
+    // no-user case above.
+    if (!this.knowledgeFetch && !this.config.knowledgeLocalRepo && !this.config.knowledgeRepo) {
+      this.log('knowledge: no knowledge source configured; classifying without BDI knowledge');
+      return {
+        user: record.user, project: record.project ?? '', team: record.team ?? '', entries: [],
+        loadedFiles: [], missingFiles: ['(knowledge source not configured)'],
+      };
+    }
     return loadKnowledge({
       user: record.user,
       project: record.project,

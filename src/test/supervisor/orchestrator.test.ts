@@ -8,14 +8,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { OutboxAgentController } from '../../supervisor/agentControl';
 import { FakeEngine } from '../../supervisor/engine';
 import { FakeChannel } from '../../supervisor/messaging';
 import { SupervisionState } from '../../supervisor/models';
+import { Orchestrator } from '../../supervisor/orchestrator';
+import { StateStore } from '../../supervisor/store';
+import { FileTranscriptSource } from '../../supervisor/transcript';
 import {
   MutableClock,
   SESSION_ID,
   assessment,
   buildTestOrchestrator,
+  makeConfig,
   makeExport,
   makeTmpDir,
   writeExport,
@@ -23,7 +28,7 @@ import {
   TEAM,
   USER,
 } from './fixtures';
-import { historyDir } from '../../supervisor/config';
+import { ensureDirs, historyDir, outboxDir, recordsDir } from '../../supervisor/config';
 import { localHostName } from '../../supervisor/sessionIdentity';
 import { redactSecrets } from '../../corpus/mask';
 
@@ -654,6 +659,33 @@ describe('the prompt handed to the classifier', () => {
     // The export carries no user either, so nothing supplies a routing hint.
     const rig = buildTestOrchestrator(tmp, engine, { exported: { ...ambiguous(), user: null } });
     const rec = await rig.orch.supervise(SESSION_ID, { user: null });
+
+    expect(rec.state).toBe(SupervisionState.YELLOW_DELIVERED);
+    expect(engine.prompts[0]).toContain('(no BDI entries loaded)');
+  });
+
+  it('classifies without BDI when a user is set but no knowledge source is configured', async () => {
+    // Same degrade as the no-user case above, but for the other gap: a user IS routed, so
+    // `loadKnowledge` would actually try to fetch — and with neither `knowledgeLocalRepo` nor
+    // `knowledgeRepo` set, that fetch throws `KnowledgeError('no knowledge source configured...')`.
+    // That must classify without BDI, not fail the decision. Build the orchestrator directly
+    // (no injected `knowledgeFetch`) so the real no-source path in `knowledge.ts` actually runs.
+    const config = makeConfig(tmp); // knowledgeLocalRepo / knowledgeRepo default to ''
+    ensureDirs(config);
+    writeExport(historyDir(config), ambiguous());
+    const engine = new FakeEngine([json('yellow')]);
+    const store = new StateStore(recordsDir(config));
+    const orch = new Orchestrator({
+      config,
+      store,
+      transcriptSource: new FileTranscriptSource(historyDir(config)),
+      engine,
+      channel: new FakeChannel(false),
+      agentController: new OutboxAgentController(outboxDir(config)),
+      // Deliberately no `knowledgeFetch` — this must exercise the real `fetchBdiFiles`.
+    });
+
+    const rec = await orch.supervise(SESSION_ID, { user: USER, project: PROJECT, team: TEAM });
 
     expect(rec.state).toBe(SupervisionState.YELLOW_DELIVERED);
     expect(engine.prompts[0]).toContain('(no BDI entries loaded)');
