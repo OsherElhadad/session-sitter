@@ -1564,4 +1564,14 @@ describe('liveSessionPids', () => {
     // The fallback is on the start-time cross-check only — a dead PID is still dead.
     expect(await liveSessionPids(candidates, 'darwin', dead)).toEqual(new Set());
   });
+
+  it('trusts the signal alone when the session file has no recorded procStart', async () => {
+    // No recorded start time is no recycled-PID evidence either way, so a running PID must not be
+    // filtered out just because ps has something usable to compare it against.
+    const candidates = [{ pid: 1263, procStart: undefined }];
+    expect(await liveSessionPids(candidates, 'darwin', {
+      ...noProc,
+      psStart: async () => new Map([[1263, 'Mon Aug 31 10:04:57 2026    ']]),
+    })).toEqual(new Set([1263]));
+  });
 });

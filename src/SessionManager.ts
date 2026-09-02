@@ -187,7 +187,9 @@ export async function liveSessionPids(
   }
   return new Set(running.filter(c => {
     const psMs = Date.parse(starts.get(c.pid)?.trim() ?? '');
-    return Number.isNaN(psMs) || startTimesAgree(String(c.procStart), psMs);
+    // No recorded procStart is no recycled-PID evidence either way, so the signal alone stands —
+    // same fallback as when `ps` itself has nothing usable.
+    return c.procStart === undefined || Number.isNaN(psMs) || startTimesAgree(String(c.procStart), psMs);
   }).map(c => c.pid));
 }
 
