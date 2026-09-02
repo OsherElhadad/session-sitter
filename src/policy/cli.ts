@@ -13,6 +13,13 @@
  * `--replay` runs the last N recorded decisions back through the deterministic ladder with *this*
  * file's clauses, and prints where the verdict would change. That is how you ship a policy change
  * without discovering its blast radius in production.
+ *
+ *     node out/policy/cli.js compile [--corpus <dir>] [--dry-run]
+ *
+ * `compile` is the write path's last gate. It reads the reviewed corpus and emits the artifact the
+ * runtime loads — or emits nothing at all and exits non-zero, naming what is wrong. There is no
+ * middle outcome on purpose: a broken corpus must never become live policy, and while it is broken
+ * the runtime keeps serving the last good revision.
  */
 
 import * as fs from 'fs';
@@ -21,15 +28,26 @@ import { CORRECTION_RULES } from './corrections';
 import { DecisionRecord, readJsonl } from '../audit/trail';
 import { decisionsPath } from '../hooks/paths';
 import { decideDeterministically } from '../hooks/permissionRequest';
+import { loadSettings } from '../hooks/settings';
+import {
+  coreClauses, compilePolicy, currentPath, gatherCorpus, writePolicy,
+} from './compile';
 
-const USAGE = `session-sitter policy — lint a practices file
+const USAGE = `session-sitter policy — lint a practices file, or compile the corpus
 
 Usage:
   check <practices.md> [--replay] [--limit N]
+  compile [--corpus DIR] [--user U] [--project P] [--team T] [--registry FILE] [--dry-run]
 
 Options:
   --replay        re-decide the recorded decisions with this file's clauses
   --limit N       how many recorded decisions to replay (default 50)
+  --corpus DIR    knowledge checkout to compile (default: the configured local repo)
+  --user U        routing triple; each defaults to the configured value
+  --project P
+  --team T
+  --registry FILE registry markdown validating the triple
+  --dry-run       compile and report, write no artifact
   -h, --help      show this help
 `;
 
@@ -117,11 +135,73 @@ export function replay(records: DecisionRecord[], clauses: Clause[]): string[] {
   return lines;
 }
 
+/** `--flag value`, or null when the flag is absent. */
+function flag(argv: string[], name: string): string | null {
+  const at = argv.indexOf(`--${name}`);
+  return at >= 0 ? (argv[at + 1] ?? null) : null;
+}
+
+/**
+ * Compile the corpus into the artifact, or refuse.
+ *
+ * Exit 1 with nothing written is the *designed* outcome for a malformed corpus, and the asymmetry
+ * against the loader is deliberate: the loader skips a broken file so the rest of the tier survives,
+ * because dropping a tier removes reds nobody broke. Here, refusing outright is what keeps a broken
+ * proposal from weakening production for even one decision.
+ */
+export async function compile(argv: string[]): Promise<number> {
+  const settings = loadSettings(process.env);
+  const corpus = flag(argv, 'corpus') ?? settings.supervisor.knowledgeLocalRepo;
+  const user = flag(argv, 'user') ?? settings.user;
+  if (!corpus) {
+    process.stderr.write('compile needs a knowledge checkout: --corpus DIR\n');
+    return 2;
+  }
+  if (!user) {
+    process.stderr.write('compile needs a routing triple: --user U [--project P] [--team T]\n');
+    return 2;
+  }
+
+  const input = await gatherCorpus({
+    corpusRoot: corpus,
+    user,
+    project: flag(argv, 'project') ?? settings.project,
+    team: flag(argv, 'team') ?? settings.team,
+    registryPath: flag(argv, 'registry') ?? (settings.supervisor.knowledgeRegistryPath || undefined),
+  });
+  const { policy, errors, warnings } = compilePolicy(input);
+
+  for (const w of warnings) { process.stdout.write(`warn: ${w}\n`); }
+  if (policy === null) {
+    for (const e of errors) { process.stderr.write(`error: ${e}\n`); }
+    process.stderr.write(`\nrefusing to compile: ${errors.length} error(s), no artifact written. `
+      + 'The runtime keeps serving the last good revision.\n');
+    return 1;
+  }
+
+  const core = coreClauses(policy.clauses);
+  process.stdout.write(
+    `${policy.clauses.length} clauses from ${policy.built_from.length} file(s)\n`
+    + `  revision   ${policy.revision}\n`
+    + `  corpus_ref ${policy.corpus_ref ?? '(not a git checkout)'}\n`
+    + `  core       ${core.length} clause(s), `
+    + `${Buffer.byteLength(policy.prompt_core, 'utf8')} bytes\n`);
+
+  if (argv.includes('--dry-run')) {
+    process.stdout.write('  (dry run — nothing written)\n');
+    return 0;
+  }
+  const written = writePolicy(policy);
+  process.stdout.write(`  wrote      ${written}\n  published  ${currentPath()}\n`);
+  return 0;
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.length === 0 || argv[0] === '-h' || argv[0] === '--help') {
     process.stdout.write(USAGE);
     return argv.length === 0 ? 2 : 0;
   }
+  if (argv[0] === 'compile') { return compile(argv.slice(1)); }
   if (argv[0] !== 'check') {
     process.stderr.write(`unknown command: ${argv[0]}\n\n${USAGE}`);
     return 2;

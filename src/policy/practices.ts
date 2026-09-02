@@ -114,8 +114,13 @@ function splitPatterns(value: string): string[] {
 /**
  * Compile one pattern. An unparseable regex is dropped rather than thrown: a malformed clause must
  * not take the whole policy file down with it, and the clause is still handed to the classifier.
+ *
+ * Dropping it is right at *load* time and wrong at *compile* time — a red clause whose only matcher
+ * was dropped silently protects nothing. So the drop is visible in {@link PatternSpec.compiled},
+ * and `policy compile` refuses to emit an artifact when any spec carries a null (see
+ * `src/policy/compile.ts`). Same parse, two policies.
  */
-function compile(pattern: string): RegExp | null {
+export function compileMatcher(pattern: string): RegExp | null {
   const asRegex = REGEX_LITERAL.exec(pattern);
   try {
     return asRegex ? new RegExp(asRegex[1], asRegex[2].includes('i') ? asRegex[2] : `${asRegex[2]}i`)
@@ -125,18 +130,50 @@ function compile(pattern: string): RegExp | null {
   }
 }
 
-/** Lift the `Match:` lines out of an entry body, returning the remaining prose and the matchers. */
-function extractPatterns(text: string): { prose: string; patterns: RegExp[] } {
-  const kept: string[] = [];
-  const patterns: RegExp[] = [];
+/**
+ * One `Match:` pattern, as written and as compiled.
+ *
+ * The `raw` text is kept because the compiled `RegExp` is not the source: a substring matcher has
+ * been escaped and had its whitespace loosened, so `RegExp.source` cannot be turned back into what
+ * the author typed. The compiled artifact stores what the author typed and recompiles it, which is
+ * what makes the artifact a faithful copy of the corpus rather than a lossy derivative.
+ */
+export interface PatternSpec {
+  /** Exactly the text between the commas on the `Match:` line. */
+  raw: string;
+  /** True when `raw` was a `/…/flags` literal rather than a substring. */
+  isRegex: boolean;
+  /** Flags of the compiled matcher — `i` is always among them. */
+  flags: string;
+  /** Null when the pattern would not compile. A red clause with a null here enforces nothing. */
+  compiled: RegExp | null;
+}
+
+/** Every `Match:` pattern in a body, in file order, compiled or not. */
+export function patternSpecs(text: string): PatternSpec[] {
+  const specs: PatternSpec[] = [];
   for (const line of text.split('\n')) {
     const m = MATCH_LINE.exec(line.trim());
-    if (!m) { kept.push(line); continue; }
+    if (!m) { continue; }
     for (const raw of splitPatterns(m[1])) {
-      const compiled = compile(raw);
-      if (compiled) { patterns.push(compiled); }
+      const compiled = compileMatcher(raw);
+      specs.push({
+        raw,
+        isRegex: REGEX_LITERAL.test(raw),
+        flags: compiled?.flags ?? 'i',
+        compiled,
+      });
     }
   }
+  return specs;
+}
+
+/** Lift the `Match:` lines out of an entry body, returning the remaining prose and the matchers. */
+function extractPatterns(text: string): { prose: string; patterns: RegExp[] } {
+  const kept = text.split('\n').filter(line => !MATCH_LINE.test(line.trim()));
+  const patterns = patternSpecs(text)
+    .map(s => s.compiled)
+    .filter((p): p is RegExp => p !== null);
   return { prose: kept.join('\n').trim(), patterns };
 }
 

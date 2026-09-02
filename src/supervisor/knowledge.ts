@@ -93,6 +93,15 @@ export interface KnowledgeBundle {
   entries: KnowledgeEntry[];
   loadedFiles: string[];
   missingFiles: string[];
+  /**
+   * Pre-rendered policy text to emit alongside the entries: the compiled artifact's
+   * revision-stable core, plus the line telling the model its knowledge is a subset.
+   *
+   * Optional and absent on this loader's own output — it is set only by a caller that loaded a
+   * compiled policy, because a prompt that silently shows a subset is a prompt whose output nobody
+   * can reproduce.
+   */
+  policyBlock?: string | null;
 }
 
 /** Entries with the narrower tier first (user > project > team). */

@@ -118,18 +118,19 @@ const SCHEMA_RULES = `OUTPUT SCHEMA RULES (follow EXACTLY — invalid output is 
   is actually acceptable.
 - A timeout fallback is traffic_light="yellow" with transitioned_from="orange",
   transition_reason set, and a non-empty supervisor_message_to_agent.`;
-function renderKnowledge(entries) {
-    if (entries.length === 0) {
+function renderKnowledge(entries, policyBlock) {
+    if (entries.length === 0 && !policyBlock) {
         return '(no BDI entries loaded)';
     }
     // Narrower tier first so the model sees precedence order.
     const sorted = [...entries].sort((a, b) => (0, knowledge_1.entryPrecedence)(b) - (0, knowledge_1.entryPrecedence)(a));
-    return sorted.map(e => {
+    const rendered = sorted.map(e => {
         const meta = `[${e.tier}] ${e.kind} ${e.id ?? '?'} `
             + `level=${e.level ?? '-'} confidence=${e.confidence ?? '-'} `
             + `tags=${e.tags.join(',') || '-'} source=${e.sourceFile ?? e.source ?? '-'}`;
         return `- ${meta}\n  ${e.title}: ${e.text}`.replace(/\s+$/, '');
     }).join('\n');
+    return policyBlock ? [policyBlock, rendered].filter(s => s).join('\n') : rendered;
 }
 function renderTurns(session, maxTurns = 40) {
     const turns = session.turns.slice(-maxTurns);
@@ -168,7 +169,7 @@ function sessionBlock(session, bundle) {
         + `PENDING ACTION (what the agent is waiting to do):\n${renderPending(session)}\n`
         + `WAITING REASON: ${session.waitingReason || '(unknown)'}\n\n`
         + '<<<BDI KNOWLEDGE (data, narrower tier first)>>>\n'
-        + `${renderKnowledge(bundle.entries)}\n<<<END KNOWLEDGE>>>`);
+        + `${renderKnowledge(bundle.entries, bundle.policyBlock)}\n<<<END KNOWLEDGE>>>`);
 }
 function footer() {
     return ('You may inspect repository files (read-only) for more context. The BDI relevant to THIS '
