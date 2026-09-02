@@ -40,7 +40,7 @@ Uniform across every command.
 |---|---|
 | `0` | the command ran and printed its answer |
 | `1` | the command ran and something it needed was missing or unreadable — an absent parser, an unreadable file, a practices file that did not parse |
-| `2` | the arguments were wrong — an unknown flag, a missing value, an unparseable `--since`, contradictory flags |
+| `2` | the arguments were wrong — an unknown flag, a missing value, an unparsable `--since`, contradictory flags |
 
 `2` means *you* typed it wrong; `1` means *this build* could not answer. Scripts can rely on that
 split.
