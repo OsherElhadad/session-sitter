@@ -188,6 +188,9 @@ class Orchestrator {
             // decision belongs to, and by then the transcript is long gone.
             session_name: (0, sessionIdentity_1.sessionNameFrom)(session),
             host: (0, sessionIdentity_1.localHostName)() || null,
+            // What was judged, not just the verdict: without the call the audit trail cannot answer
+            // "what exactly was allowed?" for anything the deterministic tier did not decide.
+            call: (0, models_1.recordedCall)(session.pendingAction?.name, session.pendingAction?.arguments ?? null),
         });
         if (session.pendingAction) {
             record.pending_request_id = session.pendingAction.requestId;

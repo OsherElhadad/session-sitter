@@ -32,6 +32,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import { redactSecrets } from '../corpus/mask';
+import { RecordedCall } from '../supervisor/models';
 
 /** Who actually made the call. `human` and `timeout` arrive from the escalation path. */
 export type Actor = 'deterministic' | 'policy' | 'model' | 'human' | 'timeout';
@@ -79,6 +80,23 @@ export interface DecisionRecord {
   rev?: string | null;
   /** Where the policy came from. Absent on a pre-stamping record. */
   policySource?: 'artifact' | 'markdown' | 'none';
+  /**
+   * The tool call this decision judged, in the shape a *re-evaluation* needs: the tool name and the
+   * whole redacted input, not a display string.
+   *
+   * `inputSummary` cannot serve. It picks one field (`command`, else `file_path`, …), collapses
+   * whitespace, and truncates at 300 characters — so a `Write` call's contents are gone, a
+   * multi-field input is gone, and a long command line is a prefix. Handing that back to the
+   * evaluator as `{ command: inputSummary }` produces verdicts that differ from the recorded ones
+   * for reasons that have nothing to do with the clause under test, which makes every replay number
+   * unfalsifiable. See `src/policy/replay.ts` and its calibration invariant.
+   *
+   * Additive and nullable exactly like `rev`: **absent** on a record written before this field
+   * existed, and a reader must keep those in their own bucket rather than inventing a call for them.
+   * Redaction is `recordedCall()`'s, so the trail and the supervision record share one definition of
+   * what a stored tool input looks like.
+   */
+  call?: RecordedCall | null;
 }
 
 export interface ActivityRecord {

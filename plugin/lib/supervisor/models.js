@@ -13,10 +13,12 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DecidedBy = exports.TERMINAL_STATES = exports.SupervisionState = exports.Severity = exports.TrafficLight = void 0;
+exports.recordedCall = recordedCall;
 exports.assessmentFrom = assessmentFrom;
 exports.assessmentLight = assessmentLight;
 exports.newRecord = newRecord;
 exports.recordFrom = recordFrom;
+const mask_1 = require("../corpus/mask");
 exports.TrafficLight = {
     GREEN: 'green',
     YELLOW: 'yellow',
@@ -60,6 +62,43 @@ exports.DecidedBy = {
     SUPERVISOR: 'supervisor',
     RULE: 'rule',
 };
+/**
+ * Build the record's call from a tool name and its arguments, masking the arguments on the way in.
+ *
+ * Both record writers go through here — the orchestrator's pending action and the deterministic
+ * tier's rule decision — so there is exactly one place where a tool input is redacted before it
+ * reaches disk. No tool name means no call: a call is never invented, and never reconstructed
+ * from an assessment's prose.
+ *
+ * The masking is load-bearing, not incidental: this is a NEW path along which a tool input reaches
+ * a durable file. Today's rules in `src/corpus/mask.ts` miss `sk-ant-`/`sk-proj-` keys containing
+ * an underscore *entirely* (the character sets are `[A-Za-z0-9-]` / `[A-Za-z0-9]`), so such a key
+ * in a command line is written to the record unmasked. Upstream PR #40 fixes exactly those two
+ * character sets; this field's masking is only as good as that. Fix it there, never here — a
+ * second masker would drift out of step with the first.
+ */
+function recordedCall(toolName, args) {
+    if (!toolName) {
+        return null;
+    }
+    return {
+        tool_name: toolName,
+        input: args === null ? null : redactDeep(args),
+    };
+}
+/** Redact credentials in every string the input holds, at any depth. */
+function redactDeep(v) {
+    if (typeof v === 'string') {
+        return (0, mask_1.redactSecrets)(v);
+    }
+    if (Array.isArray(v)) {
+        return v.map(redactDeep);
+    }
+    if (v !== null && typeof v === 'object') {
+        return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactDeep(x)]));
+    }
+    return v;
+}
 const str = (v, fallback = '') => (typeof v === 'string' ? v : fallback);
 const strList = (v) => Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [];
 const nullableStr = (v) => (typeof v === 'string' ? v : null);
@@ -122,6 +161,7 @@ function newRecord(fields) {
         host: null,
         decided_by: exports.DecidedBy.SUPERVISOR,
         rule: null,
+        call: null,
         user: null,
         project: null,
         team: null,
@@ -164,5 +204,20 @@ function recordFrom(d) {
         created_at: String(d.created_at ?? ''),
         updated_at: String(d.updated_at ?? ''),
         decided_by: String(d.decided_by ?? exports.DecidedBy.SUPERVISOR),
+        call: callFrom(d.call),
     });
+}
+/** Parse a persisted call. An older record has none, and a hand-edited one may hold anything. */
+function callFrom(v) {
+    if (v === null || typeof v !== 'object') {
+        return null;
+    }
+    const d = v;
+    const toolName = nullableStr(d.tool_name);
+    if (toolName === null) {
+        return null;
+    } // a call with no tool identity records nothing
+    const input = d.input;
+    const isPlainObject = input !== null && typeof input === 'object' && !Array.isArray(input);
+    return { tool_name: toolName, input: isPlainObject ? input : null };
 }

@@ -59,6 +59,7 @@ import { CompiledClause, CompiledPolicy, loadPolicy } from '../policy/compile';
 import { selectForPolicy } from '../policy/select';
 import { applyCorrection } from '../policy/corrections';
 import { DecisionRecord, appendJsonl, summarizeInput } from '../audit/trail';
+import { recordedCall } from '../supervisor/models';
 import { decisionsPath } from './paths';
 import { HookInput, runHook } from './io';
 import { PluginSettings, loadSettings } from './settings';
@@ -417,6 +418,7 @@ export async function handle(
       cwd: input.cwd ?? '',
       tool: toolName,
       inputSummary: summarizeInput(input.tool_input),
+      call: recordedCall(toolName, input.tool_input ?? null),
       light: null,
       decision: 'none',
       clause: null,
@@ -473,6 +475,7 @@ export async function handle(
         cwd: input.cwd ?? '',
         tool: toolName,
         inputSummary: summarizeInput(input.tool_input),
+        call: recordedCall(toolName, input.tool_input ?? null),
         light: null,
         decision: 'none',
         clause: null,
@@ -508,6 +511,7 @@ export async function handle(
     cwd: input.cwd ?? '',
     tool: toolName,
     inputSummary: summarizeInput(input.tool_input),
+    call: recordedCall(toolName, input.tool_input ?? null),
     light: verdict.light,
     decision: verdict.decision.behavior,
     clause: verdict.clause,

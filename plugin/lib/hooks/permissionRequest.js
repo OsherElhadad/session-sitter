@@ -100,6 +100,7 @@ const compile_1 = require("../policy/compile");
 const select_1 = require("../policy/select");
 const corrections_1 = require("../policy/corrections");
 const trail_1 = require("../audit/trail");
+const models_2 = require("../supervisor/models");
 const paths_1 = require("./paths");
 const io_1 = require("./io");
 const settings_1 = require("./settings");
@@ -393,6 +394,7 @@ async function handle(rawInput) {
             cwd: input.cwd ?? '',
             tool: toolName,
             inputSummary: (0, trail_1.summarizeInput)(input.tool_input),
+            call: (0, models_2.recordedCall)(toolName, input.tool_input ?? null),
             light: null,
             decision: 'none',
             clause: null,
@@ -446,6 +448,7 @@ async function handle(rawInput) {
                 cwd: input.cwd ?? '',
                 tool: toolName,
                 inputSummary: (0, trail_1.summarizeInput)(input.tool_input),
+                call: (0, models_2.recordedCall)(toolName, input.tool_input ?? null),
                 light: null,
                 decision: 'none',
                 clause: null,
@@ -479,6 +482,7 @@ async function handle(rawInput) {
         cwd: input.cwd ?? '',
         tool: toolName,
         inputSummary: (0, trail_1.summarizeInput)(input.tool_input),
+        call: (0, models_2.recordedCall)(toolName, input.tool_input ?? null),
         light: verdict.light,
         decision: verdict.decision.behavior,
         clause: verdict.clause,
