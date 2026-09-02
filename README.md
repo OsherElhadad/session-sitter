@@ -261,7 +261,7 @@ Coding agents do not stop when you close the laptop. Supervision is for the mome
 there: it classifies each action an agent pauses on, against your own written practices, and acts.
 
 <p align="center">
-  <img src="docs/diagrams/traffic-lights.svg" width="880"
+  <img src="docs/diagrams/traffic-lights.png" width="880"
        alt="The four supervision lights. Green: the action is fine — approve the prompt, record it, no human contact. Yellow: a safe correction — inject labeled guidance, the agent self-corrects, no human contact. Orange: your call — block it, decision card with a countdown, on timeout deny and hand over safe alternatives. Red: policy, not judgment — block outright, send an alert, on timeout the block stands. Silence is never approval: an unanswered card denies the action and never writes an approval.">
 </p>
 

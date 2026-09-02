@@ -40,4 +40,17 @@ and the coordinates of the one or two lines that point at it.
 Keep the `aria-label` on the root `<svg>` in step with the content. It is the only description a
 screen reader gets, since the diagram reaches the page as a single image.
 
-There is no `regen.sh` step for these: an SVG in a document needs no PNG.
+There is no `regen.sh` step for these: an SVG in a document needs no PNG — with **one exception**.
+
+`vsce` refuses to package an extension whose `README.md` references an SVG, so the copy of
+`traffic-lights` in the repository root README is a PNG. Every document under `docs/` keeps the SVG,
+which is sharper and scales. When you edit the SVG, regenerate that one PNG:
+
+```sh
+rsvg-convert -w 1760 -f png -o docs/diagrams/traffic-lights.png docs/diagrams/traffic-lights.svg
+```
+
+1760 is twice the 880 CSS pixels the README asks for, so it stays crisp on a retina display. The
+`alt` text lives in the README and has to be edited there too — it is the only description a reader
+on a text-only client gets.
+
