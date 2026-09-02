@@ -297,6 +297,14 @@ describe('the transcript export contract', () => {
     expect(() => sessionFromDict({ sessionId: 's', turns: ['x'] })).toThrow(/not an object/);
   });
 
+  it('rejects an export whose schemaVersion it does not recognise', () => {
+    expect(() => sessionFromDict({ sessionId: 's', turns: [], schemaVersion: '2.0' }))
+      .toThrow(/unsupported transcript export schemaVersion '2.0'.*expected '1.0'/);
+    // Absent is tolerated (see sessionFromDict); a wrong value is not.
+    expect(sessionFromDict({ sessionId: 's', turns: [] }).sessionId).toBe('s');
+    expect(sessionFromDict({ sessionId: 's', turns: [], schemaVersion: '1.0' }).sessionId).toBe('s');
+  });
+
   it('coerces non-object tool arguments instead of dropping them', () => {
     const s = sessionFromDict({
       sessionId: 's',
