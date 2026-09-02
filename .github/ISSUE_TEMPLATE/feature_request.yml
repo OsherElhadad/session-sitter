@@ -1,0 +1,43 @@
+name: Feature request
+description: Something the panel or the supervisor should do and does not.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: >-
+        The situation, not the solution — what you were doing when this got in your way, and what
+        you did instead. A concrete moment is far more useful than a general capability.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already have a shape in mind, describe it.
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this project holds to
+      description: >-
+        These are not negotiable, and a request that needs one broken is unlikely to land — see
+        [CONTRIBUTING.md](https://github.com/eranra/session-sitter/blob/main/CONTRIBUTING.md). Tick to confirm you have considered them.
+      options:
+        - label: It does not need a runtime dependency (the extension ships with none).
+          required: true
+        - label: It does not need a language other than TypeScript.
+          required: true
+        - label: >-
+            It reads what the agents already write, rather than reimplementing their internals or
+            depending on an unreleased API of theirs.
+          required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Which agent's sessions does this concern
+      multiple: true
+      options: [Claude Code, IBM Bob IDE, Codex CLI, VS Code Chat, All of them, Not agent-specific]

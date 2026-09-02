@@ -73,7 +73,7 @@ button:focus-visible {
   justify-content: center;
   font-size: 15px;
   color: var(--vscode-editor-foreground);
-  opacity: 0.5;
+  opacity: 0.8;
   transition: opacity 0.1s, background-color 0.1s;
 }
 
@@ -91,7 +91,7 @@ button:focus-visible {
   justify-content: center;
   font-size: 14px;
   color: var(--vscode-editor-foreground);
-  opacity: 0.5;
+  opacity: 0.8;
   transition: opacity 0.1s, background-color 0.1s;
 }
 
@@ -101,20 +101,34 @@ button:focus-visible {
   background-color: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
 }
 
+/* Fixed-width icon buttons, like the two on the left. They used to be `flex: 1 1 auto`, which
+   split every remaining pixel of the toolbar between them: two enormous invisible click targets
+   with a tiny glyph at the right-hand edge of each. */
 #new-session-btn,
 #new-bob-session-btn {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: 0 8px;
-  font-size: 16px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+  font-size: 15px;
   font-weight: bold;
   line-height: 1;
   color: var(--vscode-editor-foreground);
-  opacity: 0.7;
-  text-align: right;
+  opacity: 0.8;
   transition: opacity 0.1s, background-color 0.1s;
+}
+
+/* The pair sits at the right-hand end of the toolbar. */
+#new-session-btn {
+  margin-left: auto;
+}
+
+/* "+B" is two glyphs, so it gets a little more room and a little less size. */
+#new-bob-session-btn {
+  width: 30px;
+  font-size: 13px;
 }
 
 #new-session-btn:hover,
@@ -139,7 +153,7 @@ button:focus-visible {
   background-color: var(--vscode-editorHoverWidget-background, var(--vscode-editor-background));
   border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-tab-border, #444));
   border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 16px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.5));
   padding: 14px 16px 12px;
 }
 
@@ -157,7 +171,7 @@ button:focus-visible {
 
 .about-built {
   font-size: 11px;
-  opacity: 0.55;
+  opacity: 0.75;
   font-family: var(--vscode-editor-font-family, monospace);
   margin-bottom: 12px;
   word-break: break-all;
@@ -209,7 +223,7 @@ button:focus-visible {
   padding: 10px 8px 10px 12px;
   gap: 6px;
   cursor: pointer;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.14);
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.14));
   background-color: transparent;
   color: var(--vscode-list-inactiveFocusForeground, var(--vscode-editor-foreground));
   transition: background-color 0.1s;
@@ -248,7 +262,18 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
-/* Project badge below the title */
+/* Source badge, machine pill, workspace pill and timestamp — one wrapping line under the title,
+   so a typical row is two lines rather than the four or five it used to be. Wrapping rather than
+   clipping is what keeps it readable when the sidebar is dragged narrow. */
+.tab-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 6px;
+  min-width: 0;
+}
+
+/* Project badge on the metadata line */
 .tab-badge {
   display: inline-block;
   font-size: 10px;
@@ -318,9 +343,8 @@ button:focus-visible {
 
 /* Inline relative time on the Sessions row (e.g. "5 minutes ago") */
 .tab-time {
-  display: block;
   font-size: 10px;
-  opacity: 0.6;
+  opacity: 0.8;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -454,6 +478,31 @@ button:focus-visible {
   to { transform: rotate(360deg); }
 }
 
+/* Both animations are infinite and there is one per row, so a full list means up to twenty of them
+   running at once. Held still when the OS asks for less motion: the dot still says what it says —
+   its colour and its accessible name carry the state, and the spinner stays a broken ring. */
+@media (prefers-reduced-motion: reduce) {
+  .status-waiting,
+  .status-active {
+    animation: none;
+  }
+}
+
+/* Forced colours replace our palette with the system's, which flattens both the selected row's
+   background and the three status colours into one. The row keeps an outline instead, and the dots
+   keep their own colours — they are the one place here where the colour IS the information, and it
+   is also available as text on each dot. */
+@media (forced-colors: active) {
+  .tab[aria-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .status-indicator {
+    forced-color-adjust: none;
+  }
+}
+
 /* Close (×) button — right side, visible on hover */
 .tab-close {
   flex-shrink: 0;
@@ -475,6 +524,12 @@ button:focus-visible {
 .tab:hover .tab-close,
 .tab:focus-visible .tab-close {
   opacity: 0.7;
+}
+
+/* Tabbing straight to the close button focuses the button, not the row, so without this the thing
+   holding the focus ring is invisible. */
+.tab-close:focus-visible {
+  opacity: 1;
 }
 
 .tab:hover .tab-close:hover {
@@ -500,7 +555,7 @@ button:focus-visible {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--vscode-editor-foreground);
-  opacity: 0.6;
+  opacity: 0.85;
   border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-tab-border, #444));
   background-color: var(--vscode-sideBarSectionHeader-background, transparent);
   transition: opacity 0.1s, background-color 0.1s;
@@ -536,7 +591,7 @@ button:focus-visible {
   min-height: 36px;
   padding: 8px 8px 8px 12px;
   cursor: pointer;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.14);
+  border-bottom: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.14));
   background-color: transparent;
   color: var(--vscode-list-inactiveFocusForeground, var(--vscode-editor-foreground));
   opacity: 0.8;
@@ -565,11 +620,10 @@ button:focus-visible {
   overflow-wrap: normal;
 }
 
+/* The history row is itself at 0.8, so this stacks — 0.6 here read as 0.48. */
 .history-time {
-  display: block;
   font-size: 10px;
-  opacity: 0.6;
-  margin-top: 1px;
+  opacity: 0.85;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -585,7 +639,7 @@ button:focus-visible {
   background-color: var(--vscode-editorHoverWidget-background, var(--vscode-editor-background));
   border: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-tab-border, #444));
   border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
   padding: 8px 0;
   pointer-events: none;
 }
@@ -593,7 +647,7 @@ button:focus-visible {
 .preview-path {
   padding: 2px 10px 6px;
   font-size: 10px;
-  opacity: 0.55;
+  opacity: 0.8;
   word-break: break-all;
   border-bottom: 1px solid var(--vscode-editorHoverWidget-border, var(--vscode-tab-border, #444));
   margin-bottom: 4px;
@@ -633,7 +687,7 @@ button:focus-visible {
 
 .preview-time {
   font-size: 10px;
-  opacity: 0.55;
+  opacity: 0.8;
 }
 
 .preview-text {
@@ -654,7 +708,7 @@ button:focus-visible {
   color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
   border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, rgba(128, 128, 128, 0.35)));
   border-radius: 3px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
   font-size: 12px;
   display: flex;
   flex-direction: column;
@@ -733,7 +787,7 @@ button:focus-visible {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--vscode-editor-foreground);
-  opacity: 0.6;
+  opacity: 0.85;
   border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-tab-border, #444));
   background-color: var(--vscode-sideBarSectionHeader-background, transparent);
   transition: opacity 0.1s, background-color 0.1s;
@@ -759,23 +813,25 @@ button:focus-visible {
 
 .activity-item {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 5px;
   padding: 7px 12px;
   border-top: 1px solid var(--vscode-list-inactiveFocusOutline, rgba(128, 128, 128, 0.12));
   border-left: 3px solid transparent;
   font-size: 12px;
 }
 
-.activity-item.activity-green  { border-left-color: #3fb950; }
-.activity-item.activity-yellow { border-left-color: #d29922; }
-.activity-item.activity-orange { border-left-color: #db6d28; }
-.activity-item.activity-red    { border-left-color: #f85149; }
+/* The four lights come from the theme's chart palette, so they stay legible on a light theme —
+   the hexes they replaced were GitHub-dark's, and that yellow is unreadable on a white panel. The
+   brand badges above are a different thing: those are fixed on purpose. */
+.activity-item.activity-green  { border-left-color: var(--vscode-charts-green, #3fb950); }
+.activity-item.activity-yellow { border-left-color: var(--vscode-charts-yellow, #d29922); }
+.activity-item.activity-orange { border-left-color: var(--vscode-charts-orange, #db6d28); }
+.activity-item.activity-red    { border-left-color: var(--vscode-charts-red, var(--vscode-errorForeground, #f85149)); }
 
 .activity-dot { flex-shrink: 0; line-height: 1.4; }
 
 .activity-text { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
-
-.activity-summary { font-weight: 600; white-space: normal; word-break: break-word; }
 
 .activity-note {
   opacity: 0.85;
@@ -795,15 +851,18 @@ button:focus-visible {
 
 /* ── Activity card internals ─────────────────────────────────────────────── */
 
-.activity-item { flex-direction: column; gap: 5px; }
-.activity-item.activity-awaiting { background-color: rgba(219, 109, 40, 0.08); }
+/* A card that is waiting on a human is tinted, and the theme owns the tint: the wash it replaced
+   was a fixed orange that vanishes on some themes and muddies others. */
+.activity-item.activity-awaiting {
+  background-color: var(--vscode-inputValidation-warningBackground, rgba(219, 109, 40, 0.08));
+}
 
 .activity-head { display: flex; align-items: center; gap: 6px; }
 .activity-light { font-weight: 700; letter-spacing: 0.05em; font-size: 11px; }
-.activity-item.activity-green  .activity-light { color: #3fb950; }
-.activity-item.activity-yellow .activity-light { color: #d29922; }
-.activity-item.activity-orange .activity-light { color: #db6d28; }
-.activity-item.activity-red    .activity-light { color: #f85149; }
+.activity-item.activity-green  .activity-light { color: var(--vscode-charts-green, #3fb950); }
+.activity-item.activity-yellow .activity-light { color: var(--vscode-charts-yellow, #d29922); }
+.activity-item.activity-orange .activity-light { color: var(--vscode-charts-orange, #db6d28); }
+.activity-item.activity-red    .activity-light { color: var(--vscode-charts-red, var(--vscode-errorForeground, #f85149)); }
 
 /* Who decided: a deterministic rule, or the supervisor AI. Both are real interventions, so both
    are listed — this pill is what tells them apart at a glance. */
@@ -824,7 +883,7 @@ button:focus-visible {
 }
 .activity-rule { font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
 
-.activity-timeago { margin-left: auto; opacity: 0.55; font-size: 11px; }
+.activity-timeago { margin-left: auto; opacity: 0.8; font-size: 11px; }
 
 .activity-body { display: flex; flex-direction: column; gap: 3px; }
 .activity-summary { font-weight: 600; word-break: break-word; }
@@ -857,13 +916,13 @@ button:focus-visible {
   margin-top: 3px;
   font-size: 11px;
   font-weight: 600;
-  color: #db6d28;
+  color: var(--vscode-charts-orange, #db6d28);
 }
 
 /* ── Failed supervision: collapsible, debuggable detail ──────────────────── */
-.activity-item.activity-failed { border-left-color: #f85149; }
+.activity-item.activity-failed { border-left-color: var(--vscode-charts-red, var(--vscode-errorForeground, #f85149)); }
 .activity-item.activity-failed .activity-light,
-.activity-item.activity-failed .activity-state { color: #f85149; }
+.activity-item.activity-failed .activity-state { color: var(--vscode-charts-red, var(--vscode-errorForeground, #f85149)); }
 
 .activity-failure { margin-top: 3px; }
 .activity-fail-toggle {

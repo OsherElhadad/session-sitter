@@ -14,16 +14,25 @@ Knowledge files are where those rules live so the supervisor can apply them.
 
 ## Three tiers, narrower wins
 
-```
-<corpus repo>/data/knowledge/
-├── teams/<team>/bottom-line.md        ← broadest · lowest precedence
-├── projects/<project>/bottom-line.md  ← one repository or initiative
-└── users/<user>/bottom-line.md        ← personal · highest precedence
+```mermaid
+flowchart TD
+  T["the triple<br>(user, project, team)"] --> REG{"knowledge.registryPath<br>set?"}
+  REG -->|no| ASIS["slugs used exactly as given<br>an empty slug means that tier<br>is simply not configured"]
+  REG -->|yes| VAL["validate against the roster —<br>an unknown slug is a hard error,<br>an ambiguous one refuses to guess"]
+  ASIS --> ROOT
+  VAL --> ROOT["the corpus root<br>dataRepoPath, or a shallow<br>KNOWLEDGE_REPO clone at KNOWLEDGE_REF"]
+  ROOT --> TF["data/knowledge/teams/TEAM/bottom-line.md<br>broadest, lowest precedence"]
+  ROOT --> PF["data/knowledge/projects/PROJECT/bottom-line.md<br>one repository or initiative"]
+  ROOT --> UF["data/knowledge/users/USER/bottom-line.md<br>personal, highest precedence"]
+  TF --> M
+  PF --> M
+  UF --> M
+  M["loaded team, then project, then user<br>a missing file is skipped, not an error"] --> PR["handed to the classifier<br><b>narrowest tier first</b>, every entry kept,<br>each one tagged with its tier"]
 ```
 
-They are loaded in order — team, then project, then user — and handed to the classifier with the
-**narrower tier first**, so it sees the precedence. Modeled after how Claude Code layers
-`CLAUDE.md` files.
+Loading order and presentation order are deliberately opposite: the files load broad to narrow, and
+are handed to the classifier narrow first so it sees the precedence. Modeled after how Claude Code
+layers `CLAUDE.md` files.
 
 Conflicts are not resolved during loading. Every entry from every tier is surfaced, annotated
 with its tier, and the classifier reasons about them. That is deliberate: a team-level red safety

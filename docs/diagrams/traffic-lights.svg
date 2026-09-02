@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img"
+     aria-label="The four supervision lights: green approves, yellow corrects, orange asks you, red blocks. On timeout nothing is approved.">
+<rect width="1200" height="440" rx="18" fill="#0F1424"/>
+<text x="28" y="52" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="30" font-weight="700" fill="#F6F4EF">When an agent pauses for approval, one of four things happens</text>
+<text x="28" y="84" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" fill="#8B97AF">Classified against your team&#8217;s written practices &#183; a read-only action never reaches a model</text>
+<rect x="28" y="112" width="271" height="240" rx="14" fill="#181F33" stroke="#2C3654"/>
+<rect x="28" y="112" width="271" height="5" rx="2.5" fill="#3fb950"/>
+<circle cx="62" cy="160" r="17" fill="#3fb950"/>
+<text x="92" y="168" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="25" font-weight="700" fill="#F6F4EF">Green</text>
+<text x="50" y="205" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" fill="#3fb950">the action is fine</text>
+<text x="50" y="243" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">approve the prompt</text>
+<text x="50" y="272" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">record it</text>
+<text x="50" y="301" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">no human contact</text>
+<rect x="319" y="112" width="271" height="240" rx="14" fill="#181F33" stroke="#2C3654"/>
+<rect x="319" y="112" width="271" height="5" rx="2.5" fill="#d29922"/>
+<circle cx="353" cy="160" r="17" fill="#d29922"/>
+<text x="383" y="168" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="25" font-weight="700" fill="#F6F4EF">Yellow</text>
+<text x="341" y="205" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" fill="#d29922">a safe correction</text>
+<text x="341" y="243" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">inject labeled guidance</text>
+<text x="341" y="272" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">the agent self-corrects</text>
+<text x="341" y="301" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">no human contact</text>
+<rect x="610" y="112" width="271" height="240" rx="14" fill="#181F33" stroke="#2C3654"/>
+<rect x="610" y="112" width="271" height="5" rx="2.5" fill="#db6d28"/>
+<circle cx="644" cy="160" r="17" fill="#db6d28"/>
+<text x="674" y="168" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="25" font-weight="700" fill="#F6F4EF">Orange</text>
+<text x="632" y="205" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" fill="#db6d28">your call</text>
+<text x="632" y="243" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">block it</text>
+<text x="632" y="272" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">decision card + countdown</text>
+<text x="632" y="301" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">on timeout: deny, and hand</text>
+<text x="632" y="330" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">over safe alternatives</text>
+<rect x="901" y="112" width="271" height="240" rx="14" fill="#181F33" stroke="#2C3654"/>
+<rect x="901" y="112" width="271" height="5" rx="2.5" fill="#f85149"/>
+<circle cx="935" cy="160" r="17" fill="#f85149"/>
+<text x="965" y="168" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="25" font-weight="700" fill="#F6F4EF">Red</text>
+<text x="923" y="205" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="18" fill="#f85149">policy, not judgment</text>
+<text x="923" y="243" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">block outright</text>
+<text x="923" y="272" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">send an alert</text>
+<text x="923" y="301" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">on timeout: the block</text>
+<text x="923" y="330" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="17" fill="#8B97AF">stands</text>
+<rect x="28" y="370" width="1144" height="46" rx="10" fill="#1E1520" stroke="#f85149" stroke-opacity="0.45"/>
+<circle cx="56" cy="393" r="9" fill="#db6d28"/><circle cx="80" cy="393" r="9" fill="#f85149"/>
+<text x="104" y="400" font-family="Liberation Sans, DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" fill="#F6F4EF"><tspan font-weight="700">Silence is never approval.</tspan><tspan fill="#8B97AF" dx="10">An unanswered card denies the action. It never writes an approval.</tspan></text>
+</svg>
