@@ -130,7 +130,7 @@ status: accepted
 level: red
 evidence: EXTRACTED
 support: 12
-weight: 12
+weight: medium
 contradictions: 0
 learned_at: 2026-08-30
 adopted_at: 2026-09-01
@@ -181,6 +181,20 @@ ${RATIONALE}
     expect(err.join('')).toContain('unknown `status: PURPLE`');
     // The runtime keeps serving the last good revision while the corpus is broken.
     expect(fs.readFileSync(currentPath(), 'utf8')).toBe(good);
+  });
+
+  it('refuses an unknown flag instead of writing somewhere else', async () => {
+    // The bug this pins: `--data-dir` was not a flag, so a compile aimed at a scratch directory
+    // silently published into the user's live `~/.claude/session-sitter/`.
+    expect(await compile(['--corpus', tmp, '--user', 'dev', '--data-durr', '/tmp/x'])).toBe(2);
+    expect(err.join('')).toContain('unknown option: --data-durr');
+    expect(err.join('')).toContain('--data-dir');
+  });
+
+  it('publishes where --data-dir says', async () => {
+    const elsewhere = path.join(tmp, 'elsewhere');
+    expect(await run(learnedClause('terraform apply'), '--data-dir', elsewhere)).toBe(0);
+    expect(fs.existsSync(path.join(elsewhere, 'policy', 'current.json'))).toBe(true);
   });
 
   it('needs a corpus and a user before it will do anything', async () => {

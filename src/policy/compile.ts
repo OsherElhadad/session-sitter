@@ -46,7 +46,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { KnowledgeEntry, TIER_ORDER, Tier, loadKnowledge } from '../supervisor/knowledge';
 import {
-  ClauseOrigin, ClauseStatus, Finding, LearnedClauseFile, RATIONALE_MIN_CHARS,
+  ClauseOrigin, ClauseStatus, ClauseWeight, Finding, LearnedClauseFile, RATIONALE_MIN_CHARS,
   rationaleOf, readLearnedDir,
 } from '../supervisor/learnedClauses';
 import { ClauseLevel, PatternSpec, clauseIdFor, patternSpecs } from './practices';
@@ -118,7 +118,7 @@ export interface CompiledClause {
   patterns: CompiledPattern[];
   fix: CompiledFix | null;
   /** Frozen at accept time. The selector's ranking signal, and nothing else. */
-  weight: number;
+  weight: ClauseWeight;
   expires: string | null;
   supersedes: string[];
   source_file: string | null;
@@ -301,7 +301,9 @@ function humanClause(entry: KnowledgeEntry): { clause: CompiledClause; specs: Pa
       body: rationaleOf(entry),
       patterns: patternsOf(specs),
       fix: null,
-      weight: 0,
+      // A hand-written clause has no evidence to weigh. It does not sort last for it: `origin` leads
+      // the rendering order, so a human clause is above every learned one whatever its bucket.
+      weight: 'low',
       expires: entry.expires,
       supersedes: splitList(entry.supersedes),
       source_file: entry.sourceFile,

@@ -86,6 +86,7 @@ function matchingClauses(clauses, haystack) {
 }
 const TIER_RANK = { user: 2, project: 1, team: 0 };
 const ORIGIN_RANK = { human: 0, learned: 1 };
+const WEIGHT_RANK = { high: 0, medium: 1, low: 2 };
 /**
  * The fill order: **origin**, then narrowness, then the frozen weight, then the id. A total order,
  * so no tie is broken by insertion or map-iteration order — which is what makes the rendered set
@@ -105,7 +106,7 @@ const ORIGIN_RANK = { human: 0, learned: 1 };
 function compareFill(a, b) {
     return ((ORIGIN_RANK[a.origin] ?? 9) - (ORIGIN_RANK[b.origin] ?? 9))
         || ((TIER_RANK[b.tier] ?? 0) - (TIER_RANK[a.tier] ?? 0))
-        || (b.weight - a.weight)
+        || ((WEIGHT_RANK[a.weight] ?? 9) - (WEIGHT_RANK[b.weight] ?? 9))
         || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 /** Select the per-call knowledge block. Deterministic in every argument, including the date. */

@@ -67,6 +67,18 @@ export type RetiredReason = 'ablation' | 'displacement' | 'manual';
 
 const RETIRED_REASONS: readonly RetiredReason[] = ['ablation', 'displacement', 'manual'];
 
+/**
+ * The selector's ranking signal, frozen when the clause is accepted.
+ *
+ * Three buckets rather than a number, and that is the whole point: a numeric weight invites someone
+ * to refresh it from the live support count, which moves the compiled revision and invalidates every
+ * running session's cached prompt prefix. Three buckets cannot be casually recomputed, and they order
+ * perfectly well for a rendering order. Absent reads as `low`.
+ */
+export type ClauseWeight = 'high' | 'medium' | 'low';
+
+const CLAUSE_WEIGHTS: readonly ClauseWeight[] = ['high', 'medium', 'low'];
+
 /** graphify's three-level tag: a routing decision for the reviewer, not a score. */
 export type Evidence = 'EXTRACTED' | 'INFERRED' | 'AMBIGUOUS';
 
@@ -109,14 +121,12 @@ export interface LearnedClauseFile {
    * The selector's ranking signal, **frozen when the clause was accepted** and never updated
    * afterwards (`14-runtime-and-dashboard.md` §A3 step 5, team-lead ruling 4).
    *
-   * It is a field rather than `min(support, 100)` computed at compile time for one reason: `support`
-   * is a live counter the extraction pipeline keeps writing, and anything mutable that reaches the
-   * compiled artifact moves its revision, which rewrites the cached prompt prefix of every running
-   * session. So the accept step reads `support` once, writes it here, and nothing touches it again.
-   * Absent reads as `0` — a hand-written clause has no support signal, and the selector's total
-   * order falls through to the id.
+   * A field rather than something computed from `support` at compile time, because `support` is a
+   * live counter the pipeline keeps writing and anything mutable in the artifact moves its revision.
+   * The accept step reads the evidence once, writes a bucket here, and nothing touches it again.
+   * Absent reads as `low` — see {@link ClauseWeight} for why it is three buckets and not a number.
    */
-  weight: number;
+  weight: ClauseWeight;
   learnedAt: string | null;
   adoptedAt: string | null;
   expires: string | null;
@@ -549,7 +559,15 @@ export function parseLearnedClause(
   };
   const support = count('support');
   const contradictions = count('contradictions');
-  const weight = count('weight');
+  const weightRaw = scalar('weight');
+  let weight: ClauseWeight = 'low';
+  if (weightRaw !== null) {
+    if ((CLAUSE_WEIGHTS as readonly string[]).includes(weightRaw)) {
+      weight = weightRaw as ClauseWeight;
+    } else {
+      err(at('weight'), `unknown \`weight: ${weightRaw}\` (expected ${CLAUSE_WEIGHTS.join(', ')})`);
+    }
+  }
   if (scalar('contradictions') === null) {
     // A missing count is the *optimistic* reading, so it is worth saying out loud.
     warn(null, 'no `contradictions` count — absent reads as 0, which is the optimistic assumption');

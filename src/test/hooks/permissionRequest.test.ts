@@ -739,7 +739,7 @@ status: audit
 level: red
 evidence: EXTRACTED
 support: 3
-weight: 3
+weight: low
 contradictions: 0
 learned_at: 2026-08-30
 learned_from:
