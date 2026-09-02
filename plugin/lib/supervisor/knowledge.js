@@ -1,0 +1,483 @@
+// GENERATED FILE — DO NOT EDIT.
+// Compiled from src/supervisor/knowledge.ts by scripts/build-plugin-lib.js (`make plugin`).
+// Edit the TypeScript source and re-run `make plugin`; CI fails if this tree is stale.
+"use strict";
+/**
+ * Route and parse BDI knowledge for one running coding-agent session.
+ *
+ * Ported from the Python supervisor (`knowledge.py` **and** `kb-sitter-skill/scripts/fetch_bdi_files.py`
+ * (the loader those two split between them is one module here).
+ *
+ * Given a `(user, project, team)` triple, three tier files are read in precedence order
+ * (team < project < user) from a knowledge repo:
+ *
+ *     data/knowledge/teams/<team>/bottom-line.md
+ *     data/knowledge/projects/<project>/bottom-line.md
+ *     data/knowledge/users/<user>/bottom-line.md
+ *
+ * A missing tier file is NOT an error — it is skipped.
+ *
+ * Deliberately NOT here: classification, conflict *resolution*, traffic-light decisions. All
+ * entries from all three tiers are surfaced, annotated with tier + precedence (narrower first).
+ * The classifier reasons about conflicts, so a team-level red-level safety belief is never
+ * silently dropped just because a narrower file reuses an id.
+ *
+ * ## Routing without a registry
+ *
+ * The original resolved the triple by parsing registry tables out of a skill markdown file that
+ * hard-coded concrete team/project/user slugs. That data is deployment-specific, so here the
+ * registry is **optional**: with no registry the triple is taken as given (settings-driven);
+ * with one, it is validated and the documented fallbacks apply.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.CLONE_CACHE_TTL_MS = exports.EMPTY_REGISTRY = exports.KnowledgeError = exports.DEFAULT_KNOWLEDGE_REF = exports.TIER_PRECEDENCE = exports.TIER_ORDER = void 0;
+exports.tierPath = tierPath;
+exports.entryPrecedence = entryPrecedence;
+exports.ranked = ranked;
+exports.parseMarkdownTables = parseMarkdownTables;
+exports.parseRegistry = parseRegistry;
+exports.isEmptyRegistry = isEmptyRegistry;
+exports.resolveTriple = resolveTriple;
+exports.parseBottomLine = parseBottomLine;
+exports.shallowClone = shallowClone;
+exports.clearKnowledgeCache = clearKnowledgeCache;
+exports.fetchBdiFiles = fetchBdiFiles;
+exports.loadKnowledge = loadKnowledge;
+const fs = __importStar(require("fs"));
+const os = __importStar(require("os"));
+const path = __importStar(require("path"));
+const child_process_1 = require("child_process");
+/** Load order, broadest → narrowest. */
+exports.TIER_ORDER = ['team', 'project', 'user'];
+exports.TIER_PRECEDENCE = { team: 0, project: 1, user: 2 };
+exports.DEFAULT_KNOWLEDGE_REF = 'main';
+/** In-repo path of each tier's bottom-line file, given the resolved slugs. */
+function tierPath(tier, slugs) {
+    const dir = { team: 'teams', project: 'projects', user: 'users' }[tier];
+    return path.posix.join('data', 'knowledge', dir, slugs[tier], 'bottom-line.md');
+}
+/** Raised on unresolvable routing (unknown slug, ambiguous project). Fails loud. */
+class KnowledgeError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'KnowledgeError';
+    }
+}
+exports.KnowledgeError = KnowledgeError;
+function entryPrecedence(e) {
+    return exports.TIER_PRECEDENCE[e.tier] ?? 0;
+}
+/** Entries with the narrower tier first (user > project > team). */
+function ranked(bundle) {
+    return [...bundle.entries].sort((a, b) => entryPrecedence(b) - entryPrecedence(a));
+}
+exports.EMPTY_REGISTRY = { projects: {}, users: {}, teams: new Set() };
+/** Strip markdown link syntax, backticks, and surrounding whitespace from a table cell. */
+function cleanCell(cell) {
+    let c = cell.trim();
+    const m = /^\[`?([^`\]]+)`?\]\([^)]*\)/.exec(c);
+    if (m) {
+        c = m[1];
+    }
+    return c.trim().replace(/^`+|`+$/g, '').trim();
+}
+function splitSlugs(cell) {
+    return cleanCell(cell)
+        .split(/[,\s]+/)
+        .map(p => p.replace(/^`+|`+$/g, '').trim())
+        .filter(p => p.length > 0);
+}
+/**
+ * Return each markdown table as a list of rows, each row a list of cell strings.
+ * A table is a run of consecutive lines starting with `|`; the separator row is dropped.
+ */
+function parseMarkdownTables(text) {
+    const tables = [];
+    let current = [];
+    for (const line of text.split('\n')) {
+        const stripped = line.trim();
+        if (stripped.startsWith('|')) {
+            const cells = stripped.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+            const isSeparator = cells.length > 0 && cells.every(c => /^[-:\s]*$/.test(c));
+            if (isSeparator) {
+                continue;
+            }
+            current.push(cells);
+        }
+        else if (current.length) {
+            tables.push(current);
+            current = [];
+        }
+    }
+    if (current.length) {
+        tables.push(current);
+    }
+    return tables;
+}
+/** Parse the Teams/Projects/Users registry tables out of a registry markdown file. */
+function parseRegistry(registryText) {
+    const projects = {};
+    const users = {};
+    const teams = new Set();
+    for (const table of parseMarkdownTables(registryText)) {
+        if (table.length === 0) {
+            continue;
+        }
+        const header = table[0].map(h => h.toLowerCase());
+        const rows = table.slice(1);
+        if (rows.length === 0) {
+            continue;
+        }
+        if (header.some(h => h.includes('team slug'))) {
+            for (const row of rows) {
+                const slug = cleanCell(row[0]);
+                if (slug) {
+                    teams.add(slug);
+                }
+            }
+        }
+        else if (header.some(h => h.includes('project slug'))) {
+            // columns: Project slug | File | Team | Users on this project
+            for (const row of rows) {
+                if (row.length < 3) {
+                    continue;
+                }
+                const slug = cleanCell(row[0]);
+                const team = row.length > 2 ? cleanCell(row[2]) : '';
+                const userList = row.length > 3 ? splitSlugs(row[3]) : [];
+                if (slug) {
+                    projects[slug] = { team, users: userList };
+                    if (team) {
+                        teams.add(team);
+                    }
+                }
+            }
+        }
+        else if (header.some(h => h.includes('user slug'))) {
+            // columns: User slug | File | Team | Projects
+            for (const row of rows) {
+                if (row.length < 3) {
+                    continue;
+                }
+                const slug = cleanCell(row[0]);
+                const team = row.length > 2 ? cleanCell(row[2]) : '';
+                const projList = row.length > 3 ? splitSlugs(row[3]) : [];
+                if (slug) {
+                    users[slug] = { team, projects: projList };
+                    if (team) {
+                        teams.add(team);
+                    }
+                }
+            }
+        }
+    }
+    return { projects, users, teams };
+}
+/** True when the registry carries no routing data (so validation must be skipped). */
+function isEmptyRegistry(r) {
+    return Object.keys(r.users).length === 0
+        && Object.keys(r.projects).length === 0
+        && r.teams.size === 0;
+}
+/**
+ * Resolve `(user, project, team)`, applying the registry's fallbacks. Fails loud.
+ *
+ * - user required.
+ * - project missing: if the user is on exactly one project, use it; else error.
+ * - team missing: look it up from the user's registry row.
+ * - unknown slug in any field: error (never substitute a default).
+ *
+ * With an EMPTY registry there is nothing to validate against and nothing to infer from, so the
+ * triple is returned as given. `user` is still required; a missing project or team resolves to
+ * the empty string and that tier is simply reported missing — which is the same graceful
+ * degradation a missing tier file already gets. This never substitutes a *wrong* slug (the rule
+ * the registry path enforces); it substitutes none.
+ */
+function resolveTriple(registry, user, project, team) {
+    if (!user) {
+        throw new KnowledgeError('user is required to route knowledge');
+    }
+    if (isEmptyRegistry(registry)) {
+        return [user, project ?? '', team ?? ''];
+    }
+    if (!(user in registry.users)) {
+        throw new KnowledgeError(`unknown user slug: ${JSON.stringify(user)}`);
+    }
+    const userRow = registry.users[user];
+    let resolvedProject = project ?? '';
+    if (!resolvedProject) {
+        const candidates = userRow.projects ?? [];
+        if (candidates.length === 1) {
+            resolvedProject = candidates[0];
+        }
+        else if (candidates.length === 0) {
+            throw new KnowledgeError(`user ${JSON.stringify(user)} has no projects in the registry; project required`);
+        }
+        else {
+            throw new KnowledgeError(`user ${JSON.stringify(user)} is on multiple projects ${JSON.stringify(candidates)}; `
+                + 'resolve project before routing');
+        }
+    }
+    if (!(resolvedProject in registry.projects)) {
+        throw new KnowledgeError(`unknown project slug: ${JSON.stringify(resolvedProject)}`);
+    }
+    let resolvedTeam = team ?? '';
+    if (!resolvedTeam) {
+        resolvedTeam = userRow.team || registry.projects[resolvedProject].team || '';
+        if (!resolvedTeam) {
+            throw new KnowledgeError(`could not resolve team for user ${JSON.stringify(user)} / project ${JSON.stringify(resolvedProject)}`);
+        }
+    }
+    if (!registry.teams.has(resolvedTeam)) {
+        throw new KnowledgeError(`unknown team slug: ${JSON.stringify(resolvedTeam)}`);
+    }
+    return [user, resolvedProject, resolvedTeam];
+}
+// --------------------------------------------------------------------------- BDI parse
+const HEADING_RE = /^###\s+(Belief|Desire|Intention):\s*(.+?)\s*$/i;
+const TABLE_ROW_RE = /^\|\s*([^|]+?)\s*\|\s*(.*?)\s*\|\s*$/;
+/** Parse BDI entries from a bottom-line.md body. */
+function parseBottomLine(text, tier, sourceFile = null) {
+    const entries = [];
+    const lines = text.split('\n');
+    const n = lines.length;
+    let i = 0;
+    while (i < n) {
+        const m = HEADING_RE.exec(lines[i].trim());
+        if (!m) {
+            i++;
+            continue;
+        }
+        const kind = m[1].toLowerCase();
+        const title = m[2].trim();
+        i++;
+        const meta = {};
+        const contentLines = [];
+        // Consume metadata table rows and content until the next entry heading or a section
+        // boundary (`## ` / a lone `---`).
+        while (i < n) {
+            const stripped = lines[i].trim();
+            if (HEADING_RE.test(stripped) || stripped.startsWith('## ')) {
+                break;
+            }
+            if (stripped === '---') {
+                i++;
+                break;
+            }
+            const row = TABLE_ROW_RE.exec(stripped);
+            if (row) {
+                const key = row[1].trim().toLowerCase();
+                const val = row[2].trim();
+                if (key !== 'field' && key !== 'value' && !/^[-:\s]*$/.test(key)) {
+                    meta[key] = val;
+                }
+            }
+            else if (stripped) {
+                contentLines.push(lines[i]);
+            }
+            i++;
+        }
+        entries.push({
+            kind,
+            title,
+            tier,
+            text: contentLines.join('\n').trim(),
+            id: meta.id ?? null,
+            source: meta.source ?? null,
+            confidence: meta.confidence ?? null,
+            scope: meta.scope ?? null,
+            added: meta.added ?? null,
+            updated: meta.updated ?? null,
+            tags: (meta.tags ?? '').split(',').map(t => t.trim()).filter(t => t.length > 0),
+            level: meta.level ?? null,
+            supersedes: meta.supersedes ?? null,
+            expires: meta.expires ?? null,
+            sourceFile,
+        });
+    }
+    return entries;
+}
+// --------------------------------------------------------------------------- fetch
+function run(cmd, args, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        (0, child_process_1.execFile)(cmd, args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+            if (err) {
+                reject(new Error(stderr || String(err)));
+                return;
+            }
+            resolve({ stdout, stderr });
+        });
+    });
+}
+/** Shallow-clone a single branch/ref of `repoUrl` into `dest`. */
+async function shallowClone(repoUrl, ref, dest) {
+    await run('git', [
+        'clone', '--depth', '1', '--branch', ref, '--single-branch', '--no-tags', repoUrl, dest,
+    ], 120000);
+}
+async function readTierFile(root, tier, slugs) {
+    // An unconfigured tier (empty slug) has no file to look for; report it missing without
+    // touching the filesystem, so a partially-configured routing triple still loads what it can.
+    if (!slugs[tier]) {
+        return { slug: '', path_in_repo: `(${tier} tier not configured)`, exists: false, content: null };
+    }
+    const rel = tierPath(tier, slugs);
+    const full = path.join(root, ...rel.split('/'));
+    try {
+        const content = await fs.promises.readFile(full, 'utf8');
+        return { slug: slugs[tier], path_in_repo: rel, exists: true, content };
+    }
+    catch {
+        return { slug: slugs[tier], path_in_repo: rel, exists: false, content: null };
+    }
+}
+/**
+ * How long a cloned set of tier files stays good. Knowledge changes on the order of days; the
+ * supervisor reads it on the order of seconds.
+ */
+exports.CLONE_CACHE_TTL_MS = 5 * 60000;
+/**
+ * Fetched tier files, cached per (repo, ref, routing triple).
+ *
+ * Without this, `git clone --depth 1` ran on EVERY classification — the latency audit estimates
+ * 1-5s in front of every decision, to fetch three small markdown files that change maybe weekly.
+ * That was plausibly a larger cost than the model call it preceded.
+ *
+ * The local-checkout path is deliberately NOT cached: it is three file reads, and someone editing
+ * their own knowledge repo should see the edit on the next decision, not in five minutes.
+ *
+ * ponytail: one in-process Map with a TTL and no eviction — the key space is one entry per routing
+ * triple, so it cannot grow meaningfully. Add an LRU if that ever stops being true, and a
+ * cross-process cache only if the CLI's per-invocation cost turns out to matter.
+ */
+const cloneCache = new Map();
+/** Drop the cached clones. For tests, and for a caller that knows the knowledge just changed. */
+function clearKnowledgeCache() {
+    cloneCache.clear();
+}
+/**
+ * Read the three tier files, either straight from a local checkout or from a shallow clone.
+ * Replaces `fetch_bdi_files.py`. A missing tier file surfaces as `exists: false`, not an error.
+ */
+async function fetchBdiFiles(user, project, team, opts = {}) {
+    const slugs = { user, project, team };
+    const out = {};
+    const local = opts.localRepo;
+    if (local) {
+        const root = local.startsWith('~') ? path.join(os.homedir(), local.slice(1)) : local;
+        let isDir = false;
+        try {
+            isDir = (await fs.promises.stat(root)).isDirectory();
+        }
+        catch {
+            isDir = false;
+        }
+        if (!isDir) {
+            throw new KnowledgeError(`local knowledge repo dir not found: ${root}`);
+        }
+        for (const tier of exports.TIER_ORDER) {
+            out[tier] = await readTierFile(root, tier, slugs);
+        }
+        return out;
+    }
+    if (!opts.repo) {
+        throw new KnowledgeError('no knowledge source configured: set a local knowledge repo path or a git URL');
+    }
+    const ref = opts.ref ?? exports.DEFAULT_KNOWLEDGE_REF;
+    const key = [opts.repo, ref, user, project, team].join('\u0000');
+    const hit = cloneCache.get(key);
+    if (hit && Date.now() - hit.at < exports.CLONE_CACHE_TTL_MS) {
+        return hit.files;
+    }
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'kb-sitter-'));
+    const clone = path.join(tmp, 'clone');
+    try {
+        try {
+            await shallowClone(opts.repo, ref, clone);
+        }
+        catch (err) {
+            throw new KnowledgeError(`git clone failed: ${String(err).slice(0, 300)}`);
+        }
+        for (const tier of exports.TIER_ORDER) {
+            out[tier] = await readTierFile(clone, tier, slugs);
+        }
+        // Only a successful fetch is cached, so a transient git failure is retried rather than
+        // remembered for five minutes.
+        cloneCache.set(key, { at: Date.now(), files: out });
+        return out;
+    }
+    finally {
+        await fs.promises.rm(tmp, { recursive: true, force: true }).catch(() => { });
+    }
+}
+/**
+ * Resolve the triple, fetch the three bottom-line files, and parse them into entries.
+ * Missing tier files are skipped, not errors.
+ */
+async function loadKnowledge(opts) {
+    let registry = exports.EMPTY_REGISTRY;
+    if (opts.registryPath) {
+        let text;
+        try {
+            text = await fs.promises.readFile(opts.registryPath, 'utf8');
+        }
+        catch {
+            throw new KnowledgeError(`knowledge registry not found: ${opts.registryPath}`);
+        }
+        registry = parseRegistry(text);
+    }
+    const [rUser, rProject, rTeam] = resolveTriple(registry, opts.user, opts.project, opts.team);
+    const fetcher = opts.fetch
+        ?? ((u, p, t) => fetchBdiFiles(u, p, t, {
+            localRepo: opts.localRepo, repo: opts.knowledgeRepo, ref: opts.knowledgeRef,
+        }));
+    const files = await fetcher(rUser, rProject, rTeam);
+    const entries = [];
+    const loadedFiles = [];
+    const missingFiles = [];
+    for (const tier of exports.TIER_ORDER) { // team -> project -> user
+        const f = files[tier];
+        const rel = f?.path_in_repo ?? tier;
+        if (f?.exists && f.content) {
+            entries.push(...parseBottomLine(f.content, tier, rel));
+            loadedFiles.push(rel);
+        }
+        else {
+            missingFiles.push(rel);
+        }
+    }
+    return { user: rUser, project: rProject, team: rTeam, entries, loadedFiles, missingFiles };
+}

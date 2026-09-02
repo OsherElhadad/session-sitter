@@ -1,0 +1,153 @@
+// GENERATED FILE — DO NOT EDIT.
+// Compiled from src/audit/trail.ts by scripts/build-plugin-lib.js (`make plugin`).
+// Edit the TypeScript source and re-run `make plugin`; CI fails if this tree is stale.
+"use strict";
+/**
+ * The audit trail — append-only JSONL, one record per governance decision.
+ *
+ * This is the evidence layer. Auto mode makes a decision and reports `Blocked by classifier`; the
+ * trail exists so a lead can answer "what were my agents allowed to do last night, under which
+ * rule, decided by what, and how long did it take" without asking anyone to remember.
+ *
+ * Two files, both append-only, both bounded:
+ *
+ *  - `decisions.jsonl` — one {@link DecisionRecord} per `PermissionRequest`. The product surface.
+ *  - `activity.jsonl` — one {@link ActivityRecord} per tool result, the minimum a wedge detector
+ *    needs (which tool, a fingerprint of the input, did it fail, when). Not a decision, so it is
+ *    kept apart rather than diluting the decision log.
+ *
+ * ## Redaction
+ *
+ * A tool input can contain a credential — an `export ANTHROPIC_AUTH_TOKEN=…`, a `curl -H
+ * "Authorization: Bearer …"`. The trail is written to disk and meant to be forwarded, so every
+ * summary goes through `redactSecrets` from `src/corpus/mask.ts` first. That is the same detector
+ * the corpus importer uses, so there is one list of what counts as a secret in this repository.
+ *
+ * ## Bounding
+ *
+ * A hook writes on every prompt, forever, with nobody watching. So each file is rotated at
+ * {@link MAX_BYTES}: the current file becomes `<name>.1` (replacing any previous `.1`) and a fresh
+ * one starts. One generation of history is kept on purpose — unbounded growth and unbounded
+ * retention are both liabilities, and the interesting window for a wedge or an overnight digest is
+ * the recent one.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.SUMMARY_LIMIT = exports.MAX_BYTES = void 0;
+exports.summarizeInput = summarizeInput;
+exports.fingerprint = fingerprint;
+exports.appendJsonl = appendJsonl;
+exports.readJsonl = readJsonl;
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+const crypto_1 = require("crypto");
+const mask_1 = require("../corpus/mask");
+/** Rotate at 4 MiB — roughly 20k decisions, far more than a digest ever reads. */
+exports.MAX_BYTES = 4 * 1024 * 1024;
+/** How much of a tool input is kept in a summary. Enough to identify a call, not to replay it. */
+exports.SUMMARY_LIMIT = 300;
+/**
+ * A redacted, bounded, human-readable one-liner for a tool input. `Bash` shows its command and
+ * file tools show their path, because those are what a reviewer scans for; anything else falls
+ * back to compact JSON.
+ */
+function summarizeInput(toolInput) {
+    if (!toolInput) {
+        return '';
+    }
+    const pick = (key) => typeof toolInput[key] === 'string' ? toolInput[key] : null;
+    const raw = pick('command') ?? pick('file_path') ?? pick('path') ?? pick('pattern')
+        ?? JSON.stringify(toolInput);
+    const redacted = (0, mask_1.redactSecrets)(raw.replace(/\s+/g, ' ').trim());
+    return redacted.length > exports.SUMMARY_LIMIT ? `${redacted.slice(0, exports.SUMMARY_LIMIT)}…` : redacted;
+}
+/** A stable short hash of a tool call, for spotting the same call repeated. */
+function fingerprint(toolName, toolInput) {
+    const body = `${toolName} ${JSON.stringify(toolInput ?? {})}`;
+    return (0, crypto_1.createHash)('sha256').update(body, 'utf8').digest('hex').slice(0, 12);
+}
+/** Rotate when the file has reached the cap. Best-effort: a failed rotation must not lose a record. */
+function rotateIfNeeded(file) {
+    try {
+        if (fs.statSync(file).size < exports.MAX_BYTES) {
+            return;
+        }
+        fs.renameSync(file, `${file}.1`);
+    }
+    catch {
+        // No file yet, or a concurrent hook already rotated it. Either way, just append.
+    }
+}
+/**
+ * Append one record as a single JSON line. Synchronous on purpose: a hook process may exit the
+ * moment its stdout is written, and an in-flight async append would be lost. Never throws — an
+ * unwritable trail must not turn into a denied tool call.
+ */
+function appendJsonl(file, record) {
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        rotateIfNeeded(file);
+        fs.appendFileSync(file, `${JSON.stringify(record)}\n`, 'utf8');
+    }
+    catch {
+        // Deliberately silent: stderr from a hook on exit 0 is debug-log only, and the decision the
+        // caller is about to return matters more than the record of it.
+    }
+}
+/** Read a JSONL file newest-last, skipping malformed lines. Includes the rotated generation. */
+function readJsonl(file) {
+    const out = [];
+    for (const candidate of [`${file}.1`, file]) {
+        let text;
+        try {
+            text = fs.readFileSync(candidate, 'utf8');
+        }
+        catch {
+            continue;
+        }
+        for (const line of text.split('\n')) {
+            if (!line.trim()) {
+                continue;
+            }
+            try {
+                out.push(JSON.parse(line));
+            }
+            catch {
+                // A partially written last line, or a line from a crashed writer. Skip it.
+            }
+        }
+    }
+    return out;
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "session-sitter",
+  "description": "Agent governance for the terminal — practices as policy, the correction lane, and an audit trail that names the clause it applied.",
+  "owner": {
+    "name": "Session Sitter contributors",
+    "url": "https://github.com/eranra/session-sitter"
+  },
+  "plugins": [
+    {
+      "name": "session-sitter",
+      "source": "./plugin",
+      "category": "security",
+      "keywords": [
+        "governance",
+        "policy",
+        "permissions",
+        "audit",
+        "supervision",
+        "unattended"
+      ]
+    }
+  ]
+}
