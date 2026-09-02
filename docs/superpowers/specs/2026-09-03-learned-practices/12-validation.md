@@ -12,7 +12,8 @@ Founding principle inherited: *silence is never approval*. The gate's corollary:
 |---|---|---|
 | `ClauseCandidate` from extraction | `{ id, level, tier, body, match: string[], provenance: Provenance }` | guess — I define it in §8; pipeline may rename |
 | Motivating record reachable by id | `provenance.source_record_ids: string[]` resolvable against the JSONL store | guess |
-| `SupervisionRecord` carries the tool name, the raw tool input, the verdict, the cited clause id, and whether a human answered | fields named in §8 as `tool`, `input`, `verdict`, `cited`, `verdict_source` | partial — field names are guesses, semantics are from `src/supervisor/models.ts` |
+| `SupervisionRecord` carries the tool name, the raw tool input, the verdict, the cited clause id, and whether a human answered | fields named in §8 as `tool`, `input`, `verdict`, `cited`, `verdict_source` | confirmed by implementation |
+| `verdict_source` has **four** values: `human`, `clause`, `fallback`, `model` | **SC5** — folding fail-closed into `clause` makes AR2 demand a `supersedes` for a clause that never existed, and makes AR3 reject every possible green | confirmed |
 | `src/policy/practices.ts` exposes clause loading + pattern compilation | I need it to export a *compile result*, not swallow failures — see §2 E1 | firm requirement, not a guess |
 | `src/policy/shell.ts` splits compound commands | I need `splitCompound(line): Segment[]` with `{text, operator}` per segment | firm requirement |
 
@@ -26,7 +27,7 @@ Four stages, strictly ordered, fail-closed. A stage runs only if every prior sta
 |---|---|---|---|
 | 1 | **Schema** | Frontmatter parses; every enum value is in range; id is unique across the whole corpus; required fields present; body is non-empty and contains at most one `Match:` line. | Hard reject. Candidate written to `rejects/<id>.md` with the error list appended as a `# Rejected` block. Never enters the corpus directory. Exit 10. |
 | 2 | **Static** | Every pattern in `Match:` compiles and is *retained*; the pattern set is reachable (≥1 historical match) and not too broad (§3); no compound-command over-license; direction (widening/narrowing) is classified. | Hard reject on any E-code; warnings recorded and carried forward into the human review body. Exit 20. |
-| 3 | **Replay** | The candidate is injected at `audit` into a corpus clone and the last N real decisions are re-evaluated by the **production evaluator**. No auto-reject rule (§4.3) trips. | Hard reject on auto-reject; otherwise always passes and produces the diff report — a candidate that changes nothing fails reachability at stage 2, so an empty diff here is an internal inconsistency (exit 70). Exit 30. |
+| 3 | **Replay** | The candidate is injected at `audit` into a corpus clone and the last N real decisions are re-evaluated by the **production evaluator**. No auto-reject rule (§4.3) trips, including AR5 — matching history is not enough, it must *change* something. | Hard reject on auto-reject, reason names which. Exit 30. |
 | 4 | **Human review** | A git commit by a human moves `status: audit → accepted`. The gate never performs this transition. | Nothing happens. The clause sits at `audit`, keeps accumulating shadow verdicts, and is garbage-collected after 60 days untouched. |
 
 Stage 3 is the only expensive stage; stages 1–2 are milliseconds and exist to make stage 3 meaningful. Stage 4 is not automatable and the design does not pretend otherwise: the gate's deliverable is a **review packet** (report + fixture test + replay examples), not a merge.
@@ -149,9 +150,15 @@ The cost of this discipline is that replay is blind to changes in *model-mediate
 Ordered; first match wins and produces the rejection reason.
 
 - **AR1 — human reversal.** The candidate would change the outcome of a decision whose `verdict_source` is `human` (a human answered an escalation, or wrote the practice that was cited). Either direction: a candidate that would deny what a human allowed, or allow what a human denied. **Reject outright, exit 30.** This is the precedence ladder enforced at validation time rather than only at runtime, so a proposal that *contradicts* a human never even reaches review — the reviewer's attention is a scarce resource and this class of candidate is pure noise.
-- **AR2 — deterministic reversal without evidence.** The candidate flips a decision whose `verdict_source` is `clause` (an existing accepted clause matched) and the candidate does not declare `supersedes` or `displaces` for that clause. Reject. A clause that silently outranks another is how a corpus becomes unexplainable.
-- **AR3 — green-over-red.** The candidate is `green` and would change any recorded `deny` to an allow. Reject regardless of `verdict_source`. Learned green never beats anything red.
-- **AR4 — churn.** `changed / N > 20%`. Reject as `too-disruptive`. *(Guess at 20%. Rationale: above this the review packet's "here are 3 examples" is unrepresentative, which is the same argument as the breadth threshold.)*
+- **AR2 — deterministic reversal without evidence.** The candidate flips a decision whose `verdict_source` is `clause` (an existing accepted clause matched) **and a clause id was actually cited**, and the candidate does not declare `supersedes`/`displaces` for it. Reject. A clause that silently outranks another is how a corpus becomes unexplainable.
+  - **SC2:** AR2 cannot apply when nothing was cited — the rung-5 built-in table has no id to supersede. Uncited denies fall through to AR3.
+- **AR3 — green-over-red.** The candidate is `green` and would change a recorded `deny` to an allow, where that deny was a *judgement*: `verdict_source ∈ {human, clause}`. Learned green never beats anything red.
+  - **SC1 (the worst error in this spec as first written).** "Regardless of `verdict_source`" rejected every green candidate that can ever exist, and contradicted this same section's rule that model verdicts never auto-reject. **Excluded from AR3: `fallback` and `model` denies.** A fail-closed deny is not a judgement that a call is unsafe — it is the *absence* of a judgement, i.e. exactly the situation a green clause exists to resolve, and the highest-signal mining input we have. A model deny is non-deterministic and cannot carry an auto-reject.
+- **AR4 — churn.** `changed / N > 20%` **and `N ≥ 100`**. Reject as `too-disruptive`. *(Guess at 20%; the 100 floor is the same one exit 40 already uses.)*
+  - **SC4:** without the denominator gate, 1-of-1 is 100% churn and the candidate is rejected for the size of the window rather than anything about itself.
+
+- **AR5 — inert.** The candidate matches historical calls but changes nothing, because an earlier rung resolves every one of them first. Reject as `INERT`, naming the pre-empting rung.
+  - **SC3:** this was specified as exit 70 (internal inconsistency). It is not one — the first real run produced it legitimately: a green matching `drop table tmp_…` matched 3 of 126 and changed 0 because a written red decides them at an earlier rung. Reporting `PASS, 0 of 126 changed` would have merged a do-nothing clause; a reachable-but-inert clause is a *rejection*, and it consumes ceiling budget for nothing. Exit 30, reason `INERT`.
 
 Decisions with `verdict_source: model` **count in the denominator and the changed count** but can never trigger an auto-reject. They are reported separately as *advisory* (§4.4), because we know the recorded verdict was non-deterministic and a difference may be replay artefact rather than behaviour change.
 
@@ -184,7 +191,7 @@ Fixture: {fixture_path}
 Rendering rules:
 - At most 3 examples, chosen as: the human-adjacent change if any, then the two most distinct by tool name. Deterministic tie-break by record id so the report is reproducible.
 - `call_excerpt` truncated to 100 chars, secrets-redacted with the existing redaction used for records — replay must not become a new place secrets get printed.
-- Zero changed with a reachable pattern is an internal inconsistency (exit 70), not a `0 of 500` report.
+- Zero changed with a reachable pattern is **AR5 `INERT`** — the report says `0 of {n} changed — inert, pre-empted by {rung}` and the verdict is REJECT, never PASS (SC3).
 - Wording is deliberately second-person and concrete (`your last 500 decisions`). The reviewer's question is "what does this do to me", not "what is this clause's F1".
 
 ---
@@ -252,7 +259,7 @@ Eviction ranking, at ceiling. The search is confined to the candidate's own tier
 2. zero citations in the last 90 days
 3. ascending `value` (§ below)
 
-A permissive `yellow` sits in `learned-green`, a narrowing `yellow` in `learned-red`, so the tier already encodes direction and the ranking does not need to re-derive it. In `learned-red` every class contains only reds and oranges, so any eviction there carries the red-retirement line and the outgoing clause's evidence class (§5.5) — that is the whole of the extra handling, and it is a line of report text rather than a mechanism.
+A permissive `yellow` sits in `learned-green`, a narrowing `yellow` in `learned-red`, so the tier already encodes direction and the ranking does not need to re-derive it. In `learned-red` every class contains only reds and oranges, so any eviction there carries the red-retirement line and the outgoing clause's evidence class (§5.5) — that is the whole of the extra handling, and it is a line of report text rather than a mechanism. **SC8:** this line belongs on **displacement packets only**. An ablation *listing* retires nothing, so "this retires a red clause" was false there.
 
 `value(clause)` = citations in the last 90 days, tie-broken by `ablation.changed` over `W`. **Tie-break among equal-value eviction candidates: longest time since last citation goes first** — the one dead longest. Every class is same-tier by construction.
 
@@ -278,15 +285,25 @@ else:
 
 | Explanation | How the reviewer tells them apart | Gate's output |
 |---|---|---|
-| **Dead weight** — the hazard shape occurs and the clause still never triggers | Zero lifetime fires **and** ≥1 near-miss in the window | listed `dead-weight?`; a human may propose retirement |
-| **Working deterrent** — it fired, behaviour changed, it stopped firing | ≥1 recorded fire anywhere in the clause's lifetime | listed `deterrent`, **never** proposed for retirement. Zero recent fires is precisely what success looks like. |
-| **Untriggered** — the window never contained the situation | Zero lifetime fires **and** zero near-misses | listed `insufficient-exposure`; not a candidate until history contains a near-miss |
+| **In service** | ≥1 fire that contributes a change under ablation | `in-service` — the clause is doing work. Not a retirement question at all. |
+| **Shadowed** | ≥1 match, zero changes, because another rung resolves those calls first | `shadowed`, naming the pre-empting rung and rule. The clause is *redundant with that rung*, not dead. |
+| **Deterrent** | ≥1 fire that no longer appears in the retained record | `deterrent`, **never** proposed for retirement. Zero recent fires is precisely what success looks like. **See the seam below — this label is currently unreliable.** |
+| **Dead weight** | Zero fires **and** ≥1 near-miss in the window | `dead-weight?`; a human may propose retirement |
+| **Untriggered** | Zero fires **and** zero near-misses | `insufficient-exposure`; not a candidate until history contains a near-miss |
+
+**SC6 — `shadowed` and `in-service` were missing.** A clause with zero fires because an earlier rung always resolves its calls first is redundant with that rung, and `dead-weight?` vs `shadowed` need opposite human responses (delete it, vs decide which of the two rules should own the case). `in-service` exists because the enum had no value for "this clause is doing work"; `deterrent` means it fired and then stopped, which is a different thing.
+
+**Shadowing is measured, never inferred from rung order.** There is a test that proves it must be: remove the `(?!-with-lease)` lookahead from `team-git-002` and identical records read `in-service` instead of `shadowed`, because rung 2 re-checks its rewritten input against the written reds, hits the clause, and refuses the correction. An implementation that inferred shadowing from the ladder gets that case backwards. The two real cases shadow from **opposite directions** — `team-git-002` from above (rung 2's rewrite, licensed by the clause's own lookahead), `team-sql-004` from below (rung 5's built-in table, 4 fires and still zero changed, so `deterrent` would have been wrong there too). One mechanism, two directions.
+
+**Rung 7 is not a shadower**, and the reasoning generalises: a red whose deny is merely reproduced by the fail-closed path is not redundant with anything — it is the only thing that would still deny in observe mode, or once a green covers the call. Counting it would argue for deleting precisely the clauses that carry the policy.
+
+> **SEAM — SC7. `deterrent` is currently unreliable, and it is the one place this gate tells a human something it cannot know.** As §5.5 first specified it the class was *unreachable*: it required ≥1 lifetime fire with zero changes, but if the red window is the lifetime record then a historical fire is inside it and contributes a change. The case I was actually describing is a fire that **aged out** — `decisions.jsonl` rotates at 4 MiB keeping one generation, so a fire from six months ago sits in a file that no longer exists and a scan reports zero, indistinguishable from never having fired. The honest fix is a durable per-clause citation counter, which this base does not have; `lifetimeFires` is injectable so the counter can be dropped in without touching the classifier. Nothing unsafe follows — reds are never auto-proposed for retirement (below) — but until that counter exists, a `deterrent`/`dead-weight?` label on a red older than one log generation may be wrong, and the report must not imply otherwise.
 
 The **near-miss index** is what makes the three distinguishable, and it is cheap: re-run the clause's patterns in relaxed form over the window — drop regex anchors, drop the final path segment, take the longest 6-character literal substring — and count hits. A near-miss means the hazard's shape occurs in this traffic even though the clause never triggered.
 
 Consequences:
 
-- **The gate never auto-proposes retirement of a red or orange clause.** It emits the classification above; a human initiates. A confident-looking zero on a safety clause is worse than no output, because it launders "I have no evidence" as "I have evidence of nothing".
+- **The gate never auto-proposes retirement of a red or orange clause.** It emits the classification above, with no retirement caveat attached (SC8 — a listing retires nothing); a human initiates. A confident-looking zero on a safety clause is worse than no output, because it launders "I have no evidence" as "I have evidence of nothing".
 - Red ablation uses the **lifetime** window, not 2,000/90 days: "did this ever matter" is not answerable inside a 90-day slice.
 - Green retirement stays an automatic proposal, with the §6.3 settings-persistence note attached.
 
@@ -405,7 +422,7 @@ export interface ReplayExample {
   call_excerpt: string;    // ≤100 chars, redacted
   orig_verdict: string;
   new_verdict: string;
-  verdict_source: 'human' | 'clause' | 'model';
+  verdict_source: 'human' | 'clause' | 'fallback' | 'model';   // SC5: fallback = fail-closed
 }
 
 export interface ReplayDiff {
@@ -425,7 +442,11 @@ export interface AblationReport {
   changed: number;
   near_misses: number;             // relaxed-pattern hits (§5.5)
   lifetime_fires: number;          // reds: decides deterrent vs dead-weight
-  evidence_class: 'retire' | 'dead-weight?' | 'deterrent' | 'insufficient-exposure';
+  evidence_class: 'in-service' | 'shadowed' | 'deterrent' | 'dead-weight?'
+                | 'insufficient-exposure' | 'retire';
+  shadowed_by?: { rung: number; rule: string };   // SC6: measured, not inferred
+  lifetimeFires: number;           // injectable seam — SC7, unreliable without a
+                                   // durable counter (log rotates at 4 MiB, 1 generation)
   retirement_candidate: boolean;   // changed === 0 AND level is green/yellow
   note?: string;                   // e.g. green-persistence caveat (§6.3)
 }
@@ -487,11 +508,11 @@ export interface FrozenClock { now(): Date; }                            // reco
 | 0 | Pass. Clause written at `status: audit`. Warnings may exist; they are in the report. |
 | 10 | Schema hard error (E1–E4) |
 | 20 | Static hard error (E5–E7, E9, E10) |
-| 30 | Replay auto-reject (AR1–AR4 / E8) |
+| 30 | Replay auto-reject (AR1–AR5 / E8), reason names which |
 | 40 | Insufficient evidence to run the gate — window smaller than 100 decisions, or provenance records unresolvable. Not a rejection of the clause; a rejection of the *run*. Candidate stays `proposed`. |
 | 50 | Ceiling / displacement rejection (E12) |
 | 60 | Fixture error (E11) |
-| 70 | Internal inconsistency — reachable pattern with zero replay changes, two `evaluate` definitions found, corpus clone diverged. Loud on purpose: it means the gate cannot be trusted this run, and a gate that cannot be trusted must not pass anything. |
+| 70 | Internal inconsistency — two `evaluate` definitions found, corpus clone diverged. **No longer includes reachable-with-zero-changes: that is AR5 `INERT`, exit 30 (SC3).** Loud on purpose: it means the gate cannot be trusted this run, and a gate that cannot be trusted must not pass anything. |
 
 `ss-gate ablate` — 0 always on a successful run (retirement candidates are output, not an error), 40 if the ablation window is short, 70 internal.
 
@@ -518,6 +539,10 @@ Numbered, each a single failing assertion. These are the spec; the prose above i
 15. Replay makes zero model calls: with a throwing model client injected, a full 500-decision replay still completes.
 16. Replay of the empty candidate set against unmodified history reproduces every recorded verdict for `verdict_source ∈ {human, clause}` exactly. (If this fails, every replay number is meaningless.)
 17. A `verdict_source: model` difference is reported as advisory and never sets `verdict: reject`.
+17b. A green candidate that would allow a `fallback` (fail-closed) deny **passes** AR3; the same candidate against a `human` or `clause` deny is rejected. (SC1)
+17c. An uncited deny never triggers AR2; it falls through to AR3. (SC2)
+17d. A 1-of-1 window at 100% churn does not trigger AR4; `N ≥ 100` is required. (SC4)
+17e. A candidate matching ≥1 historical call with zero changes exits 30 as `INERT`, naming the pre-empting rung — never exit 70, never PASS. (SC3)
 18. The report text matches §4.4 byte-for-byte for a fixed fixture, including pluralisation and the trailing `Fixture:` line.
 19. Examples are deterministic: two runs over the same window produce identical example ordering.
 20. `call_excerpt` in a report is redacted by the same redactor as `SupervisionRecord`.
@@ -537,7 +562,10 @@ Numbered, each a single failing assertion. These are the spec; the prose above i
 34. There is no `--force` flag: an error is never downgradable from the CLI.
 35. A fixture is written for every passing candidate, and the globbed fixture test passes immediately after.
 36. Ablating a **red** clause with zero changes never produces `retirement_candidate: true`, in any window, for any evidence class.
-37. A red with ≥1 lifetime fire and zero window fires is classified `deterrent`, not `dead-weight?`.
+37. A red with ≥1 fire that contributes a change is `in-service`; with matches but zero changes it is `shadowed`, and the report names the pre-empting rung and rule. (SC6)
+37b. Shadowing is measured, not inferred: removing `team-git-002`'s `(?!-with-lease)` lookahead reclassifies identical records from `shadowed` to `in-service`.
+37c. A red whose deny is merely reproduced by rung 7 is not `shadowed`.
+37d. `deterrent` is reached only via injected `lifetimeFires`, and the report carries the aged-out caveat whenever it is used. (SC7 seam)
 38. A red with zero lifetime fires and zero near-misses is classified `insufficient-exposure`; adding one near-miss to history reclassifies it `dead-weight?`.
 39. Red ablation reads the lifetime record: shortening the configured ablation window does not change a red's classification.
 40. The prompt selector excludes clauses whose patterns were evaluated and missed: a clause with a non-matching `Match:` line never appears in the rendered bundle, while the same clause with its `Match:` line removed does. (Positive design requirement on `des-runtime`'s selector, not a precondition to verify — the ceiling's justification depends on it.)
@@ -545,7 +573,7 @@ Numbered, each a single failing assertion. These are the spec; the prose above i
 41. At ceiling with only reds and oranges in the tier, a candidate exits 50 and no eviction is proposed.
 42. Displacement never crosses tiers: a candidate's eviction target always has the candidate's own tier.
 43. A green candidate's displacement search never returns a red or orange target, in any tier state (same-tier invariant).
-43b. A red-retiring packet carries the deterrence-caveat line and the outgoing clause's evidence class.
+43b. A red-retiring **displacement packet** carries the deterrence caveat and the outgoing clause's evidence class; an ablation listing carries neither. (SC8)
 44. Among two zero-citation greens, the one with the older `last_cited` is the eviction target.
 
 ---
