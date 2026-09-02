@@ -23,8 +23,8 @@
  * fail — every field is `meta.x ?? null` — so a malformed entry becomes a silently wrong one: a
  * `level: PURPLE` rule the author believed was red is simply unenforced. For clauses under
  * `learned/` that is not acceptable, because a cron job writes them and no human reads every one.
- * So every malformed input here produces a *named finding*, and an `error` finding means the run
- * loads nothing rather than loading something wrong.
+ * So every malformed input here produces a *named finding*, and a file with an `error` finding is
+ * skipped rather than loaded wrong — the rest of the tier, and every other tier, still loads.
  *
  * Design spec: `10-schema.md` §1.4 (body reuse), §2 (fields and consumers), §2.5 (rationale),
  * §3.2 (authorship is the path), §3.3 (the ladder), §3.3.2 (the write boundary), §4.4 (retirement).
@@ -139,7 +139,7 @@ export interface LearnedClauseFile {
   sourceFile: string;
 }
 
-/** One problem with one file, at one line. `error` means the corpus does not load. */
+/** One problem with one file, at one line. `error` means that file does not load. */
 export interface Finding {
   severity: 'error' | 'warn' | 'info';
   file: string;
@@ -354,6 +354,9 @@ const KNOWN_KEYS = new Set([
   'retired_at', 'retired_reason', 'retired_by',
 ]);
 
+/** The two known keys that must be an inline list. Every other known key is a scalar. */
+const LIST_KEYS = new Set(['supersedes', 'displaces']);
+
 /** Typo suggestions worth making, because a typo'd field is indistinguishable from no field. */
 function didYouMean(key: string): string | null {
   for (const known of KNOWN_KEYS) {
@@ -429,6 +432,20 @@ export function parseLearnedClause(
   const scalar = (key: string): string | null => frontmatter.scalars[key] ?? null;
   const list = (key: string): string[] => frontmatter.lists[key] ?? [];
 
+  // ---- shape: a known key given in the wrong form (`supersedes: old`, `status: [accepted]`) has
+  // `scalar()`/`list()` read it as absent, so without this it would be silently dropped instead of
+  // failing loud — the one thing this frontmatter grammar exists not to do.
+  for (const key of Object.keys(frontmatter.lists)) {
+    if (KNOWN_KEYS.has(key) && !LIST_KEYS.has(key)) {
+      err(at(key), `\`${key}\` must be a scalar (\`${key}: value\`), not a list`);
+    }
+  }
+  for (const key of Object.keys(frontmatter.scalars)) {
+    if (LIST_KEYS.has(key)) {
+      err(at(key), `\`${key}\` must be an inline list (\`${key}: [a, b]\`), not a scalar`);
+    }
+  }
+
   // ---- body first: no heading means there is no clause at all.
   const entries = parseBottomLine(frontmatter.body, tier, sourceFile);
   if (entries.length === 0) {
@@ -467,8 +484,16 @@ export function parseLearnedClause(
   const levelRaw = scalar('level')?.trim().toLowerCase() ?? null;
   let level: ClauseLevel = null;
   if (levelRaw !== null && levelRaw !== '') {
-    if (CLAUSE_LEVELS.includes(levelRaw)) { level = levelRaw as ClauseLevel; } else {
+    if (!CLAUSE_LEVELS.includes(levelRaw)) {
       err(at('level'), `unknown \`level: ${levelRaw}\` (expected red, orange, yellow or green)`);
+    } else if (levelRaw !== 'red' && levelRaw !== 'green') {
+      // The ladder (`decideByLadder`) only defines red/green rungs for a learned clause: an
+      // accepted orange/yellow would match but could never be selected, which is the same
+      // silently-unenforced failure as an unrecognised level.
+      err(at('level'), `\`level: ${levelRaw}\` is not enforceable for a learned clause `
+        + '(the ladder only has red/green rungs)');
+    } else {
+      level = levelRaw as ClauseLevel;
     }
   }
 
@@ -599,8 +624,9 @@ export function parseLearnedClause(
     }
   }
 
-  // ---- the hand-parked case. Keyed on empty evidence, *not* on the body: parking a clause under
-  // `learned/` to give it lower precedence is legitimate, so it can only ever be an info.
+  // ---- the hand-parked case. Keyed on an empty `learned_from` (no sessions, no decisions), *not*
+  // on the body: parking a clause under `learned/` to give it lower precedence is legitimate, so
+  // it can only ever be an info.
   if (!hasEvidenceTrail) {
     findings.push({
       severity: 'info', file: sourceFile, line: at('learned_from'),
@@ -689,7 +715,12 @@ export function readLearnedDir(corpusRoot: string, tier: Tier, slug: string): Le
   let names: string[];
   try {
     names = fs.readdirSync(full).filter(n => n.endsWith('.md')).sort();
-  } catch {
+  } catch (e) {
+    // Absent is a non-error (see above). Anything else — a permission error, an IO error, a
+    // `learned/` that exists but is not a directory — must not degrade into an empty policy the
+    // same way an unreadable individual file (below) must not: it is a named error, not a skip.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') { return result; }
+    result.findings.push({ severity: 'error', file: dir, line: null, message: `unreadable: ${String(e)}` });
     return result;
   }
   result.exists = true;
@@ -773,12 +804,17 @@ export function assertWritable(corpusRoot: string, target: string, id: string): 
  */
 function realpathOf(p: string, depth = 0): string {
   try { return fs.realpathSync(p); } catch { /* some component does not exist yet */ }
-  if (depth > 8) { return p; } // a symlink loop; refuse to chase it further
+  // A symlink loop: refuse to chase it further. Returning the unresolved path here would hand
+  // `assertWritable` a path it has not actually resolved, which is exactly the write-boundary
+  // bypass this function exists to prevent.
+  if (depth > 8) { throw new Error(`symlink loop resolving ${JSON.stringify(p)}`); }
+  // The recursive call below must sit OUTSIDE this try: it would otherwise catch the depth>8
+  // throw from a deeper frame and mistake it for "not there at all", swallowing the loop refusal.
+  let link: string | null = null;
   try {
-    if (fs.lstatSync(p).isSymbolicLink()) {
-      return realpathOf(path.resolve(path.dirname(p), fs.readlinkSync(p)), depth + 1);
-    }
+    if (fs.lstatSync(p).isSymbolicLink()) { link = fs.readlinkSync(p); }
   } catch { /* not there at all, so nothing to follow */ }
+  if (link !== null) { return realpathOf(path.resolve(path.dirname(p), link), depth + 1); }
   const parent = path.dirname(p);
   if (parent === p) { return p; }
   return path.join(realpathOf(parent, depth), path.basename(p));

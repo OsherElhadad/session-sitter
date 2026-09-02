@@ -248,6 +248,35 @@ describe('parseLearnedClause — required fields', () => {
     expect(clause?.level).toBeNull();
   });
 
+  it('rejects a scalar key given as an inline list, rather than silently dropping it', () => {
+    // `status: [accepted]` is valid frontmatter syntax (an inline list), so `scalar('status')`
+    // reads it as absent and the field is lost with no finding at all — the opposite of this
+    // module's fail-loud goal.
+    const { clause, findings } = parse(clauseFile({ extraFrontmatter: 'status: [accepted]\n' })
+      .replace(/^status: .*\n/m, ''));
+    expect(clause?.status).toBe('proposed'); // the inert default: never the one that ships
+    expect(errors(findings).join()).toContain('`status` must be a scalar');
+  });
+
+  it('rejects a list key given as a scalar, rather than silently dropping it', () => {
+    // `supersedes: old` is a valid scalar line, so `list('supersedes')` reads it as absent and
+    // the supersession is lost with no finding at all.
+    const { clause, findings } = parse(clauseFile({ extraFrontmatter: 'supersedes: old-id\n' }));
+    expect(clause?.supersedes).toEqual([]);
+    expect(errors(findings).join()).toContain('`supersedes` must be an inline list');
+  });
+
+  it('rejects orange and yellow: the ladder only has red/green rungs for a learned clause', () => {
+    // `orange`/`yellow` are recognised level words (a human bottom-line.md clause can use all
+    // four), but `decideByLadder` can only return red or green — so an `accepted` learned clause
+    // at `orange`/`yellow` would match and then never be selected: inert, but not visibly so.
+    for (const level of ['orange', 'yellow']) {
+      const { clause, findings } = parse(clauseFile({ level }));
+      expect(clause?.level, level).toBeNull();
+      expect(errors(findings).join(), level).toContain('not enforceable');
+    }
+  });
+
   it('accepts a prose-only clause with no level', () => {
     const { clause, findings } = parse(clauseFile().replace(/^level: .*\n/m, ''));
     expect(errors(findings)).toEqual([]);
@@ -463,6 +492,32 @@ describe('the learned/ walk', () => {
 
   it('reads zero clauses from a corpus with no data/knowledge at all', () => {
     expect(readLearnedDir(tmp, 'team', TEAM).clauses).toEqual([]);
+  });
+
+  it('reports an error, not a silent skip, when learned/ exists but is not readable', () => {
+    // A permission error or an IO error must not degrade into an empty policy — the same rule
+    // `readLearnedDir` already applies to an individual unreadable file. Only ENOENT (the
+    // directory is genuinely absent) is a non-error.
+    const learned = path.join(tmp, ...learnedDir('team', TEAM).split('/'));
+    fs.mkdirSync(learned, { recursive: true });
+    fs.writeFileSync(path.join(learned, 'x.md'), clauseFile({ id: 'x' }), 'utf8');
+    fs.chmodSync(learned, 0o000);
+    try {
+      const result = readLearnedDir(tmp, 'team', TEAM);
+      expect(result.clauses).toEqual([]);
+      expect(hasErrors(result.findings)).toBe(true);
+      expect(result.findings[0].message).toContain('unreadable');
+    } finally {
+      fs.chmodSync(learned, 0o755);
+    }
+  });
+
+  it('reads zero clauses when learned/ is a file, not a directory, and reports an error', () => {
+    fs.mkdirSync(path.join(tmp, 'data', 'knowledge', 'teams', TEAM), { recursive: true });
+    fs.writeFileSync(path.join(tmp, ...learnedDir('team', TEAM).split('/')), 'not a directory', 'utf8');
+    const result = readLearnedDir(tmp, 'team', TEAM);
+    expect(result.clauses).toEqual([]);
+    expect(hasErrors(result.findings)).toBe(true);
   });
 
   it('reads zero clauses for an unconfigured tier, without touching the filesystem', () => {
@@ -812,6 +867,31 @@ describe('the write boundary (§3.3.2)', () => {
     } finally {
       fs.rmSync(outside, { recursive: true, force: true });
       fs.rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('T34: refuses a symlink loop rather than treating it as resolved', () => {
+    // A `learned/` that is a symlink to itself: `fs.realpathSync` throws ELOOP for it (caught,
+    // same as any other unresolvable path), and the manual chase that steps in afterwards would
+    // otherwise recurse forever following the link back to itself. `depth > 8` is the guard —
+    // before the fix it gave up and returned the *unresolved* path, which `assertWritable` then
+    // treated as trustworthy; it must refuse instead.
+    // The corpus root itself is resolved (`fs.realpathSync`), matching how a caller normally hands
+    // it in — otherwise a platform where the tmp dir is itself reached through a symlink (macOS:
+    // /tmp -> /private/tmp) makes the *old*, buggy code refuse for an unrelated string-mismatch
+    // reason, masking the loop it never actually detected.
+    const root = fs.realpathSync(corpusWith({ 'existing.md': clauseFile({ id: 'existing' }) }));
+    const learned = path.join(root, ...learnedDir('team', TEAM).split('/'));
+    fs.rmSync(learned, { recursive: true, force: true });
+    fs.symlinkSync(learned, learned); // points to itself
+    const target = path.join(learned, `${ID}.md`);
+    try {
+      const before = snapshot(root);
+      expect(() => guardedWrite(root, target, ID)).toThrow(/symlink loop/);
+      expect(snapshot(root)).toEqual(before);
+      expect(fs.existsSync(target)).toBe(false);
+    } finally {
+      fs.unlinkSync(learned);
     }
   });
 
