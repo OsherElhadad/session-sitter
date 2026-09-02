@@ -257,6 +257,32 @@ export interface DecidedReplay {
   clause: string | null;
   /** Which rung answered. `injected` means the ladder stayed silent and a recording was used. */
   from: 'ladder' | 'injected' | 'fallback';
+  /** The hook's own actor for this verdict — `deterministic` | `policy` | `model` | `human` | `timeout`. */
+  actor: string;
+  /** The hook's own one-line note, verbatim. It names the rule that decided, which is the whole point. */
+  note: string;
+}
+
+/**
+ * Which rung of the ladder answered, 1–7.
+ *
+ * Derived from the actor and the note rather than reported by the evaluator, because the evaluator has
+ * no reason to know its own rung number and adding one would be a field maintained for this module's
+ * benefit alone. The mapping is the ladder in `permissionRequest.ts`'s header comment, read backwards.
+ */
+export function rungOf(d: DecidedReplay): number {
+  // Both injections sit at rung 6: a human answer only ever arrives through the escalation the
+  // classifier's non-green verdict raised, so there is no rung between them.
+  if (d.from === 'injected') { return 6; }
+  if (d.from === 'fallback') { return 7; }
+  if (d.actor === 'deterministic') { return d.verdict === 'allow' ? 1 : 5; }
+  if (d.note.startsWith('corrected')) { return 2; }
+  return d.verdict === 'deny' ? 3 : 4;
+}
+
+/** `rung 2's corrected — practices §force-push: …` — the rule that decided, named. */
+export function deciderLabel(d: DecidedReplay): string {
+  return `rung ${rungOf(d)}'s ${d.note}`;
 }
 
 /**
@@ -282,16 +308,35 @@ export function replayOne(
     clauses,
   );
   if (verdict !== null) {
-    return { verdict: verdict.decision.behavior, clause: verdict.clause, from: 'ladder' };
+    return {
+      verdict: verdict.decision.behavior, clause: verdict.clause, from: 'ladder',
+      actor: verdict.actor, note: verdict.note,
+    };
   }
   const source = verdictSourceOf(record);
-  if (source === 'model') { return { verdict: inj.classify(record), clause: null, from: 'injected' }; }
-  if (source === 'human') { return { verdict: inj.ask(record), clause: null, from: 'injected' }; }
+  if (source === 'model') {
+    return {
+      verdict: inj.classify(record), clause: null, from: 'injected', actor: 'model',
+      note: 'the recorded classifier verdict',
+    };
+  }
+  if (source === 'human') {
+    return {
+      verdict: inj.ask(record), clause: null, from: 'injected', actor: 'human',
+      note: 'the recorded human answer',
+    };
+  }
   if (source === 'fallback') {
     // The hook denies when nothing decided, because silence is never approval. Rung 7, reproduced.
-    return { verdict: record.decision, clause: null, from: 'fallback' };
+    return {
+      verdict: record.decision, clause: null, from: 'fallback', actor: 'timeout',
+      note: 'the fail-closed deny — nothing said this call was safe',
+    };
   }
-  return { verdict: 'none', clause: null, from: 'fallback' };
+  return {
+    verdict: 'none', clause: null, from: 'fallback', actor: 'timeout',
+    note: 'nothing decided',
+  };
 }
 
 // --------------------------------------------------------------------------- the window

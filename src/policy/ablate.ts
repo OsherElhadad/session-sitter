@@ -35,13 +35,15 @@
 
 import { DecisionRecord } from '../audit/trail';
 import { CompiledClause } from './compile';
-import { Clause, ClauseLevel, ClauseMatcher, compileMatcher } from './practices';
+import { Clause, ClauseLevel, ClauseMatcher, clauseMatches, compileMatcher } from './practices';
 import {
+  DecidedReplay,
   Direction,
   ReplayInjections,
   ReplayVerdict,
   RECORDED,
   citedClauseId,
+  deciderLabel,
   directionOf,
   haystackOf,
   recordId,
@@ -53,12 +55,21 @@ import {
 // --------------------------------------------------------------------------- shapes
 
 /**
- * How a zero should be read. `in-service` is not in the spec's enum, which has no value for "this
- * clause is doing work" — reporting a live clause as `deterrent` (a term that means *it fired and then
- * stopped*) would misdescribe it, so the value is added rather than the meaning bent.
+ * How a zero should be read. Two values are additions to the spec's enum, both because the spec's four
+ * describe outcomes it does not have a word for:
+ *
+ *  - `in-service` — the clause is doing work. Reporting that as `deterrent` (a term that means *it
+ *    fired and then stopped*) would misdescribe it.
+ *  - `shadowed` — the clause matches real calls and changes none of them, because another rung of the
+ *    ladder resolves every one of them. It is not dead; it is **redundant with a rung**, and the two
+ *    demand opposite responses: dead weight should be retired, a shadowed clause should be deleted as
+ *    redundant *or rewritten to cover what the other rung does not*. Labelling it `dead-weight?`
+ *    invites exactly the wrong action, so {@link AblationReport.shadowed_by} names the rung and the
+ *    rule that pre-empted it.
  */
 export type EvidenceClass =
   | 'retire'
+  | 'shadowed'
   | 'dead-weight?'
   | 'deterrent'
   | 'insufficient-exposure'
@@ -85,6 +96,16 @@ export interface AblationReport {
   /** Citations inside the window. */
   window_fires: number;
   evidence_class: EvidenceClass;
+  /**
+   * Window calls the clause matches that another rung would decide anyway. Zero means nothing is
+   * pre-empting it — which is a different fact from the clause matching nothing at all.
+   */
+  matches: number;
+  /**
+   * When `evidence_class` is `shadowed`: the rung and rule that decides the matching calls instead —
+   * e.g. `rung 2's corrected — practices §force-push: …`. This is the actionable half of the finding.
+   */
+  shadowed_by?: string;
   retirement_candidate: boolean;
   /** The one line a reviewer needs: the window size and the zero. */
   evidence: string;
@@ -97,6 +118,22 @@ export interface AblationOptions {
   days?: number;
   now?: Date;
   injections?: ReplayInjections;
+  /**
+   * Lifetime fire count, when the caller has a durable one.
+   *
+   * Defaults to counting citations in the records it was given, and that default **under-counts** —
+   * which is the one place this module cannot answer its own question. `decisions.jsonl` rotates at 4
+   * MiB keeping a single generation, so a clause that fired six months ago has its only fire in a file
+   * that no longer exists, and the record scan reports zero. That is precisely the `deterrent` case:
+   * fired long ago, behaviour changed, stopped firing. Read from records alone, such a clause is
+   * indistinguishable from one that never fired, and it would be listed `insufficient-exposure`.
+   *
+   * The gate refuses to auto-propose retiring a red either way, so nothing unsafe follows from the
+   * under-count — but the *label* a human reads is wrong, and the fix is a durable per-clause citation
+   * counter that outlives trail rotation. There is none on this base (`weight` is frozen at accept time
+   * and nothing counts citations), so this is the seam: pass the real number when one exists.
+   */
+  lifetimeFires?: number;
 }
 
 /**
@@ -109,7 +146,25 @@ export const GREEN_PERSISTENCE_NOTE =
   + 'Claude Code\'s settings, so something else is doing its job. Retiring it removes the clause, not '
   + 'the grant. Confirm settings-persistence is off before treating this zero as dead weight.';
 
-/** The line every packet that retires a red must carry (§5.4). */
+/**
+ * What to do about a shadowed clause. Deliberately two options, because the gate cannot tell them
+ * apart and guessing would be the same overreach as auto-proposing a red's retirement.
+ */
+export const SHADOWED_NOTE =
+  'This clause matches real calls and changes none of them: another rung decides every one. It is '
+  + 'redundant, not dead. Either delete it as redundant, or narrow it to cover what the other rung '
+  + 'does not — the named rung above is what to read first.';
+
+/**
+ * What an ablation listing for a red or an orange says. It is a *listing*, never a proposal — see
+ * {@link classify} and §5.5.
+ */
+export const RED_NOT_PROPOSED =
+  'Reds and oranges are listed, never proposed for retirement: a zero here may be deterrence rather '
+  + 'than dead weight, and a confident zero on a safety clause launders "I have no evidence" as "I '
+  + 'have evidence of nothing". A human initiates.';
+
+/** The line every packet that *retires* a red must carry (§5.4) — displacement, not ablation. */
 export const RED_RETIREMENT_CAVEAT =
   'This retires a red clause. Its zero may be deterrence, not dead weight — see the evidence class '
   + 'below.';
@@ -219,16 +274,79 @@ export function nearMisses(
 
 // --------------------------------------------------------------------------- the baseline
 
-/** Verdicts under the corpus as it stands. Ablation's control group, computed not recorded. */
+/**
+ * What the corpus as it stands decides, per record. Ablation's control group, computed not recorded.
+ *
+ * Keeps the whole {@link DecidedReplay} rather than just the verdict, because naming the rung that
+ * shadows a clause needs to know *what answered*, not only what it answered.
+ */
+export function baselineDecisions(
+  records: DecisionRecord[], clauses: Clause[], inj: ReplayInjections = RECORDED,
+): Map<string, DecidedReplay> {
+  const out = new Map<string, DecidedReplay>();
+  for (const record of records) {
+    const decided = replayOne(record, clauses, inj);
+    if (decided !== null) { out.set(recordId(record), decided); }
+  }
+  return out;
+}
+
+/** Just the verdicts, for {@link replayWindow}'s baseline. */
 export function baselineVerdicts(
   records: DecisionRecord[], clauses: Clause[], inj: ReplayInjections = RECORDED,
 ): Map<string, ReplayVerdict> {
-  const out = new Map<string, ReplayVerdict>();
+  return new Map([...baselineDecisions(records, clauses, inj)].map(([k, v]) => [k, v.verdict]));
+}
+
+export interface Shadow {
+  /** Window calls the clause matches that a *real* rung would decide without it. Rung 7 excluded. */
+  matches: number;
+  /** The rung and rule that decides those calls without it. Null when it matches nothing. */
+  by: string | null;
+}
+
+/**
+ * When a clause matches real calls and removing it changes nothing, *something else decides them* —
+ * find out what.
+ *
+ * This is the finding the first real ablation run produced, twice, on a corpus a human wrote:
+ *
+ *  - a force-push red matched five real `git push --force` calls and never fired, because the
+ *    correction lane at **rung 2** rewrites `--force` into `--force-with-lease` and allows, and the
+ *    clause's own negative lookahead says that rewritten form is acceptable. The clause is pre-empted
+ *    from above, and correctly so;
+ *  - a `drop table` red fired four times and removing it still changed nothing, because the built-in
+ *    destructive table at **rung 5** denies the same calls. Pre-empted from below.
+ *
+ * Neither is dead weight, and neither is a bug. Both are redundancy with a rung, and the reviewer's
+ * next move — delete as redundant, or narrow the clause to what the other rung does not cover — is
+ * decidable only once the report names which rung and which rule.
+ *
+ * The whole verdict must be unchanged for this to be the reading, which is why the caller only asks
+ * when `changed === 0`; the ranking is by frequency so the answer is the rung that does most of it.
+ */
+export function shadowOf(
+  target: Clause, records: DecisionRecord[], without: Clause[], inj: ReplayInjections = RECORDED,
+): Shadow {
+  const tally = new Map<string, number>();
   for (const record of records) {
-    const decided = replayOne(record, clauses, inj);
-    if (decided !== null) { out.set(recordId(record), decided.verdict); }
+    const call = replayableCall(record);
+    if (call === null || !clauseMatches(target, haystackOf(call))) { continue; }
+    const decided = replayOne(record, without, inj);
+    if (decided === null) { continue; }
+    // Rung 7 is not a shadower. A fail-closed deny is the *absence* of a decision — "nothing said this
+    // call was safe" — so a red whose deny is merely reproduced by it is not redundant with anything:
+    // it is the only thing that would still deny in observe mode, or once a green covers the call. Same
+    // reasoning as AR3's fallback exclusion; treating it as redundancy would argue for deleting exactly
+    // the clauses that carry the policy.
+    if (decided.from === 'fallback') { continue; }
+    const label = deciderLabel(decided);
+    tally.set(label, (tally.get(label) ?? 0) + 1);
   }
-  return out;
+  const ranked = [...tally].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  // `matches` counts only the calls a real rung would take over, so it is the shadowing count rather
+  // than the pattern's breadth — breadth is `ReplayDiff.match_pct`'s job.
+  return { matches: [...tally.values()].reduce((a, b) => a + b, 0), by: ranked[0]?.[0] ?? null };
 }
 
 // --------------------------------------------------------------------------- one clause
@@ -257,21 +375,26 @@ export function ablate(
   const { records: windowRecords, window } = ablationWindow(records, target.level, opts);
   const without = corpus.filter(c => c.clauseId !== clauseId);
 
-  const baseline = baselineVerdicts(windowRecords, corpus, inj);
+  const baseline = baselineDecisions(windowRecords, corpus, inj);
   const diff = replayWindow(windowRecords, without, null, {
     window: windowRecords.length,
     injections: inj,
-    baseline,
+    baseline: new Map([...baseline].map(([k, v]) => [k, v.verdict])),
   });
+  // Only meaningful when nothing moved: with a non-zero `changed` the clause is demonstrably deciding
+  // something, and "what would decide these instead" is not the question a reviewer has.
+  const shadow = diff.changed === 0
+    ? shadowOf(target, windowRecords, without, inj)
+    : { matches: 0, by: null };
 
   // A loaded `Clause` carries each matcher's source text alongside its `RegExp`, so the relaxations
   // get exactly what the author typed — `RegExp.source` would hand back an escaped, whitespace-
   // loosened rewrite of a substring pattern and relax the wrong string.
   const rawPatterns = target.patterns.map(p => (p.isRegex ? `/${p.raw}/` : p.raw));
   const misses = nearMisses({ clauseId, patterns: rawPatterns }, windowRecords);
-  const lifetimeFires = firesFor(clauseId, records);
+  const lifetimeFires = opts.lifetimeFires ?? firesFor(clauseId, records);
   const windowFires = firesFor(clauseId, windowRecords);
-  const evidenceClass = classify(target.level, diff.changed, lifetimeFires, misses);
+  const evidenceClass = classify(target.level, diff.changed, lifetimeFires, misses, shadow.matches);
 
   // Never for a red or an orange, in any window, for any evidence class (T36).
   const retirement = diff.changed === 0 && !isSafetyLevel(target.level);
@@ -285,37 +408,58 @@ export function ablate(
     lifetime_fires: lifetimeFires,
     window_fires: windowFires,
     evidence_class: evidenceClass,
+    matches: shadow.matches,
+    shadowed_by: evidenceClass === 'shadowed' ? shadow.by ?? undefined : undefined,
     retirement_candidate: retirement,
     evidence: `removing ${target.citation} changes ${diff.changed} of ${diff.n} decisions over `
       + `${window.lifetime ? 'the lifetime record' : `${window.decisions} decisions`}`
-      + ` (${window.days} days); ${lifetimeFires} lifetime fire(s), ${misses} near-miss(es)`,
-    note: noteFor(target.level, retirement),
+      + ` (${window.days} days); ${lifetimeFires} lifetime fire(s), ${misses} near-miss(es)`
+      + (evidenceClass === 'shadowed' ? `, ${shadow.matches} pre-empted call(s)` : ''),
+    note: noteFor(target.level, retirement, evidenceClass),
   };
 }
 
 /**
- * The three-way read of a zero, plus the two non-zero cases.
+ * How to read the number, in the order the readings are specific.
  *
- * Order matters: a lifetime fire makes a clause a `deterrent` whatever the window says, because that
- * is the reading a zero on a safety clause is *most likely* to have and the one whose misreading is
- * unrecoverable.
+ *  1. **`in-service`** — it changed something. Nothing else needs deciding.
+ *  2. **`shadowed`** — it matches real calls and changed none of them, so another rung decides them
+ *     all. Checked before `deterrent` because it is the *more specific* explanation of the same zero,
+ *     and it is the only one that names something the reviewer can act on. A red that fired four times
+ *     and still ablates to zero is not "a deterrent that stopped firing"; it is redundant with the
+ *     built-in table, and only one of those two sentences tells anyone what to do.
+ *  3. **`deterrent`** — for a red or an orange, a lifetime fire with nothing left to shadow it means
+ *     the traffic moved on after it fired. Never proposed for retirement: zero recent fires is exactly
+ *     what success looks like.
+ *  4. **`dead-weight?` / `insufficient-exposure`** — the near-miss index separates "the hazard's shape
+ *     occurs and this still never triggers" from "the window never contained the situation".
+ *  5. **`retire`** — a green or yellow that matches nothing and changes nothing. Genuinely dead.
  */
 export function classify(
-  level: ClauseLevel, changed: number, lifetimeFires: number, misses: number,
+  level: ClauseLevel, changed: number, lifetimeFires: number, misses: number, matches = 0,
 ): EvidenceClass {
+  if (changed > 0) { return 'in-service'; }
+  if (matches > 0) { return 'shadowed'; }
   if (isSafetyLevel(level)) {
     if (lifetimeFires >= 1) { return 'deterrent'; }
     if (misses >= 1) { return 'dead-weight?'; }
     return 'insufficient-exposure';
   }
-  if (changed > 0) { return 'in-service'; }
   return 'retire';
 }
 
-function noteFor(level: ClauseLevel, retirement: boolean): string | undefined {
-  if (isSafetyLevel(level)) { return RED_RETIREMENT_CAVEAT; }
-  if (retirement && level === 'green') { return GREEN_PERSISTENCE_NOTE; }
-  return undefined;
+/**
+ * The note a reviewer reads. Composed rather than picked, because a shadowed red needs both halves:
+ * what to do about the redundancy, *and* that the gate is not proposing anything.
+ */
+function noteFor(
+  level: ClauseLevel, retirement: boolean, evidenceClass: EvidenceClass,
+): string | undefined {
+  const parts: string[] = [];
+  if (evidenceClass === 'shadowed') { parts.push(SHADOWED_NOTE); }
+  if (isSafetyLevel(level)) { parts.push(RED_NOT_PROPOSED); }
+  if (retirement && level === 'green') { parts.push(GREEN_PERSISTENCE_NOTE); }
+  return parts.length === 0 ? undefined : parts.join(' ');
 }
 
 // --------------------------------------------------------------------------- the whole corpus
