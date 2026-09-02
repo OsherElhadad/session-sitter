@@ -1,0 +1,14 @@
+claude -p --permission-mode manual --include-hook-events --output-format stream-json
+claude 2.1.252 · every hook lifecycle event and every permission denial, in order.
+PermissionRequest does not appear. Claude Code denied all three Bash calls itself.
+
+hook_started   hook_name=SessionStart:startup hook_event=SessionStart
+hook_response  hook_name=SessionStart:startup hook_event=SessionStart exit=0 stdout='{}'
+permission_denied tool=Bash reason_type=subcommandResults reason='This Bash command contains multiple operations. The following part requires approval: head'
+hook_started   hook_name=PostToolUse:Bash hook_event=PostToolUse
+hook_response  hook_name=PostToolUse:Bash hook_event=PostToolUse exit=0 stdout='{}'
+permission_denied tool=Bash reason_type=other reason='This command requires approval'
+hook_started   hook_name=PostToolUse:Bash hook_event=PostToolUse
+hook_response  hook_name=PostToolUse:Bash hook_event=PostToolUse exit=0 stdout='{}'
+permission_denied tool=Bash reason_type=other reason='This command requires approval'
+result         cost=$0.137378 turns=6 api_ms=31662 cache_read=133273

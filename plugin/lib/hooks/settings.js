@@ -13,11 +13,17 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.loadSettings = loadSettings;
 const config_1 = require("../supervisor/config");
+const generalise_1 = require("../policy/generalise");
 function bool(raw, fallback) {
     if (raw === undefined || raw.trim() === '') {
         return fallback;
     }
     return ['1', 'true', 'yes', 'on'].includes(raw.trim().toLowerCase());
+}
+/** An unrecognised destination falls back to `session` — the one that changes nothing on disk. */
+function ruleDestination(raw) {
+    const v = (raw ?? '').trim();
+    return generalise_1.RULE_DESTINATIONS.includes(v) ? v : 'session';
 }
 function loadSettings(env = process.env, cwd) {
     const mode = (env.SESSION_SITTER_MODE ?? '').trim().toLowerCase() === 'observe'
@@ -26,6 +32,8 @@ function loadSettings(env = process.env, cwd) {
         mode,
         classifierEnabled: bool(env.SESSION_SITTER_CLASSIFIER, false),
         persistRules: bool(env.SESSION_SITTER_PERSIST_RULES, false),
+        ruleDestination: ruleDestination(env.SESSION_SITTER_RULE_DESTINATION),
+        preToolUse: bool(env.SESSION_SITTER_PRETOOL, true),
         user: env.SESSION_SITTER_USER || null,
         project: env.SESSION_SITTER_PROJECT || null,
         team: env.SESSION_SITTER_TEAM || null,

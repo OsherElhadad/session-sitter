@@ -377,6 +377,56 @@ so supervision cards and the conversation with a session share one group.
 
 Setup, the failure table, and the exact write limits: [`docs/TELEGRAM.md`](docs/TELEGRAM.md).
 
+### The plugin evaluates every command in a compound line, not just the first
+
+Claude Code matches permission patterns on a command **prefix**, so `Bash(git:*)` does not match
+`git add . && git commit -m x` ([#25441]), and per the community meta-issue [#30519] the same hole
+applies to **deny** rules — a written deny could be walked past by appending `&& <the denied thing>`.
+The plugin's `PermissionRequest` hook now splits the command line into the commands a shell would
+actually run — across `&&`, `||`, `;`, `|`, `|&`, `&`, newlines, `$(…)`, backticks and `<(…)`,
+honouring quoting — runs the decision ladder over every one of them, and combines
+**deny > ambiguous > allow**. The deny names the offending sub-command and its position, which prefix
+matching structurally cannot.
+
+The sharpest thing this fixes is in the *allow* direction: a written green clause used to be matched
+against the whole line as one string, so `Match: npm test` licensed anything that merely contained
+those words — `npm test && curl … | sh` included.
+
+It is fail-closed. A line the splitter will not vouch for — unbalanced quote, unterminated
+substitution, arithmetic `$(( ))`, substitution nested more than four deep — is *ambiguous*, never
+safe. That has a real cost, stated in `docs/PLUGIN.md`: `npm test -- --shard=$((1 + 1))` is denied
+even with a green clause covering `npm test`. The splitter is `src/policy/shell.ts`, hand-written,
+because this repository has no runtime dependencies.
+
+### "Always allow" writes the rule you meant, not the command you typed
+
+Claude Code's own dialog saves the literal command string, so the rule never matches again and
+`settings.local.json` fills with dead entries ([#6850], [#11380]) — or it offers a wildcard far wider
+than the subcommand you approved ([#29187]). With `SESSION_SITTER_PERSIST_RULES=on`, a call allowed by
+a written green clause now comes back with a `decision.updatedPermissions` **derived from that
+clause**: `Match: npm test` becomes `Bash(npm test:*)`, and the audit record cites the clause. It
+emits nothing — letting the prompt come back — for a deny, a correction, a deterministic-tier allow,
+a compound, a regex matcher, or a substring that did not start the command. `session` is the default
+destination; `SESSION_SITTER_RULE_DESTINATION` moves it.
+
+### A `ConfigChange` hook guards your permission configuration
+
+An agent that can edit `.claude/settings.json` can add itself an allow rule, delete the deny rule
+stopping it, or set `defaultMode` to `bypassPermissions`. The new hook blocks a change that widens
+what the agent may do and allows a narrowing. Because the platform documents that "a blocked change
+surfaces no message to you or to Claude", the audit record is the only place either decision is
+visible — so every one is recorded with `built-in §config-guard`. `policy_settings` is recorded and
+allowed through, because the docs are explicit that it cannot be blocked.
+
+All three are verified against the real `claude` v2.1.252 binary, with the captured hook JSON in
+`docs/superpowers/specs/2026-09-02-permissions.md` — including what is *not* verified.
+
+[#6850]: https://github.com/anthropics/claude-code/issues/6850
+[#11380]: https://github.com/anthropics/claude-code/issues/11380
+[#25441]: https://github.com/anthropics/claude-code/issues/25441
+[#29187]: https://github.com/anthropics/claude-code/issues/29187
+[#30519]: https://github.com/anthropics/claude-code/issues/30519
+
 ## 0.8.0
 
 ### The session list can hold still, and it sorts six ways

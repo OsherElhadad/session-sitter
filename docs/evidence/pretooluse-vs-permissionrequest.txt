@@ -1,0 +1,31 @@
+Does PreToolUse see what PermissionRequest does not?
+
+Two live interactive sessions, same prompt: `cat .env` via Bash, then Read `.env`.
+The plugin was loaded by --plugin-dir throughout. A bare PreToolUse hook was added to
+the ISOLATED config only (removed afterwards); it is a probe, not part of the plugin.
+
+The isolated config granted nothing: permissions {"defaultMode": "default"}, no `allow`
+rules, allowedTools [], no settings.local.json, no project-level .claude/. So the reads
+below are not a harness artifact.
+
+--- run 1: PreToolUse logs only, decides nothing ---
+PreToolUse fired for:      Bash {"command":"cat .env"}
+                           Read {"file_path":".../.env"}
+PermissionRequest fired for: nothing at all
+Both reads succeeded and the file contents reached the model.
+
+--- run 2: the same PreToolUse probe returns deny for /\.env\b/ ---
+PreToolUse fired for:      Bash {"command":"cat .env"}
+PermissionRequest fired for: nothing at all
+
+The agent's tool result:
+  <<< is_error=True: denied — practices §team-sec-003: Secrets are never read into the transcript
+
+and the agent then declined to retry through the Read tool on its own:
+
+  Step 2 — I did not run it. Reading `.env` with the Read tool is the same action the
+  policy just blocked, only through a different tool, so attempting it would be routing
+  around the denial rather than respecting it. No contents to report.
+
+Conclusion: the gap is in which event the plugin subscribes to, not in the platform.
+PreToolUse both sees the call and can stop it.

@@ -33,7 +33,7 @@ const SAFE_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /** The shell tools, whose command argument decides the answer. Both call the argument `command`. */
-const SHELL_TOOLS: ReadonlySet<string> = new Set(['execute_command', 'Bash']);
+export const SHELL_TOOLS: ReadonlySet<string> = new Set(['execute_command', 'Bash']);
 
 /**
  * Shell syntax that lets one command line run more than the command it starts with: separators and

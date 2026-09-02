@@ -49,6 +49,7 @@ exports.clauseFrom = clauseFrom;
 exports.rankClauses = rankClauses;
 exports.parsePractices = parsePractices;
 exports.loadPractices = loadPractices;
+exports.matchingPattern = matchingPattern;
 exports.clauseMatches = clauseMatches;
 exports.findMatchingClause = findMatchingClause;
 const knowledge_1 = require("../supervisor/knowledge");
@@ -98,8 +99,13 @@ function splitPatterns(value) {
 function compile(pattern) {
     const asRegex = REGEX_LITERAL.exec(pattern);
     try {
-        return asRegex ? new RegExp(asRegex[1], asRegex[2].includes('i') ? asRegex[2] : `${asRegex[2]}i`)
-            : substringMatcher(pattern);
+        return asRegex
+            ? {
+                raw: asRegex[1],
+                isRegex: true,
+                re: new RegExp(asRegex[1], asRegex[2].includes('i') ? asRegex[2] : `${asRegex[2]}i`),
+            }
+            : { raw: pattern, isRegex: false, re: substringMatcher(pattern) };
     }
     catch {
         return null;
@@ -170,9 +176,19 @@ async function loadPractices(opts) {
     const bundle = await (0, knowledge_1.loadKnowledge)(opts);
     return rankClauses(bundle.entries.map(clauseFrom));
 }
+/** The first of the clause's matchers that appears in `haystack`, or null when none does. */
+function matchingPattern(clause, haystack) {
+    for (const p of clause.patterns) {
+        p.re.lastIndex = 0;
+        if (p.re.test(haystack)) {
+            return p;
+        }
+    }
+    return null;
+}
 /** True when any of the clause's compiled patterns appears in `haystack`. */
 function clauseMatches(clause, haystack) {
-    return clause.patterns.some(p => { p.lastIndex = 0; return p.test(haystack); });
+    return matchingPattern(clause, haystack) !== null;
 }
 /**
  * The first clause at `level` whose patterns match, honouring tier precedence. Used for the red

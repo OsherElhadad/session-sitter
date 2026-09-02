@@ -1,0 +1,14 @@
+PermissionRequest latency — 50 process spawns per scenario
+node v25.1.0 · darwin 24.6.0 · Apple M1 Max
+
+scenario                                     min     p50     p95     max   verdict
+------------------------------------------------------------------------------------------------
+rung 1  deterministic green (Read)            54.2    62.8    76.1    91.9   ✓ allow/deterministic
+rung 2  correction lane (git push --force)    53.1    64.8    75.0    82.0   ✓ allow/policy/rewritten
+rung 4  written green clause (npm test)       53.1    62.3    70.9    98.5   ✓ allow/policy
+rung 5  built-in red table (rm -rf)           54.0    62.9    72.4    92.8   ✓ deny/deterministic
+rung 7  fail closed (Write, no classifier)    54.5    63.8    74.0    94.7   ✓ deny/timeout
+
+Every figure is a whole OS process: Node startup, module load, decision, and one audit append.
+The classifier was pointed at /nonexistent/classifier throughout, so any scenario that
+reached for a model would show actor=timeout and fail its verdict check.

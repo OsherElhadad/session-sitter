@@ -85,6 +85,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.EXEMPT_TOOLS = void 0;
 exports.failClosedOutput = failClosedOutput;
 exports.loadClauses = loadClauses;
+exports.constituentsOf = constituentsOf;
+exports.combineVerdicts = combineVerdicts;
 exports.decideDeterministically = decideDeterministically;
 exports.handle = handle;
 const fs = __importStar(require("fs"));
@@ -94,6 +96,8 @@ const prompt_1 = require("../supervisor/prompt");
 const schema_1 = require("../supervisor/schema");
 const factory_1 = require("../supervisor/factory");
 const practices_1 = require("../policy/practices");
+const shell_1 = require("../policy/shell");
+const generalise_1 = require("../policy/generalise");
 const corrections_1 = require("../policy/corrections");
 const trail_1 = require("../audit/trail");
 const paths_1 = require("./paths");
@@ -178,54 +182,72 @@ function bundleFor(clauses, settings) {
  * *question* as though it were the act — which is how this exemption was found, in a real session.
  */
 exports.EXEMPT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
-/** Rungs 1–5: everything decidable without a model. Returns null when the call is ambiguous. */
-function decideDeterministically(input, clauses) {
-    const toolName = input.tool_name ?? '';
-    const toolInput = input.tool_input ?? null;
-    const session = (0, session_1.sessionFromPermissionRequest)(input);
+/**
+ * Everything the constituent commands of ONE call are scanned against: the tool name plus the tool
+ * input with `command` replaced by that constituent. Keeping the whole input JSON means a clause
+ * whose `Match:` looks at another field still sees it; the only thing that varies is the command.
+ */
+function constituentHaystack(toolName, toolInput, command) {
+    return (0, session_1.haystackFor)(toolName, { ...(toolInput ?? {}), command });
+}
+function constituentsOf(toolName, toolInput) {
+    if (!tiers_1.SHELL_TOOLS.has(toolName)) {
+        return { commands: null, reason: null };
+    }
+    const command = toolInput && typeof toolInput.command === 'string' ? toolInput.command : null;
+    if (command === null) {
+        return { commands: null, reason: null };
+    }
+    const split = (0, shell_1.splitShellCommand)(command);
+    return split.confident
+        ? { commands: split.commands, reason: null }
+        : { commands: null, reason: split.reason };
+}
+/** The first written red clause any constituent of this call trips, or null. */
+function firstRedClause(toolName, toolInput, clauses) {
+    const { commands } = constituentsOf(toolName, toolInput);
+    if (commands === null) {
+        return (0, practices_1.findMatchingClause)(clauses, (0, session_1.haystackFor)(toolName, toolInput), 'red');
+    }
+    for (const command of commands) {
+        const red = (0, practices_1.findMatchingClause)(clauses, constituentHaystack(toolName, toolInput, command), 'red');
+        if (red !== null) {
+            return red;
+        }
+    }
+    return null;
+}
+/**
+ * Rung 1 — the free path: a read-only tool, or a shell line the engine's deterministic tier vouches
+ * for. Factored out because it is checked twice: once against the call exactly as asked (ahead of the
+ * correction lane, so a safe read is never "corrected"), and once per constituent of a compound.
+ */
+function deterministicGreen(toolName, toolInput) {
+    const session = (0, session_1.sessionFromPermissionRequest)({ tool_name: toolName, tool_input: toolInput ?? undefined });
+    if ((0, tiers_1.preClassify)(session) !== models_1.TrafficLight.GREEN) {
+        return null;
+    }
+    return {
+        decision: { behavior: 'allow' },
+        light: models_1.TrafficLight.GREEN,
+        clause: null,
+        actor: 'deterministic',
+        note: `allowed — read-only or non-mutating (${(0, tiers_1.actionLabel)(session)})`,
+        settled: true,
+        allowedBy: null,
+    };
+}
+/**
+ * Rungs 1, 3, 4 and 5 for a SINGLE tool input — no correction lane, which runs once over the whole
+ * command line before anything is split. Returns null when this input is ambiguous.
+ */
+function decideOne(toolName, toolInput, clauses) {
+    const session = (0, session_1.sessionFromPermissionRequest)({ tool_name: toolName, tool_input: toolInput ?? undefined });
     const hay = (0, session_1.haystackFor)(toolName, toolInput);
     // 1. Deterministic green — a read or a safe command.
-    if ((0, tiers_1.preClassify)(session) === models_1.TrafficLight.GREEN) {
-        return {
-            decision: { behavior: 'allow' },
-            light: models_1.TrafficLight.GREEN,
-            clause: null,
-            actor: 'deterministic',
-            note: `allowed — read-only or non-mutating (${(0, tiers_1.actionLabel)(session)})`,
-            settled: true,
-        };
-    }
-    // 2. The correction lane.
-    const correction = (0, corrections_1.applyCorrection)(toolName, toolInput);
-    if (correction) {
-        // Re-check the *rewritten* input, so a rewrite can never produce a call a written red clause
-        // forbids. Only written clauses are re-checked: the engine's built-in table lists
-        // `--force-with-lease` as destructive too (correct when a human is watching in the IDE), and
-        // re-applying it here would deny the very form this lane exists to produce.
-        const rewrittenHay = (0, session_1.haystackFor)(toolName, correction.updatedInput);
-        const blocked = (0, practices_1.findMatchingClause)(clauses, rewrittenHay, 'red');
-        if (blocked) {
-            return {
-                decision: {
-                    behavior: 'deny',
-                    message: `denied — ${blocked.citation}: ${blocked.title}. The safer form of this call is `
-                        + 'still forbidden by that clause, so it was not rewritten.',
-                },
-                light: models_1.TrafficLight.RED,
-                clause: blocked.citation,
-                actor: 'policy',
-                note: `correction ${correction.ruleId} was rejected by ${blocked.citation}`,
-                settled: false,
-            };
-        }
-        return {
-            decision: { behavior: 'allow', updatedInput: correction.updatedInput },
-            light: models_1.TrafficLight.YELLOW,
-            clause: `practices §${correction.clauseId}`,
-            actor: 'policy',
-            note: `corrected — practices §${correction.clauseId}: ${correction.note}`,
-            settled: false, // a rewrite is per-call; it must never become a standing rule
-        };
+    const free = deterministicGreen(toolName, toolInput);
+    if (free !== null) {
+        return free;
     }
     // 3. A written red clause.
     const red = (0, practices_1.findMatchingClause)(clauses, hay, 'red');
@@ -241,10 +263,13 @@ function decideDeterministically(input, clauses) {
             actor: 'policy',
             note: `denied — ${red.citation}: ${red.title}`,
             settled: false, // a deny is never persisted as a permission rule
+            allowedBy: null,
         };
     }
     // 4. A written green clause — the standing policy that makes an overnight run survivable.
-    const green = (0, practices_1.findMatchingClause)(clauses, hay, 'green');
+    // Deliberately the identity haystack: a green clause must never be satisfied by the bytes a
+    // Write happens to contain. See haystackFor.
+    const green = (0, practices_1.findMatchingClause)(clauses, (0, session_1.haystackFor)(toolName, toolInput, 'identity-only'), 'green');
     if (green) {
         return {
             decision: { behavior: 'allow' },
@@ -253,6 +278,7 @@ function decideDeterministically(input, clauses) {
             actor: 'policy',
             note: `allowed — ${green.citation}: ${green.title}`,
             settled: true,
+            allowedBy: green,
         };
     }
     // 5. The engine's built-in deterministic red table.
@@ -268,9 +294,139 @@ function decideDeterministically(input, clauses) {
             actor: 'deterministic',
             note: `denied — built-in destructive-action rule (${(0, tiers_1.actionLabel)(session)})`,
             settled: false,
+            allowedBy: null,
         };
     }
     return null;
+}
+/**
+ * Combine one verdict per constituent into the verdict for the whole command line.
+ *
+ * **Deny wins, then ambiguity, then allow** — a compound command is only as safe as its most
+ * dangerous part, and "I could not decide about part 3" is not "part 3 is fine". Ambiguity ranking
+ * above allow is the property that makes this fail closed: an unrecognised constituent sends the
+ * whole line to the classifier or to the denial, never to an approval earned by its siblings.
+ *
+ * Exported as its own function rather than inlined: any tier that produces a per-constituent verdict
+ * needs the same combining rule, and two copies of "which light wins" is two places for them to
+ * disagree.
+ */
+function combineVerdicts(parts) {
+    // A single constituent is the un-compounded case: hand its verdict back untouched, so a plain
+    // call behaves exactly as it did before this evaluator existed (and stays generalisable).
+    if (parts.length === 1) {
+        return parts[0].verdict;
+    }
+    const n = parts.length;
+    const deniedAt = parts.findIndex(p => p.verdict?.decision.behavior === 'deny');
+    if (deniedAt >= 0) {
+        const { command, verdict } = parts[deniedAt];
+        const v = verdict;
+        const where = `This call runs ${n} commands; sub-command ${deniedAt + 1} of ${n} is the one that `
+            + `matched: ${command}`;
+        return {
+            ...v,
+            decision: { behavior: 'deny', message: `${v.decision.message ?? 'denied'}\n\n${where}` },
+            note: `${v.note} (sub-command ${deniedAt + 1} of ${n}: ${command})`,
+            settled: false,
+            allowedBy: null,
+        };
+    }
+    const ambiguousAt = parts.findIndex(p => p.verdict === null);
+    if (ambiguousAt >= 0) {
+        return null;
+    }
+    const cited = parts.map(p => p.verdict?.clause).filter((c) => !!c);
+    return {
+        decision: { behavior: 'allow' },
+        light: models_1.TrafficLight.GREEN,
+        clause: cited.length > 0 ? [...new Set(cited)].join(', ') : null,
+        actor: cited.length > 0 ? 'policy' : 'deterministic',
+        note: `allowed — all ${n} sub-commands cleared`
+            + (cited.length > 0 ? ` (${[...new Set(cited)].join(', ')})` : ''),
+        settled: true,
+        // A standing rule derived from a compound is exactly the bug this evaluator exists to fix:
+        // Claude Code matches rules on a command PREFIX, so a rule taken from `git status && rm -rf /`
+        // would license the `rm` to anything starting with `git status`.
+        allowedBy: null,
+    };
+}
+/**
+ * Rungs 1–5: everything decidable without a model. Returns null when the call is ambiguous.
+ *
+ * ## Compound commands
+ *
+ * `Bash(git:*)` does not match `git add . && git commit -m x`, because Claude Code matches on a
+ * command prefix (#25441) — and per the community meta-issue #30519 that hole applies to **deny**
+ * rules too, so a written deny can be walked past by appending `&& <the denied thing>`. This hook
+ * therefore splits the command line (`src/policy/shell.ts`), evaluates **every** command in it, and
+ * combines with deny > ambiguous > allow. A line that cannot be split with certainty is ambiguous,
+ * never safe.
+ */
+function decideDeterministically(input, clauses) {
+    const toolName = input.tool_name ?? '';
+    const toolInput = input.tool_input ?? null;
+    // 1. The free path, checked before anything else: a call the deterministic tier already vouches
+    // for must never be routed through the correction lane. (`git log -f --grep=push` is a real
+    // example — safe as asked, and the force-push rewrite's short-flag matcher would happily maul it.)
+    const free = deterministicGreen(toolName, toolInput);
+    if (free !== null) {
+        return free;
+    }
+    // 2. The correction lane runs once, over the whole command line: the rewrites are textual
+    // substitutions (`--force` → `--force-with-lease`) that are correct wherever they appear, and
+    // splicing a rewritten constituent back into a command line is a class of bug worth not having.
+    const correction = (0, corrections_1.applyCorrection)(toolName, toolInput);
+    if (correction) {
+        // Re-check the *rewritten* input — every constituent of it — so a rewrite can never produce a
+        // call a written red clause forbids. Only written clauses are re-checked: the engine's built-in
+        // table lists `--force-with-lease` as destructive too (correct when a human is watching in the
+        // IDE), and re-applying it here would deny the very form this lane exists to produce.
+        const blocked = firstRedClause(toolName, correction.updatedInput, clauses);
+        if (blocked) {
+            return {
+                decision: {
+                    behavior: 'deny',
+                    message: `denied — ${blocked.citation}: ${blocked.title}. The safer form of this call is `
+                        + 'still forbidden by that clause, so it was not rewritten.',
+                },
+                light: models_1.TrafficLight.RED,
+                clause: blocked.citation,
+                actor: 'policy',
+                note: `correction ${correction.ruleId} was rejected by ${blocked.citation}`,
+                settled: false,
+                allowedBy: null,
+            };
+        }
+        // A correction rule names the clause it enforces, but the clause only exists if the team
+        // actually wrote one with that id. Citing `practices §force-push` at a file that defines no
+        // such clause points the reader at nothing — and a citation you cannot follow is worse than
+        // an honest admission that this was a shipped default rather than your own rule.
+        const cited = clauses.find(c => c.clauseId === correction.clauseId);
+        const citation = cited ? cited.citation : `built-in §${correction.ruleId}`;
+        return {
+            decision: { behavior: 'allow', updatedInput: correction.updatedInput },
+            light: models_1.TrafficLight.YELLOW,
+            clause: citation,
+            actor: 'policy',
+            note: `corrected — ${citation}: ${correction.note}`,
+            settled: false, // a rewrite is per-call; it must never become a standing rule
+            allowedBy: null, // and it must never become a standing permission rule either
+        };
+    }
+    const { commands, reason } = constituentsOf(toolName, toolInput);
+    // Fail closed: a command line this scanner will not vouch for is ambiguous, so it goes to the
+    // classifier or to the denial. It never inherits an approval.
+    if (commands === null && reason !== null) {
+        return null;
+    }
+    if (commands === null) {
+        return decideOne(toolName, toolInput, clauses);
+    }
+    return combineVerdicts(commands.map(command => ({
+        command,
+        verdict: decideOne(toolName, { ...(toolInput ?? {}), command }, clauses),
+    })));
 }
 /** Rung 6: the classifier, with the practices as context. Throws when it cannot produce a verdict. */
 async function decideWithClassifier(input, clauses, settings) {
@@ -291,6 +447,7 @@ async function decideWithClassifier(input, clauses, settings) {
         actor: 'model',
         note: `${allowed ? 'allowed' : 'denied'} — classifier returned ${light}`,
         settled: false, // a model verdict is about this call, not a standing rule
+        allowedBy: null,
     };
 }
 async function handle(rawInput) {
@@ -324,12 +481,18 @@ async function handle(rawInput) {
         loadError = String(err);
     }
     let verdict = loadError === null ? decideDeterministically(input, clauses) : null;
+    // When the reason for ambiguity is that the command line could not be split with certainty, say
+    // so — otherwise the fail-closed denial reads as "nothing covered this", which is a different and
+    // much less actionable statement.
+    const unsplittable = verdict === null
+        ? constituentsOf(toolName, input.tool_input ?? null).reason
+        : null;
     if (verdict === null && loadError !== null) {
         // The practices could not be read, so rungs 2–4 never ran. Refusing to guess is the point.
         verdict = {
             decision: { behavior: 'deny', message: `${UNREACHABLE_MESSAGE}\n\n(practices: ${loadError})` },
             light: null, clause: null, actor: 'timeout',
-            note: `denied — practices unreadable: ${loadError}`, settled: false,
+            note: `denied — practices unreadable: ${loadError}`, settled: false, allowedBy: null,
         };
     }
     if (verdict === null && settings.classifierEnabled) {
@@ -340,7 +503,7 @@ async function handle(rawInput) {
             verdict = {
                 decision: { behavior: 'deny', message: `${UNREACHABLE_MESSAGE}\n\n(classifier: ${String(err)})` },
                 light: null, clause: null, actor: 'timeout',
-                note: `denied — classifier unreachable: ${String(err)}`, settled: false,
+                note: `denied — classifier unreachable: ${String(err)}`, settled: false, allowedBy: null,
             };
         }
     }
@@ -366,18 +529,34 @@ async function handle(rawInput) {
             // reported as a hook error in the transcript, and `{}` is unambiguously "no verdict".
             return {};
         }
+        const why = unsplittable === null
+            ? 'no classifier configured and no written clause applied'
+            : `the shell command line could not be split with certainty (${unsplittable}), so no part of `
+                + 'it could be evaluated';
         verdict = {
-            decision: { behavior: 'deny', message: UNREACHABLE_MESSAGE },
+            decision: {
+                behavior: 'deny',
+                message: unsplittable === null ? UNREACHABLE_MESSAGE
+                    : `${UNREACHABLE_MESSAGE}\n\n(shell: ${unsplittable})`,
+            },
             light: null, clause: null, actor: 'timeout',
-            note: 'denied — no classifier configured and no written clause applied', settled: false,
+            note: `denied — ${why}`, settled: false,
+            allowedBy: null,
         };
     }
-    // `updatedPermissions` is allow-only, and only for a decision that is genuinely standing.
+    // `updatedPermissions` is allow-only, and only for a decision that is genuinely standing AND was
+    // made by a written clause. The dialog's own `permission_suggestions` are deliberately NOT echoed:
+    // they carry the literal command string, which is the bug (#6850, #11380) — the rule is derived
+    // from the clause instead, and when nothing safe can be derived, nothing is emitted and the prompt
+    // comes back. See `src/policy/generalise.ts`.
     if (verdict.decision.behavior === 'allow' && verdict.settled && settings.persistRules
-        && Array.isArray(input.permission_suggestions) && input.permission_suggestions.length > 0) {
-        verdict.decision.updatedPermissions = input.permission_suggestions.map(s => ({
-            ...s, destination: 'localSettings',
-        }));
+        && verdict.allowedBy !== null) {
+        const update = (0, generalise_1.generalisedPermission)(verdict.allowedBy, toolName, input.tool_input ?? null, settings.ruleDestination);
+        if (update !== null) {
+            verdict.decision.updatedPermissions = [update];
+            verdict.note += ` — standing rule Bash(${update.rules[0].ruleContent}) written to `
+                + `${update.destination}, derived from ${verdict.clause}`;
+        }
     }
     (0, trail_1.appendJsonl)((0, paths_1.decisionsPath)(), {
         ts: new Date().toISOString(),

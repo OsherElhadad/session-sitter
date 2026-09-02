@@ -1,0 +1,15 @@
+/tmp/ss-e2e/practices.md: 6 clauses
+  red    practices §team-git-002      2 pattern(s)  Never rewrite history on a branch other people build on
+  yellow practices §force-push        0 pattern(s)  A force push must be leased, never blind
+  red    practices §team-sec-003      3 pattern(s)  Secrets are never read into the transcript
+  green  practices §team-ci-001       3 pattern(s)  Running the test suite and the build never needs approval
+  red    practices §team-sec-001      0 pattern(s)  Credentials are referenced by environment variable, never pasted
+  red    practices §team-fs-004       1 pattern(s)  A generated directory is rebuilt, never deleted out from under a running job
+
+error: practices §team-sec-001: level red but no `Match:` line, so it cannot match a tool call. It reaches the classifier as prose only.
+info: correction rule "chmod-777-to-755" cites practices §least-privilege, which this file does not define. The rewrite still applies; the citation just points nowhere.
+
+replayed 14 recorded decisions — 3 would change
+  deny → ambiguous   Write: /private/tmp/ss-e2e/repo/NOTES.md
+  deny → ambiguous   Write: /private/tmp/ss-e2e/repo/NOTES.md
+  allow → ambiguous   Write: /private/tmp/ss-e2e/repo/NOTES.md
