@@ -12,6 +12,7 @@
 import { AgentController } from './agentControl';
 import { SupervisorConfig } from './config';
 import { ClassifierEngine, EngineError } from './engine';
+import { FastClassifier, FastClassifierError } from './fastClassifier';
 import {
   FetchFn,
   KnowledgeBundle,
@@ -54,6 +55,8 @@ export interface OrchestratorOptions {
   store: StateStore;
   transcriptSource: TranscriptSource;
   engine: ClassifierEngine;
+  /** The fast HTTP tier, between the deterministic rules and `engine`. Omit to leave it off. */
+  fastClassifier?: FastClassifier;
   channel: MessagingChannel;
   agentController: AgentController;
   clock?: Clock;
@@ -68,6 +71,7 @@ export class Orchestrator {
   readonly channel: MessagingChannel;
   private readonly transcript: TranscriptSource;
   private readonly engine: ClassifierEngine;
+  private readonly fast?: FastClassifier;
   private readonly agent: AgentController;
   private readonly clock: Clock;
   private readonly knowledgeFetch?: FetchFn;
@@ -78,6 +82,7 @@ export class Orchestrator {
     this.store = opts.store;
     this.transcript = opts.transcriptSource;
     this.engine = opts.engine;
+    this.fast = opts.fastClassifier;
     this.channel = opts.channel;
     this.agent = opts.agentController;
     this.clock = opts.clock ?? nowUtc;
@@ -291,6 +296,23 @@ export class Orchestrator {
     record.user = bundle.user;
     record.project = bundle.project;
     record.team = bundle.team;
+
+    // Tier 2 (fast LLM): one prompt-cached HTTP call over the agent's own conversation, ~3-4s
+    // against the ~13.5s the agent CLI below costs. Best-effort — a timeout, a malformed verdict
+    // or low confidence falls through to the CLI, and never to an approval.
+    if (this.fast !== undefined) {
+      try {
+        const fast = await this.fast.judge(session, bundle);
+        this.event(record, 'tier_fast_llm', { ...fast.telemetry });
+        record.assessment = fast.assessment as unknown as Record<string, unknown>;
+        return this.act(
+          record, record.assessment, fast.assessment.traffic_light as TrafficLight);
+      } catch (err) {
+        if (!(err instanceof FastClassifierError)) { throw err; }
+        this.log(`fast classifier: falling back to the agent classifier — ${err.message}`);
+        this.event(record, 'fast_llm_fell_back', { error: err.message, ...(err.telemetry ?? {}) });
+      }
+    }
 
     const prompt = buildSupervisionPrompt(session, bundle);
     let result;
