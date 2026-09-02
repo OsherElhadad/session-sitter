@@ -622,9 +622,11 @@ Five specs written in parallel left residual disagreements, all in one place —
 compiled artifact. They are recorded with their rulings, because a reader who finds the source specs
 still contradicting each other needs to know which side won and why.
 
-1. **Field names are snake_case on disk.** `SupervisionRecord` is already snake_case on disk by
-   documented convention, and the artifact is another on-disk file read by the same codebase. One
-   convention, no per-file exception: `built_at`, `corpus_ref`, `message`.
+1. **Field names are snake_case on disk — and on disk only.** `SupervisionRecord` is already
+   snake_case on disk by documented convention, and the artifact is another on-disk file read by the
+   same codebase. One convention, no per-file exception: `built_at`, `corpus_ref`, `message`. This
+   scopes the JSON and nothing else: **the TypeScript interfaces stay camelCase**, as the rest of
+   `src/` is, so no type is renamed by this ruling.
 2. **The revision is the content hash.** Identical content must produce an identical revision — that
    is what makes a pinned session's prefix byte-identical, and it avoids needing a second
    `local-<hash>` form for an uncommitted checkout. The corpus git SHA stays as a separate
@@ -652,6 +654,13 @@ still contradicting each other needs to know which side won and why.
    trailing user turn, costing nothing in cache terms. A single budget over one selection pass would
    put per-call content *inside* the cached prefix and invalidate it on every decision — the precise
    failure §4's pinning exists to prevent.
+
+   The two regions turn out to be **disjoint by construction**, which is better than the ruling
+   required: the cached core holds *patternless* clauses and the trailing turn holds clauses that
+   *matched this call*, and a clause cannot be both. So there is no arbitration to write, and §6's
+   exclusion of evaluated-and-missed clauses composes with the split rather than merely coexisting —
+   a clause with patterns is either matched, and free, or absent. **A deterministic clause can never
+   occupy cached core budget**, which is a second and stronger reason §8's exemption holds.
 
 Two smaller gaps belong to the schema owner rather than being papered over here. **The audit deadline
 field does not exist**: the review templates render "audit closes \<date\>" with nothing to read, so
