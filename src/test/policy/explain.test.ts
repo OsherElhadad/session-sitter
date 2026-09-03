@@ -153,6 +153,7 @@ describe('explain and the hook are the same evaluator', () => {
     expect(record).toHaveLength(1);
     expect(answer.light).toBe(record[0].light);
     expect(answer.clause).toBe(record[0].clause);
+    expect(answer.actor).toBe(record[0].actor);
     expect(answer.policy.rev).toBe(record[0].rev);
     expect(answer.policy.source).toBe(record[0].policySource);
     expect(engineCalls).toEqual([]);
@@ -163,7 +164,10 @@ describe('explain and the hook are the same evaluator', () => {
     // The rung is carried on the hook's own `Verdict`, not re-derived here — this asserts that the
     // field `explain` prints is the one the enforcement path set.
     expect((await ask('Read', { file_path: '/tmp/a.ts' })).rung).toBe(1);
-    expect((await ask('Bash', { command: 'git push --force origin main' })).rung).toBe(2);
+    // Rung 2 AND actor `correction` — main's new actor value and this branch's rung field are both
+    // set at the correction lane's returns, and both belong.
+    const corrected = await ask('Bash', { command: 'git push --force origin main' });
+    expect(corrected).toMatchObject({ rung: 2, actor: 'correction' });
     expect((await ask('Bash', { command: 'aws s3 rb s3://x' })).rung).toBe(3);
     expect((await ask('Bash', { command: 'npm test' })).rung).toBe(4);
     expect((await ask('Bash', { command: 'rm -rf /' })).rung).toBe(5);
@@ -490,7 +494,7 @@ describe('renderExplain', () => {
     would: 'deny', rung: 3, rungLabel: 'written red clause', light: 'red',
     clause: 'practices §pay-storage-001', citation: 'practices §pay-storage-001@1a2b3c4',
     title: 'Never delete a bucket', message: 'Buckets do not come back.', sourceFile: 'team/bottom-line.md',
-    fix: null, rewritten: null, note: 'denied', selection: null,
+    actor: 'policy', fix: null, rewritten: null, note: 'denied', selection: null,
     policy: {
       source: 'artifact', rev: 'sha256:' + '1'.repeat(64), degraded: null, clauses: 2,
       elapsedMs: 0.71,

@@ -168,7 +168,7 @@ describe('decideDeterministically — rung 2, the correction lane', () => {
     expect(v?.decision.updatedInput).toEqual({ command: 'git push --force-with-lease origin dev' });
     expect(v?.clause).toBe('built-in §force-push-to-lease');
     expect(v?.light).toBe('yellow');
-    expect(v?.actor).toBe('policy');
+    expect(v?.actor).toBe('correction');
   });
 
   it("cites the team's own clause when their practices define the id", () => {
@@ -192,6 +192,29 @@ describe('decideDeterministically — rung 2, the correction lane', () => {
   it('never marks a rewrite as settled, so it can never become a standing rule', () => {
     const v = decideDeterministically(req('Bash', { command: 'git push -f origin dev' }), []);
     expect(v?.settled).toBe(false);
+  });
+
+  it('is a distinguishable decider from a written clause, in both its outcomes', () => {
+    // The correction lane is rung 2, not rung 3, and its two outcomes are different events:
+    //   accepted — "we made this safe and let it through"
+    //   rejected — "we tried to make it safe and the safe form was ALSO forbidden"
+    // Reporting either as `policy` makes the rejection byte-identical to a plain written red
+    // (`policy` + `deny` + `rewritten: false`, because a rejected rewrite sets no updatedInput),
+    // which hides the lane's most interesting outcome inside "your policy forbade this".
+    const accepted = decideDeterministically(
+      req('Bash', { command: 'git push --force origin dev' }), clauses);
+    const rejected = decideDeterministically(
+      req('Bash', { command: 'git push --force origin main' }), clauses);
+    const written = decideDeterministically(req('Bash', { command: 'rm -rf ./build' }), clauses);
+
+    expect([accepted?.actor, accepted?.decision.behavior]).toEqual(['correction', 'allow']);
+    expect([rejected?.actor, rejected?.decision.behavior]).toEqual(['correction', 'deny']);
+    expect([written?.actor, written?.decision.behavior]).toEqual(['policy', 'deny']);
+
+    // The pair `(actor, decision)` is what a rung derivation keys on, so it has to be total: no
+    // two rungs may share one pair.
+    const pairs = [accepted, rejected, written].map(v => `${v?.actor}/${v?.decision.behavior}`);
+    expect(new Set(pairs).size).toBe(3);
   });
 });
 
@@ -626,7 +649,7 @@ describe('handle — the audit record', () => {
       light: 'yellow',
       decision: 'allow',
       clause: 'built-in §force-push-to-lease',
-      actor: 'policy',
+      actor: 'correction',
       rewritten: true,
     });
     expect(r.latencyMs).toBeGreaterThanOrEqual(0);

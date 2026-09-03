@@ -61,6 +61,7 @@ import { splitShellCommand } from '../policy/shell';
 import { generalisedPermission } from '../policy/generalise';
 import { applyCorrection } from '../policy/corrections';
 import { DecisionRecord, appendJsonl, summarizeInput } from '../audit/trail';
+import { recordedCall } from '../supervisor/models';
 import { decisionsPath } from './paths';
 import { HookInput, runHook } from './io';
 import { PluginSettings, loadSettings } from './settings';
@@ -108,6 +109,11 @@ export interface Verdict {
    * tier, for the classifier, and for every compound call.
    */
   allowedBy: Clause | null;
+  /**
+   * What the model rung cost, when a model ran. Absent on rungs 1–5 and recorded as null there:
+   * a rung that calls no model has no cache to hit, and a null must never be read as a miss.
+   */
+  telemetry?: DecisionRecord['telemetry'];
 }
 
 const UNREACHABLE_MESSAGE =
@@ -527,8 +533,11 @@ export function decideDeterministically(
         },
         light: TrafficLight.RED,
         clause: blocked.citation,
-        actor: 'policy',
-        rung: 3,
+        // Rung 2, not rung 3. The correction lane decided this, and its rejection — "the safe form
+        // is also forbidden" — is the lane's most interesting outcome; `policy` would make it
+        // indistinguishable from a plain written red, and so would rung 3.
+        actor: 'correction',
+        rung: 2,
         note: `correction ${correction.ruleId} was rejected by ${blocked.citation}`,
         settled: false,
         allowedBy: null,
@@ -544,7 +553,7 @@ export function decideDeterministically(
       decision: { behavior: 'allow', updatedInput: correction.updatedInput },
       light: TrafficLight.YELLOW,
       clause: citation,
-      actor: 'policy',
+      actor: 'correction',
       rung: 2,
       note: `corrected — ${citation}: ${correction.note}`,
       settled: false, // a rewrite is per-call; it must never become a standing rule
@@ -613,6 +622,7 @@ async function decideWithClassifier(
     clause: null,
     actor: 'model',
     rung: 6,
+    telemetry: result.telemetry ?? null,
     note: `${allowed ? 'allowed' : 'denied'} — classifier returned ${light}`,
     settled: false, // a model verdict is about this call, not a standing rule
     allowedBy: null,
@@ -648,6 +658,7 @@ export async function handle(
       cwd: input.cwd ?? '',
       tool: toolName,
       inputSummary: summarizeInput(input.tool_input),
+      call: recordedCall(toolName, input.tool_input ?? null),
       light: null,
       decision: 'none',
       clause: null,
@@ -713,6 +724,7 @@ export async function handle(
         cwd: input.cwd ?? '',
         tool: toolName,
         inputSummary: summarizeInput(input.tool_input),
+        call: recordedCall(toolName, input.tool_input ?? null),
         light: null,
         decision: 'none',
         clause: null,
@@ -765,12 +777,16 @@ export async function handle(
     cwd: input.cwd ?? '',
     tool: toolName,
     inputSummary: summarizeInput(input.tool_input),
+    call: recordedCall(toolName, input.tool_input ?? null),
     light: verdict.light,
     decision: verdict.decision.behavior,
     clause: verdict.clause,
     actor: verdict.actor,
     latencyMs: Date.now() - started,
     rewritten: verdict.decision.updatedInput !== undefined,
+    // Null on every rung that called no model, which is what makes a cache figure computable: a
+    // reader filters to non-null and prints that count as its denominator.
+    telemetry: verdict.telemetry ?? null,
     note: verdict.note,
     // Every decision names the revision it was evaluated against. Null on the markdown fallback,
     // which is a distinct answer from "before stamping existed" and must stay tellable apart.

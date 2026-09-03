@@ -15,6 +15,7 @@
  * without discovering its blast radius in production.
  *
  *     node out/policy/cli.js compile [--corpus <dir>] [--dry-run]
+ *     node out/policy/cli.js ablate
  *
  *     node out/policy/cli.js explain <tool> [--command CMD | --input JSON] [--rev REV] [--json]
  *
@@ -27,6 +28,12 @@
  * runtime loads — or emits nothing at all and exits non-zero, naming what is wrong. There is no
  * middle outcome on purpose: a broken corpus must never become live policy, and while it is broken
  * the runtime keeps serving the last good revision.
+ *
+ * `ablate` asks the question nobody can answer in production: **which of these clauses still matters?**
+ * It removes each accepted clause from a clone of the corpus, re-decides the recorded window with the
+ * same evaluator, and reports what moves. Zero changes over a meaningful window is a retirement
+ * candidate with evidence — which is what makes deletion falsifiable instead of unfalsifiable, and why
+ * a rule corpus does not have to only grow. It writes nothing.
  */
 
 import * as fs from 'fs';
@@ -34,12 +41,14 @@ import { Clause, parsePractices } from './practices';
 import { CORRECTION_RULES } from './corrections';
 import { DecisionRecord, readJsonl } from '../audit/trail';
 import { decisionsPath } from '../hooks/paths';
-import { decideDeterministically } from '../hooks/permissionRequest';
 import { loadSettings } from '../hooks/settings';
+import { clauseFromCompiled } from '../hooks/permissionRequest';
 import {
   coreClauses, compilePolicy, currentPath, gatherCorpus, loadPolicy, writePolicy,
 } from './compile';
 import { runExplain } from './explain';
+import { replayWindow } from './replay';
+import { AblationReport, ablateAll } from './ablate';
 
 const USAGE = `session-sitter policy — lint a practices file, or compile the corpus
 
@@ -48,6 +57,7 @@ Usage:
   explain <tool> [--command CMD | --input JSON] [--rev REVISION|current] [--json]
   compile [--corpus DIR] [--user U] [--project P] [--team T] [--registry FILE]
           [--data-dir DIR] [--dry-run]
+  ablate [--data-dir DIR] [--decisions N] [--days N]
 
 Options:
   --command CMD   the shell command to explain (shorthand for --input)
@@ -64,6 +74,8 @@ Options:
   --data-dir DIR  where to publish the artifact (default: $SESSION_SITTER_DATA_DIR,
                   else ~/.claude/session-sitter)
   --dry-run       compile and report, write no artifact
+  --decisions N   green/yellow ablation window in decisions (default 2000)
+  --days N        green/yellow ablation window in days (default 90); the larger wins
   -h, --help      show this help
 `;
 
@@ -132,21 +144,25 @@ export function lint(clauses: Clause[]): Finding[] {
   return findings;
 }
 
-/** Re-decide a recorded decision with a candidate set of clauses. */
+/**
+ * Re-decide the recorded decisions with a candidate set of clauses, and list what would change.
+ *
+ * Delegates to `src/policy/replay.ts` rather than re-deciding here: that module reuses the very
+ * `decideDeterministically` the hook calls, injects a recorded classifier / escalation / clock so
+ * nothing reaches a model or the wall clock, and refuses to re-evaluate a record that has no `call`
+ * field instead of reconstructing one from the display summary. This function used to do that
+ * reconstruction, which made every number it printed approximate for reasons that had nothing to do
+ * with the clause under test.
+ */
 export function replay(records: DecisionRecord[], clauses: Clause[]): string[] {
-  const lines: string[] = [];
-  for (const record of records) {
-    // The trail stores a redacted *summary*, not the original input — replaying is therefore
-    // approximate for a Bash call and honest about it: the summary is the command line, which is
-    // what every deterministic rule reads anyway.
-    const verdict = decideDeterministically(
-      { tool_name: record.tool, tool_input: { command: record.inputSummary } }, clauses);
-    const now = verdict === null ? 'ambiguous' : verdict.decision.behavior;
-    const before = record.decision;
-    if (now !== before) {
-      lines.push(`  ${before} → ${now}   ${record.tool}: ${record.inputSummary}`
-        + (verdict?.clause ? `  [${verdict.clause}]` : ''));
-    }
+  const diff = replayWindow(records, clauses, null, { window: records.length });
+  const lines = diff.changes.map(c =>
+    `  ${c.orig} → ${c.next === 'none' ? 'ambiguous' : c.next}   `
+    + `${c.record.tool}: ${c.record.inputSummary}`
+    + (c.next_clause ? `  [${c.next_clause}]` : ''));
+  if (diff.unreplayable > 0) {
+    lines.push(`  (${diff.unreplayable} record(s) have no \`call\` field and could not be `
+      + 're-evaluated — excluded, not counted as unchanged)');
   }
   return lines;
 }
@@ -182,6 +198,67 @@ const COMPILE_FLAGS = [
   'corpus', 'user', 'project', 'team', 'registry', 'data-dir', 'dry-run',
 ] as const;
 const CHECK_FLAGS = ['replay', 'limit'] as const;
+const ABLATE_FLAGS = ['data-dir', 'decisions', 'days'] as const;
+
+/** Below this the *run* is refused (exit 40), not the corpus. A short window proves nothing. */
+export const MIN_ABLATION_WINDOW = 100;
+
+/** One clause's ablation, as a human reads it. Retirement candidates lead with `RETIRE?`. */
+export function renderAblation(report: AblationReport): string {
+  const head = report.retirement_candidate ? 'RETIRE?' : '       ';
+  const lines = [
+    `${head} ${(report.level ?? '—').padEnd(6)} ${report.clause_id.padEnd(28)} `
+    + `${report.evidence_class}`,
+    `        ${report.evidence}`,
+  ];
+  // The shadowing rung is the actionable half of a `shadowed` finding, so it gets its own line rather
+  // than being buried at the end of the evidence sentence.
+  if (report.shadowed_by) { lines.push(`        pre-empted by ${report.shadowed_by}`); }
+  if (report.note) { lines.push(`        note: ${report.note}`); }
+  return lines.join('\n');
+}
+
+/**
+ * `ablate` — for every accepted clause, what would change if it were not there?
+ *
+ * Writes no state. A retirement candidate here is *evidence for* a proposal, and governance's
+ * `accept` / `displaces` are the only things that move a clause out of service. Reds and oranges are
+ * listed with their evidence class and never proposed, because a confident zero on a safety clause
+ * launders "I have no evidence" as "I have evidence of nothing".
+ */
+export async function ablateCommand(argv: string[]): Promise<number> {
+  const rejected = rejectUnknownFlags(argv, ABLATE_FLAGS);
+  if (rejected !== null) { return rejected; }
+  const dataDirFlag = flag(argv, 'data-dir');
+  if (dataDirFlag) { process.env.SESSION_SITTER_DATA_DIR = dataDirFlag; }
+
+  const { policy } = loadPolicy();
+  if (policy === null) {
+    process.stderr.write('ablate needs a compiled artifact — run `policy compile` first\n');
+    return 40;
+  }
+  const corpus = policy.clauses.filter(c => c.status === 'accepted').map(clauseFromCompiled);
+  const records = readJsonl<DecisionRecord>(decisionsPath());
+  if (records.length < MIN_ABLATION_WINDOW) {
+    process.stderr.write(
+      `ablate needs at least ${MIN_ABLATION_WINDOW} recorded decisions; the store holds `
+      + `${records.length}. This refuses the *run*, not the corpus: a zero over a window this short `
+      + 'is not evidence that a clause is dead.\n');
+    return 40;
+  }
+
+  const reports = ablateAll(corpus, records, {
+    decisions: Number.parseInt(flag(argv, 'decisions') ?? '', 10) || undefined,
+    days: Number.parseInt(flag(argv, 'days') ?? '', 10) || undefined,
+  });
+  process.stdout.write(`ablating ${corpus.length} accepted clause(s) against `
+    + `${records.length} recorded decision(s)\n\n`);
+  for (const report of reports) { process.stdout.write(`${renderAblation(report)}\n`); }
+  const candidates = reports.filter(r => r.retirement_candidate);
+  process.stdout.write(`\n${candidates.length} retirement candidate(s). `
+    + 'Nothing was retired — this run produces evidence, not state.\n');
+  return 0;
+}
 
 /**
  * Compile the corpus into the artifact, or refuse.
@@ -254,6 +331,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return argv.length === 0 ? 2 : 0;
   }
   if (argv[0] === 'compile') { return compile(argv.slice(1)); }
+  if (argv[0] === 'ablate') { return ablateCommand(argv.slice(1)); }
   if (argv[0] === 'explain') {
     return runExplain(argv.slice(1), {
       out: t => process.stdout.write(t),

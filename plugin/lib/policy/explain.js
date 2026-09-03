@@ -180,15 +180,21 @@ async function explainCall(query, settings = (0, settings_1.loadSettings)()) {
     };
     if (verdict === null) {
         const route = (0, permissionRequest_1.routeAmbiguous)(settings);
-        const [would, rung, note] = route === 'classifier'
-            ? ['ask', 6, 'no written clause and nothing deterministic applies, so this would go to the '
-                    + 'classifier. Not run here — an explain costs no tokens.']
+        // `actor` is the value the hook would *record*, which is why fail-closed and observe both read
+        // `timeout` — that is what `handle` writes. The classifier route is the one case it stays null:
+        // only running the model settles whether the record says `model` or `timeout`, and an explain
+        // does not run it.
+        const [would, rung, actor, note] = route === 'classifier'
+            ? ['ask', 6, null, 'no written clause and nothing deterministic applies, so this would go to '
+                    + 'the classifier. Not run here — an explain costs no tokens.']
             : route === 'handed-back'
-                ? ['ask', 7, 'observe mode: no verdict is returned, so Claude Code asks you itself. In '
-                        + 'enforce mode this would be denied at rung 7.']
-                : ['deny', 7, 'nothing said this call is safe, and silence is not approval.'];
+                ? ['ask', 7, 'timeout', 'observe mode: no verdict is returned, so Claude Code asks you '
+                        + 'itself. In enforce mode this would be denied at rung 7.']
+                : ['deny', 7, 'timeout',
+                    'nothing said this call is safe, and silence is not approval.'];
         return {
-            would, rung, rungLabel: RUNG_LABELS[rung], light: null, clause: null, citation: null,
+            would, rung, rungLabel: RUNG_LABELS[rung], actor, light: null, clause: null,
+            citation: null,
             title: null, message: null, sourceFile: null, fix: null, rewritten: null, note,
             policy, selection,
         };
@@ -197,6 +203,7 @@ async function explainCall(query, settings = (0, settings_1.loadSettings)()) {
         would: verdict.decision.behavior,
         rung: verdict.rung,
         rungLabel: RUNG_LABELS[verdict.rung],
+        actor: verdict.actor,
         light: verdict.light,
         clause: verdict.clause,
         citation: cited?.citation ?? null,

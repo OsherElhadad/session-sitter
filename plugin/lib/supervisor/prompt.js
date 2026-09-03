@@ -81,9 +81,9 @@ DECISION PRINCIPLES:
   because the agent asked a question — first check whether BDI/session already answers it or yellow suffices.
 - red = high-risk / irreversible / unauthorized / policy violation (destructive commands, secret access,
   prod changes, permission changes). Block hard.
-Weigh: severity, reversibility, blast radius, your confidence, each knowledge entry's scope/confidence/
-recency/provenance, whether entries conflict, whether a safe correction exists. A BDI entry's \`level\`
-field is its default traffic light, but judge its scope/confidence/recency and the actual situation.
+Weigh: severity, reversibility, blast radius, your confidence, each knowledge entry's scope, whether
+entries conflict, whether a safe correction exists. A BDI entry's \`level\` field is its default
+traffic light, but judge its scope and the actual situation.
 Narrower tiers win on conflict: user > project > team. Explicit current-session user instructions
 outrank older inferred BDI, unless a mandatory safety/policy (red) constraint applies.
 Field rules:
@@ -129,7 +129,7 @@ function renderKnowledge(entries, policyBlock) {
     const sorted = [...entries].sort((a, b) => (0, knowledge_1.entryPrecedence)(b) - (0, knowledge_1.entryPrecedence)(a));
     const rendered = sorted.map(e => {
         const meta = `[${e.tier}] ${e.kind} ${e.id ?? '?'} `
-            + `level=${e.level ?? '-'} confidence=${e.confidence ?? '-'} `
+            + `level=${e.level ?? '-'} `
             + `tags=${e.tags.join(',') || '-'} source=${e.sourceFile ?? e.source ?? '-'}`;
         return `- ${meta}\n  ${e.title}: ${e.text}`.replace(/\s+$/, '');
     }).join('\n');

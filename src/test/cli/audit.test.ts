@@ -293,6 +293,20 @@ describe('isCorrection and isDenial', () => {
     expect(isDenial({ ...base, outcome: 'deny' })).toBe(true);
     expect(isDenial({ ...base, outcome: 'escalate' })).toBe(false);
   });
+
+  it('keys on the rewrite, not on the actor, so the new `correction` actor cannot widen it', () => {
+    // Rung 2' — the correction lane's rewrite was REJECTED by a red clause — reports
+    // `actor: 'correction'` but no rewrite ever ran, so it must stay out of `log --corrected`.
+    // The guard is that `isCorrection` reads `outcome`/`rewritten` and never `actor`.
+    expect(isCorrection({ ...base, actor: 'correction', outcome: 'deny' })).toBe(false);
+    expect(isCorrection({ ...base, actor: 'correction', outcome: 'allow', rewritten: true }))
+      .toBe(true);
+    // And an actor value the reader has never seen still flows through as itself, because nothing
+    // switches exhaustively on it — `actor` is typed as a plain string on both the record and the
+    // reader's own view.
+    expect(auditToDecision({ at: '2026-08-31T21:00:00Z', actor: 'correction' }, 'x').actor)
+      .toBe('correction');
+  });
 });
 
 describe('resolveState', () => {

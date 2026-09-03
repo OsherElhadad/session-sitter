@@ -105,6 +105,7 @@ const shell_1 = require("../policy/shell");
 const generalise_1 = require("../policy/generalise");
 const corrections_1 = require("../policy/corrections");
 const trail_1 = require("../audit/trail");
+const models_2 = require("../supervisor/models");
 const paths_1 = require("./paths");
 const io_1 = require("./io");
 const settings_1 = require("./settings");
@@ -471,8 +472,11 @@ function decideDeterministically(input, clauses) {
                 },
                 light: models_1.TrafficLight.RED,
                 clause: blocked.citation,
-                actor: 'policy',
-                rung: 3,
+                // Rung 2, not rung 3. The correction lane decided this, and its rejection — "the safe form
+                // is also forbidden" — is the lane's most interesting outcome; `policy` would make it
+                // indistinguishable from a plain written red, and so would rung 3.
+                actor: 'correction',
+                rung: 2,
                 note: `correction ${correction.ruleId} was rejected by ${blocked.citation}`,
                 settled: false,
                 allowedBy: null,
@@ -488,7 +492,7 @@ function decideDeterministically(input, clauses) {
             decision: { behavior: 'allow', updatedInput: correction.updatedInput },
             light: models_1.TrafficLight.YELLOW,
             clause: citation,
-            actor: 'policy',
+            actor: 'correction',
             rung: 2,
             note: `corrected — ${citation}: ${correction.note}`,
             settled: false, // a rewrite is per-call; it must never become a standing rule
@@ -556,6 +560,7 @@ async function decideWithClassifier(input, policy, settings) {
         clause: null,
         actor: 'model',
         rung: 6,
+        telemetry: result.telemetry ?? null,
         note: `${allowed ? 'allowed' : 'denied'} — classifier returned ${light}`,
         settled: false, // a model verdict is about this call, not a standing rule
         allowedBy: null,
@@ -579,6 +584,7 @@ async function handle(rawInput) {
             cwd: input.cwd ?? '',
             tool: toolName,
             inputSummary: (0, trail_1.summarizeInput)(input.tool_input),
+            call: (0, models_2.recordedCall)(toolName, input.tool_input ?? null),
             light: null,
             decision: 'none',
             clause: null,
@@ -640,6 +646,7 @@ async function handle(rawInput) {
                 cwd: input.cwd ?? '',
                 tool: toolName,
                 inputSummary: (0, trail_1.summarizeInput)(input.tool_input),
+                call: (0, models_2.recordedCall)(toolName, input.tool_input ?? null),
                 light: null,
                 decision: 'none',
                 clause: null,
@@ -689,12 +696,16 @@ async function handle(rawInput) {
         cwd: input.cwd ?? '',
         tool: toolName,
         inputSummary: (0, trail_1.summarizeInput)(input.tool_input),
+        call: (0, models_2.recordedCall)(toolName, input.tool_input ?? null),
         light: verdict.light,
         decision: verdict.decision.behavior,
         clause: verdict.clause,
         actor: verdict.actor,
         latencyMs: Date.now() - started,
         rewritten: verdict.decision.updatedInput !== undefined,
+        // Null on every rung that called no model, which is what makes a cache figure computable: a
+        // reader filters to non-null and prints that count as its denominator.
+        telemetry: verdict.telemetry ?? null,
         note: verdict.note,
         // Every decision names the revision it was evaluated against. Null on the markdown fallback,
         // which is a distinct answer from "before stamping existed" and must stay tellable apart.

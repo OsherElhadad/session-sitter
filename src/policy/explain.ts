@@ -60,6 +60,16 @@ export interface ExplainAnswer {
   would: 'allow' | 'deny' | 'ask';
   rung: number;
   rungLabel: string;
+  /**
+   * Which tier decided, exactly as the hook records it — `deterministic`, `policy`, `correction`,
+   * `model`, `timeout`. Carried because it is what the audit trail stores, so a script can diff an
+   * explain against the record of the same call field for field. Typed off `Verdict` rather than off
+   * the record, so this module still imports nothing that can write.
+   *
+   * Null only on the classifier rung: which actor lands on the record there depends on whether the
+   * model answers, and an explain does not run it to find out.
+   */
+  actor: Verdict['actor'] | null;
   light: string | null;
   /** The citation exactly as the hook would put it on the record. */
   clause: string | null;
@@ -238,15 +248,21 @@ export async function explainCall(
 
   if (verdict === null) {
     const route = routeAmbiguous(settings);
-    const [would, rung, note] = route === 'classifier'
-      ? ['ask', 6, 'no written clause and nothing deterministic applies, so this would go to the '
-        + 'classifier. Not run here — an explain costs no tokens.'] as const
+    // `actor` is the value the hook would *record*, which is why fail-closed and observe both read
+    // `timeout` — that is what `handle` writes. The classifier route is the one case it stays null:
+    // only running the model settles whether the record says `model` or `timeout`, and an explain
+    // does not run it.
+    const [would, rung, actor, note] = route === 'classifier'
+      ? ['ask', 6, null, 'no written clause and nothing deterministic applies, so this would go to '
+        + 'the classifier. Not run here — an explain costs no tokens.'] as const
       : route === 'handed-back'
-        ? ['ask', 7, 'observe mode: no verdict is returned, so Claude Code asks you itself. In '
-          + 'enforce mode this would be denied at rung 7.'] as const
-        : ['deny', 7, 'nothing said this call is safe, and silence is not approval.'] as const;
+        ? ['ask', 7, 'timeout', 'observe mode: no verdict is returned, so Claude Code asks you '
+          + 'itself. In enforce mode this would be denied at rung 7.'] as const
+        : ['deny', 7, 'timeout',
+          'nothing said this call is safe, and silence is not approval.'] as const;
     return {
-      would, rung, rungLabel: RUNG_LABELS[rung], light: null, clause: null, citation: null,
+      would, rung, rungLabel: RUNG_LABELS[rung], actor, light: null, clause: null,
+      citation: null,
       title: null, message: null, sourceFile: null, fix: null, rewritten: null, note,
       policy, selection,
     };
@@ -256,6 +272,7 @@ export async function explainCall(
     would: verdict.decision.behavior,
     rung: verdict.rung,
     rungLabel: RUNG_LABELS[verdict.rung],
+    actor: verdict.actor,
     light: verdict.light,
     clause: verdict.clause,
     citation: cited?.citation ?? null,
