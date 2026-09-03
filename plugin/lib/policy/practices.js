@@ -44,6 +44,7 @@
  * nothing, and a red clause that silently matches nothing is the worst failure mode this file has.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.escapeForMatcher = escapeForMatcher;
 exports.compileMatcher = compileMatcher;
 exports.patternSpecs = patternSpecs;
 exports.clauseIdFor = clauseIdFor;
@@ -72,9 +73,17 @@ function slug(title) {
  * Escape a substring so it can be used as a regex. Whitespace is deliberately loosened to `\s+`
  * so `git push --force` also matches `git  push   --force`, which is the same command.
  */
+function escapeForMatcher(pattern) {
+    return pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+}
+/**
+ * Exported above because the miner emits an *anchored* regex around a literal it derived from real
+ * calls (`src/policy/propose.ts`, gate E5) and has to escape that literal exactly the way a
+ * hand-written substring matcher is escaped. Two escapers would mean a mined clause matches calls a
+ * written one does not, which is the one difference nobody would think to look for.
+ */
 function substringMatcher(pattern) {
-    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
-    return new RegExp(escaped, 'i');
+    return new RegExp(escapeForMatcher(pattern), 'i');
 }
 /** Split a `Match:` value on commas, honouring backtick quoting so a pattern may contain a comma. */
 function splitPatterns(value) {

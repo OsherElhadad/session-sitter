@@ -11,6 +11,7 @@
  *     session-sitter log                 the audit trail of supervision decisions
  *     session-sitter digest              what your agents did last night
  *     session-sitter policy check        lint a practices file, replay decisions against it
+ *     session-sitter learn               propose practices from the decision trail
  *     session-sitter policy explain      what would happen to this call, and which clause decides
  *     session-sitter export --html       the trail as one self-contained snapshot to send someone
  *
@@ -23,6 +24,7 @@ import { CliError } from './args';
 import { processIo, type Io } from './render';
 import * as digest from './digest';
 import * as exportCmd from './export';
+import * as learn from './learn';
 import * as log from './log';
 import * as policy from './policy';
 import * as status from './status';
@@ -37,6 +39,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   log: { summary: 'query the audit trail of supervision decisions', run: log.run },
   digest: { summary: 'what your agents did last night, one page per session', run: digest.run },
   policy: { summary: 'lint a practices file, or ask what it would decide', run: policy.run },
+  learn: { summary: 'propose practices from the decision trail — no model, ever', run: learn.run },
   export: {
     summary: 'the decision trail as ndjson, or as one self-contained HTML snapshot',
     run: exportCmd.run,

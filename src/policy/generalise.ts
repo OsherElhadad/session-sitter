@@ -71,7 +71,7 @@ const SHELL_TOOL = 'Bash';
  * `Bash(git s:*)`, which also licenses `git shove-everything`. Whitespace is loosened the same way
  * `substringMatcher` loosens it, so `npm  test` and `npm test` are the same prefix.
  */
-function prefixOf(raw: string, command: string): string | null {
+export function prefixOf(raw: string, command: string): string | null {
   const escaped = raw.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
   const anchored = new RegExp(`^\\s*(${escaped})(?=\\s|$)`, 'i');
   const m = anchored.exec(command);

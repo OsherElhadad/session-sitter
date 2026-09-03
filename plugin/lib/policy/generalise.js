@@ -49,6 +49,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RULE_DESTINATIONS = void 0;
+exports.prefixOf = prefixOf;
 exports.generalisedPermission = generalisedPermission;
 const practices_1 = require("./practices");
 const shell_1 = require("./shell");

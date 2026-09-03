@@ -10,15 +10,38 @@
  * `SessionEnd` shares a **1.5 second** budget across all hooks, and a plugin's own `timeout` cannot
  * raise it. So this reads one small file, counts lines already on disk, and writes one file. It
  * never loads policy and never spawns anything.
+ *
+ * ## Stage A of the learning pipeline rides along here
+ *
+ * `accumulate()` folds everything in `decisions.jsonl` after the committed offset into
+ * `pipeline/shapes.json`. It exercises no judgement — it folds counts — costs no tokens, and rewrites
+ * one small file. `SessionEnd` is the only trigger that reliably fires on a laptop that sleeps, needs
+ * no install step, no plist and no platform branch, and at that cost firing it too often is free.
+ *
+ * It is **offset-driven, not event-driven**, which is what makes it survive an unreliable trigger:
+ * this hook does not analyse "the session that just ended", it folds every byte nobody has folded
+ * yet. A `kill -9` that skips the hook entirely costs nothing, because the next session's close picks
+ * up both. Two sessions closing at once means one fold and one silent no-op: the second finds the
+ * lock held and returns, because the first is folding the same append-only file and will reach these
+ * bytes too.
+ *
+ * The one thing it *says* is the nudge, when a shape has just crossed the support floor. Nothing is
+ * proposed here. Proposing is `session-sitter learn`, attended, because a proposal a human sees
+ * seconds after it is made is a proposal that gets corrected — and an unattended miner writing clause
+ * files at 03:17 into a corpus nobody reads until Friday is how a policy corpus grows +226%.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { DecisionRecord, readJsonl } from '../audit/trail';
+import { accumulate } from '../policy/pipeline';
 import { decisionsPath, sessionPath } from './paths';
 import { HookInput, runHook } from './io';
 
-export async function handle(input: HookInput): Promise<Record<string, never>> {
+/** Everything this hook may return. `systemMessage` is the nudge; absent when nothing crossed. */
+export interface SessionEndOutput { systemMessage?: string }
+
+export async function handle(input: HookInput): Promise<SessionEndOutput> {
   const sessionId = input.session_id ?? 'unknown';
   const file = sessionPath(sessionId);
 
@@ -49,7 +72,18 @@ export async function handle(input: HookInput): Promise<Record<string, never>> {
     // Nothing useful to do inside a 1.5 s budget with no way to report it. The decisions
     // themselves are already durable in the trail.
   }
-  return {};
+
+  // Stage A. Wrapped because a fold must never be able to fail a session close: the trail is already
+  // durable, so the worst case of a broken fold is that the next `SessionEnd` folds these bytes
+  // instead — which is exactly the property being offset-driven buys.
+  let nudge: string | null = null;
+  try {
+    nudge = accumulate('session-end').nudge;
+  } catch {
+    // The run line was already appended by `accumulate` itself, on failure as on success, so a
+    // silent catch here still leaves a trace. That is the whole reason `pipeline.jsonl` exists.
+  }
+  return nudge === null ? {} : { systemMessage: nudge };
 }
 
 if (require.main === module) {
