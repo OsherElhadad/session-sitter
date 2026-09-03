@@ -20,6 +20,7 @@ import { filterDecisions, readDecisions, resolveState, type Decision } from './a
 import { CliError, flagBool, flagNumber, flagString, parseFlags, type FlagSpec } from './args';
 import { clauseOf } from './log';
 import { colorEnabled, painter, table, type ColorName, type Io } from './render';
+import { runExplain } from '../policy/explain';
 
 // ── The contract with src/policy/ ───────────────────────────────────────────
 
@@ -125,10 +126,11 @@ export function findPracticesFile(cwd: string, exists = fs.existsSync): string |
 
 // ── The command ─────────────────────────────────────────────────────────────
 
-export const HELP = `session-sitter policy check — lint a practices file and replay decisions against it
+export const HELP = `session-sitter policy — lint a practices file, or ask what it would decide
 
 Usage:
   session-sitter policy check [PATH] [options]
+  session-sitter policy explain <tool> [--command CMD | --input JSON] [--rev REV] [--json]
 
 Arguments:
   PATH              the practices file. Defaults to the first of
@@ -285,8 +287,15 @@ export async function run(
     io.out(HELP);
     return subcommand === undefined ? 2 : 0;
   }
+  // `explain` is the query surface, and it is deliberately not implemented here: it must call the
+  // enforcement path's own evaluator, which is exactly what this module refuses to duplicate for
+  // `check`. So it is forwarded, unparsed, to the one implementation.
+  if (subcommand === 'explain') {
+    return runExplain(rest, { out: io.out, err: io.err });
+  }
   if (subcommand !== 'check') {
-    throw new CliError(`unknown policy subcommand "${subcommand}" — the only one is "check"`);
+    throw new CliError(
+      `unknown policy subcommand "${subcommand}" — the two are "check" and "explain"`);
   }
 
   const args = parseFlags(rest, SPEC);

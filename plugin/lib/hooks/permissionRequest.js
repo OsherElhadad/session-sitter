@@ -90,6 +90,7 @@ exports.loadPolicyInputs = loadPolicyInputs;
 exports.constituentsOf = constituentsOf;
 exports.combineVerdicts = combineVerdicts;
 exports.decideDeterministically = decideDeterministically;
+exports.routeAmbiguous = routeAmbiguous;
 exports.handle = handle;
 const fs = __importStar(require("fs"));
 const tiers_1 = require("../supervisor/tiers");
@@ -188,7 +189,7 @@ function clauseFromCompiled(clause) {
  */
 async function loadPolicyInputs(settings) {
     if (!settings.practicesFile && settings.user) {
-        const { policy } = (0, compile_1.loadPolicy)({
+        const { policy, reason } = (0, compile_1.loadPolicy)({
             user: settings.user, project: settings.project ?? '', team: settings.team ?? '',
         });
         if (policy) {
@@ -197,10 +198,22 @@ async function loadPolicyInputs(settings) {
                 compiled: policy,
                 source: 'artifact',
                 rev: policy.revision,
+                reason: null,
             };
         }
+        return {
+            clauses: await loadClauses(settings), compiled: null, source: 'markdown', rev: null, reason,
+        };
     }
-    return { clauses: await loadClauses(settings), compiled: null, source: 'markdown', rev: null };
+    return {
+        clauses: await loadClauses(settings),
+        compiled: null,
+        source: 'markdown',
+        rev: null,
+        reason: settings.practicesFile
+            ? `a practicesFile is configured (${settings.practicesFile}), so no artifact is consulted`
+            : 'no routing user is configured, so no artifact is consulted',
+    };
 }
 /** The clauses, shaped as the bundle the existing prompt builder consumes. */
 function bundleFor(clauses, settings, policyBlock = null) {
@@ -291,6 +304,7 @@ function deterministicGreen(toolName, toolInput) {
         light: models_1.TrafficLight.GREEN,
         clause: null,
         actor: 'deterministic',
+        rung: 1,
         note: `allowed — read-only or non-mutating (${(0, tiers_1.actionLabel)(session)})`,
         settled: true,
         allowedBy: null,
@@ -320,6 +334,7 @@ function decideOne(toolName, toolInput, clauses) {
             light: models_1.TrafficLight.RED,
             clause: red.citation,
             actor: 'policy',
+            rung: 3,
             note: `denied — ${red.citation}: ${red.title}`,
             settled: false, // a deny is never persisted as a permission rule
             allowedBy: null,
@@ -335,6 +350,7 @@ function decideOne(toolName, toolInput, clauses) {
             light: models_1.TrafficLight.GREEN,
             clause: green.citation,
             actor: 'policy',
+            rung: 4,
             note: `allowed — ${green.citation}: ${green.title}`,
             settled: true,
             allowedBy: green,
@@ -351,6 +367,7 @@ function decideOne(toolName, toolInput, clauses) {
             light: models_1.TrafficLight.RED,
             clause: null,
             actor: 'deterministic',
+            rung: 5,
             note: `denied — built-in destructive-action rule (${(0, tiers_1.actionLabel)(session)})`,
             settled: false,
             allowedBy: null,
@@ -401,6 +418,9 @@ function combineVerdicts(parts) {
         light: models_1.TrafficLight.GREEN,
         clause: cited.length > 0 ? [...new Set(cited)].join(', ') : null,
         actor: cited.length > 0 ? 'policy' : 'deterministic',
+        // The highest rung any sub-command needed: a line is only as cheaply decided as its most
+        // expensive part, and reporting rung 1 for `git status && npm test` would hide the clause.
+        rung: parts.reduce((hi, p) => Math.max(hi, p.verdict?.rung ?? 1), 1),
         note: `allowed — all ${n} sub-commands cleared`
             + (cited.length > 0 ? ` (${[...new Set(cited)].join(', ')})` : ''),
         settled: true,
@@ -452,6 +472,7 @@ function decideDeterministically(input, clauses) {
                 light: models_1.TrafficLight.RED,
                 clause: blocked.citation,
                 actor: 'policy',
+                rung: 3,
                 note: `correction ${correction.ruleId} was rejected by ${blocked.citation}`,
                 settled: false,
                 allowedBy: null,
@@ -468,6 +489,7 @@ function decideDeterministically(input, clauses) {
             light: models_1.TrafficLight.YELLOW,
             clause: citation,
             actor: 'policy',
+            rung: 2,
             note: `corrected — ${citation}: ${correction.note}`,
             settled: false, // a rewrite is per-call; it must never become a standing rule
             allowedBy: null, // and it must never become a standing permission rule either
@@ -533,10 +555,17 @@ async function decideWithClassifier(input, policy, settings) {
         light,
         clause: null,
         actor: 'model',
+        rung: 6,
         note: `${allowed ? 'allowed' : 'denied'} — classifier returned ${light}`,
         settled: false, // a model verdict is about this call, not a standing rule
         allowedBy: null,
     };
+}
+function routeAmbiguous(settings) {
+    if (settings.classifierEnabled) {
+        return 'classifier';
+    }
+    return settings.mode === 'observe' ? 'handed-back' : 'fail-closed';
 }
 async function handle(rawInput) {
     const started = Date.now();
@@ -564,7 +593,9 @@ async function handle(rawInput) {
         });
         return {};
     }
-    let policy = { clauses: [], compiled: null, source: 'markdown', rev: null };
+    let policy = {
+        clauses: [], compiled: null, source: 'markdown', rev: null, reason: null,
+    };
     let loadError = null;
     try {
         policy = await loadPolicyInputs(settings);
@@ -583,24 +614,24 @@ async function handle(rawInput) {
         // The practices could not be read, so rungs 2–4 never ran. Refusing to guess is the point.
         verdict = {
             decision: { behavior: 'deny', message: `${UNREACHABLE_MESSAGE}\n\n(practices: ${loadError})` },
-            light: null, clause: null, actor: 'timeout',
+            light: null, clause: null, actor: 'timeout', rung: 7,
             note: `denied — practices unreadable: ${loadError}`, settled: false, allowedBy: null,
         };
     }
-    if (verdict === null && settings.classifierEnabled) {
+    if (verdict === null && routeAmbiguous(settings) === 'classifier') {
         try {
             verdict = await decideWithClassifier(input, policy, settings);
         }
         catch (err) {
             verdict = {
                 decision: { behavior: 'deny', message: `${UNREACHABLE_MESSAGE}\n\n(classifier: ${String(err)})` },
-                light: null, clause: null, actor: 'timeout',
+                light: null, clause: null, actor: 'timeout', rung: 7,
                 note: `denied — classifier unreachable: ${String(err)}`, settled: false, allowedBy: null,
             };
         }
     }
     if (verdict === null) {
-        if (settings.mode === 'observe') {
+        if (routeAmbiguous(settings) === 'handed-back') {
             // Observe mode returns no decision at all, which hands the prompt back to Claude Code. It is
             // still recorded, so the trail shows what enforce mode would have denied.
             (0, trail_1.appendJsonl)((0, paths_1.decisionsPath)(), {
@@ -633,7 +664,7 @@ async function handle(rawInput) {
                 message: unsplittable === null ? UNREACHABLE_MESSAGE
                     : `${UNREACHABLE_MESSAGE}\n\n(shell: ${unsplittable})`,
             },
-            light: null, clause: null, actor: 'timeout',
+            light: null, clause: null, actor: 'timeout', rung: 7,
             note: `denied — ${why}`, settled: false,
             allowedBy: null,
         };

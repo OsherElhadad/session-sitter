@@ -91,6 +91,14 @@ export interface Verdict {
   light: string | null;
   clause: string | null;
   actor: DecisionRecord['actor'];
+  /**
+   * Which rung of the ladder returned this verdict, 1–7.
+   *
+   * Set where the verdict is built rather than inferred from `actor` and `light` afterwards. The
+   * only other consumer is `policy explain`, which has to print it — and inferring it there would
+   * make "which rung decided" a second derivation, free to disagree with the ladder it describes.
+   */
+  rung: 1 | 2 | 3 | 4 | 5 | 6 | 7;
   note: string;
   /** A settled standing answer, so writing a standing permission rule is defensible. */
   settled: boolean;
@@ -178,6 +186,13 @@ export interface PolicyInputs {
   source: 'artifact' | 'markdown';
   /** Stamped on the decision record. Null on the markdown fallback. */
   rev: string | null;
+  /**
+   * Why the artifact did not answer, in `loadPolicy`'s own words. Null when it did.
+   *
+   * Carried rather than discarded because a fallback that cannot say *which* fallback it took is the
+   * silent-source problem: `policy explain` prints this, so a degraded answer is visibly degraded.
+   */
+  reason: string | null;
 }
 
 /**
@@ -196,7 +211,7 @@ export interface PolicyInputs {
  */
 export async function loadPolicyInputs(settings: PluginSettings): Promise<PolicyInputs> {
   if (!settings.practicesFile && settings.user) {
-    const { policy } = loadPolicy({
+    const { policy, reason } = loadPolicy({
       user: settings.user, project: settings.project ?? '', team: settings.team ?? '',
     });
     if (policy) {
@@ -205,10 +220,22 @@ export async function loadPolicyInputs(settings: PluginSettings): Promise<Policy
         compiled: policy,
         source: 'artifact',
         rev: policy.revision,
+        reason: null,
       };
     }
+    return {
+      clauses: await loadClauses(settings), compiled: null, source: 'markdown', rev: null, reason,
+    };
   }
-  return { clauses: await loadClauses(settings), compiled: null, source: 'markdown', rev: null };
+  return {
+    clauses: await loadClauses(settings),
+    compiled: null,
+    source: 'markdown',
+    rev: null,
+    reason: settings.practicesFile
+      ? `a practicesFile is configured (${settings.practicesFile}), so no artifact is consulted`
+      : 'no routing user is configured, so no artifact is consulted',
+  };
 }
 
 /** The clauses, shaped as the bundle the existing prompt builder consumes. */
@@ -320,6 +347,7 @@ function deterministicGreen(
     light: TrafficLight.GREEN,
     clause: null,
     actor: 'deterministic',
+    rung: 1,
     note: `allowed — read-only or non-mutating (${actionLabel(session)})`,
     settled: true,
     allowedBy: null,
@@ -353,6 +381,7 @@ function decideOne(
       light: TrafficLight.RED,
       clause: red.citation,
       actor: 'policy',
+      rung: 3,
       note: `denied — ${red.citation}: ${red.title}`,
       settled: false, // a deny is never persisted as a permission rule
       allowedBy: null,
@@ -370,6 +399,7 @@ function decideOne(
       light: TrafficLight.GREEN,
       clause: green.citation,
       actor: 'policy',
+      rung: 4,
       note: `allowed — ${green.citation}: ${green.title}`,
       settled: true,
       allowedBy: green,
@@ -387,6 +417,7 @@ function decideOne(
       light: TrafficLight.RED,
       clause: null,
       actor: 'deterministic',
+      rung: 5,
       note: `denied — built-in destructive-action rule (${actionLabel(session)})`,
       settled: false,
       allowedBy: null,
@@ -440,6 +471,9 @@ export function combineVerdicts(
     light: TrafficLight.GREEN,
     clause: cited.length > 0 ? [...new Set(cited)].join(', ') : null,
     actor: cited.length > 0 ? 'policy' : 'deterministic',
+    // The highest rung any sub-command needed: a line is only as cheaply decided as its most
+    // expensive part, and reporting rung 1 for `git status && npm test` would hide the clause.
+    rung: parts.reduce<number>((hi, p) => Math.max(hi, p.verdict?.rung ?? 1), 1) as Verdict['rung'],
     note: `allowed — all ${n} sub-commands cleared`
       + (cited.length > 0 ? ` (${[...new Set(cited)].join(', ')})` : ''),
     settled: true,
@@ -494,6 +528,7 @@ export function decideDeterministically(
         light: TrafficLight.RED,
         clause: blocked.citation,
         actor: 'policy',
+        rung: 3,
         note: `correction ${correction.ruleId} was rejected by ${blocked.citation}`,
         settled: false,
         allowedBy: null,
@@ -510,6 +545,7 @@ export function decideDeterministically(
       light: TrafficLight.YELLOW,
       clause: citation,
       actor: 'policy',
+      rung: 2,
       note: `corrected — ${citation}: ${correction.note}`,
       settled: false, // a rewrite is per-call; it must never become a standing rule
       allowedBy: null, // and it must never become a standing permission rule either
@@ -576,10 +612,25 @@ async function decideWithClassifier(
     light,
     clause: null,
     actor: 'model',
+    rung: 6,
     note: `${allowed ? 'allowed' : 'denied'} — classifier returned ${light}`,
     settled: false, // a model verdict is about this call, not a standing rule
     allowedBy: null,
   };
+}
+
+/**
+ * Where a call rungs 1–5 could not decide goes next. Determined entirely by two settings.
+ *
+ * Exported and used by `handle` itself so that `policy explain` — which must say what *would*
+ * happen without paying for a model call — reads the routing from the enforcement path rather than
+ * re-deriving it from the same two settings and being free to get it wrong.
+ */
+export type AmbiguousRoute = 'classifier' | 'handed-back' | 'fail-closed';
+
+export function routeAmbiguous(settings: PluginSettings): AmbiguousRoute {
+  if (settings.classifierEnabled) { return 'classifier'; }
+  return settings.mode === 'observe' ? 'handed-back' : 'fail-closed';
 }
 
 export async function handle(
@@ -612,7 +663,9 @@ export async function handle(
     return {};
   }
 
-  let policy: PolicyInputs = { clauses: [], compiled: null, source: 'markdown', rev: null };
+  let policy: PolicyInputs = {
+    clauses: [], compiled: null, source: 'markdown', rev: null, reason: null,
+  };
   let loadError: string | null = null;
   try {
     policy = await loadPolicyInputs(settings);
@@ -633,25 +686,25 @@ export async function handle(
     // The practices could not be read, so rungs 2–4 never ran. Refusing to guess is the point.
     verdict = {
       decision: { behavior: 'deny', message: `${UNREACHABLE_MESSAGE}\n\n(practices: ${loadError})` },
-      light: null, clause: null, actor: 'timeout',
+      light: null, clause: null, actor: 'timeout', rung: 7,
       note: `denied — practices unreadable: ${loadError}`, settled: false, allowedBy: null,
     };
   }
 
-  if (verdict === null && settings.classifierEnabled) {
+  if (verdict === null && routeAmbiguous(settings) === 'classifier') {
     try {
       verdict = await decideWithClassifier(input, policy, settings);
     } catch (err) {
       verdict = {
         decision: { behavior: 'deny', message: `${UNREACHABLE_MESSAGE}\n\n(classifier: ${String(err)})` },
-        light: null, clause: null, actor: 'timeout',
+        light: null, clause: null, actor: 'timeout', rung: 7,
         note: `denied — classifier unreachable: ${String(err)}`, settled: false, allowedBy: null,
       };
     }
   }
 
   if (verdict === null) {
-    if (settings.mode === 'observe') {
+    if (routeAmbiguous(settings) === 'handed-back') {
       // Observe mode returns no decision at all, which hands the prompt back to Claude Code. It is
       // still recorded, so the trail shows what enforce mode would have denied.
       appendJsonl(decisionsPath(), {
@@ -684,7 +737,7 @@ export async function handle(
         message: unsplittable === null ? UNREACHABLE_MESSAGE
           : `${UNREACHABLE_MESSAGE}\n\n(shell: ${unsplittable})`,
       },
-      light: null, clause: null, actor: 'timeout',
+      light: null, clause: null, actor: 'timeout', rung: 7,
       note: `denied — ${why}`, settled: false,
       allowedBy: null,
     };

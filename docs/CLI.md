@@ -14,6 +14,7 @@ session-sitter status --watch 5       # the same, redrawing in place
 session-sitter log --denied --since 2h
 session-sitter digest                 # what your agents did last night
 session-sitter policy check
+session-sitter policy explain Bash --command 'git push --force origin main'
 ```
 
 ---
@@ -25,6 +26,8 @@ session-sitter policy check
 - [`log`](#log)
 - [`digest`](#digest)
 - [`policy check`](#policy-check)
+- [`policy explain`](#policy-explain)
+- [Who invokes what](#who-invokes-what)
 - [Where state is read from](#where-state-is-read-from)
 - [The `--json` contracts](#the---json-contracts)
 
@@ -300,6 +303,125 @@ report a reassuring number about the wrong half.
 
 ---
 
+## `policy explain`
+
+**What would happen if the agent tried this, and which clause decides it?** Answered without running
+the call, without a model, and without writing anything.
+
+```
+session-sitter policy explain <tool> [--command CMD | --input JSON] [--rev REVISION|current] [--json]
+```
+
+```console
+$ session-sitter policy explain Bash --command 'git status && aws s3 rb s3://x'
+WOULD DENY  ·  rung 3 (written red clause)  ·  revision 2b5481a3
+  practices §pay-storage-001@2b5481a — Never delete a bucket
+  Deleting a bucket takes its contents and its name with it, and the name cannot be reclaimed.
+  ↳ source: data/knowledge/teams/payments/bottom-line.md
+  ↳ sub-command 2 of 2: aws s3 rb s3://x
+
+  3 clause(s) evaluated from the compiled artifact
+  no model call · 0 tokens · 2.96 ms of policy work
+  this decides nothing — the PermissionRequest hook decides, and it will decide again when the call
+  actually runs.
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--command CMD` | — | shorthand for `--input '{"command":"CMD"}'` |
+| `--input JSON` | — | the whole tool input, as a JSON object. Use this for `Write`, `WebFetch`, anything that is not a shell call |
+| `--rev REV` | the published revision | explain against a **retained** revision instead, so an old citation resolves to the text that actually fired. `current` is the explicit form of the default |
+| `--json` | off | machine-readable ([contract](#policy-explain-json)) |
+
+### It is the same code as the hook, and that is the whole point
+
+`explain` calls `loadPolicyInputs` → `decideDeterministically` → `routeAmbiguous` →
+`selectForPolicy` / `cite` — the exact functions
+[`src/hooks/permissionRequest.ts`](../src/hooks/permissionRequest.ts) calls when it decides for real.
+It contains no evaluator of its own. A retrieval surface with a second evaluator disagrees with the
+enforcement path on the day somebody asks *why* a call was denied, which is the one day the answer
+matters.
+
+The rung it prints is carried on the hook's own verdict, not re-derived here. `src/test/policy/explain.test.ts`
+runs a table of twelve calls through both `handle` and `explain` and asserts identical light, clause,
+revision, source and behaviour.
+
+### It cannot authorise anything
+
+- It writes **nothing**. Not to `decisions.jsonl`, not anywhere: hypotheticals in an audit trail
+  destroy the trail as a record. `src/policy/explain.ts` imports nothing that can write, and a test
+  byte-compares the trail across a query.
+- Its output field is `would`, not `behavior`, and it emits no `hookSpecificOutput`. Nothing
+  downstream can read it as a `PermissionRequest` response, even by accident.
+- The classifier rung is **reported, never run**. `WOULD ASK · rung 6` means "this would go to the
+  classifier"; no tokens are spent finding out what it would say.
+
+### Reading an old decision
+
+A decision record names the revision it was evaluated against. Feed that back in and you get the
+clause text as it read then, not as it reads now:
+
+```console
+$ session-sitter policy explain Bash --command 'git push --force origin main' --rev 8339cfd1df8d…
+WOULD DENY  ·  rung 3 (written red clause)  ·  revision 8339cfd1
+  practices §pay-git-002@8339cfd — Never force-push to a shared branch
+  ↳ correction force-push-to-lease was rejected by practices §pay-git-002
+
+$ session-sitter policy explain Bash --command 'git push --force origin main'
+WOULD ALLOW  ·  rung 2 (the correction lane — rewritten into its safer form)  ·  revision 2b5481a3
+```
+
+Same call, two revisions, two answers — because the clause was narrowed in between. A named revision
+that has rolled off retention **refuses** rather than answering from `current.json`: a query that
+silently changes source is the same class of lie as a second evaluator.
+
+### When the policy is missing or broken
+
+Every failure degrades to an answer plus a diagnosis. Nothing throws, and nothing ever reads as
+"allowed" because a file was unreadable.
+
+| Condition | What it prints | Exit |
+|---|---|---|
+| no compiled artifact, markdown corpus readable | the verdict, plus `answered from the markdown corpus, not a compiled artifact: <why>` | 0 |
+| artifact unparsable / wrong `schema_version` / compiled for another routing triple | falls back to the corpus and names the reason in `policy.degraded` | 0, or 1 if the corpus is empty too |
+| neither source readable | the verdict (rung 7, fail closed) plus `why:` naming **both** failures and `fix:` naming the two commands that resolve it | 1 |
+| configured `SESSION_SITTER_PRACTICES` unreadable | the same rung-7 verdict the hook gives, diagnosed as *your configured practicesFile `<path>` could not be read* — not "supervisor error". It is a configuration mistake you fix in one edit | 1 |
+| `--rev` naming a revision that rolled off, or a corrupt one | one line on stderr saying so, and *nothing was answered from a different revision instead* | 1 |
+| a clause whose pattern no longer compiles | skipped; every other clause still decides | 0 |
+
+`policy.source` in `--json` always names which source actually answered, and `policy.degraded`
+always says why the artifact did not.
+
+---
+
+## Who invokes what
+
+The surface question has three answers because three people ask it.
+
+| | **Solo dev** | **Team lead** | **On SSH, no browser** |
+|---|---|---|---|
+| Where they are | one laptop, no team tier | a checkout of the corpus repo, reviewing PRs | a terminal, and nothing else |
+| Primary surface | the hook, silently. The denial message names the clause and quotes it, so most days they invoke nothing | `policy explain` to test a clause *before* writing it; `policy check --replay` for the blast radius of an edit | `session-sitter` on `$PATH` |
+| Concretely | third time the same thing is blocked: `/session-sitter:explain`, then the `writing-practices` skill | `policy explain <tool> --command …` · `policy check <file> --replay` · `policy compile --dry-run` in CI | `session-sitter policy explain … --json`, `log --denied`, `digest --since 24h` |
+| Do they need the skill? | **yes, most of all** — no reviewer, so the pre-flight check is the only thing between them and a denial loop | rarely; they read the corpus directly | no; they type the command |
+
+**The bare-terminal path is not a degraded path.** The plugin's hooks are plain `node` commands
+invoked by path, `src/supervisor/*` contains no `import 'vscode'`, and `session-sitter` needs no
+session running at all. Everything on this page works over SSH with no browser, no VS Code and no
+account:
+
+```bash
+session-sitter policy explain Bash --command 'terraform apply' --json | jq -r '.would, .clause'
+```
+
+That is also the CI path: exit 0 answered, 1 no policy loaded, 2 bad arguments.
+
+A surface a solo dev *must* invoke to get value is a surface that failed — so the hook decides
+silently, the denial explains itself, and `explain` is there for the third time the same thing gets
+blocked.
+
+---
+
 ## Where state is read from
 
 `log`, `digest` and `policy check --replay` need the supervision state dir. There are two
@@ -455,6 +577,44 @@ at,session_id,session_name,host,agent,tool,light,outcome,actor,clause_id,clause_
 
 `ask` is `""` when no record carried it. `costUsd` is `null` when nothing in the window recorded a
 cost, at both the session and the totals level.
+
+### `policy explain --json` <a id="policy-explain-json"></a>
+
+```json
+{
+  "would": "deny",
+  "rung": 3,
+  "rungLabel": "written red clause",
+  "light": "red",
+  "clause": "practices §pay-storage-001",
+  "citation": "practices §pay-storage-001@2b5481a",
+  "title": "Never delete a bucket",
+  "message": "Deleting a bucket takes its contents and its name with it, and the name cannot be reclaimed.",
+  "sourceFile": "data/knowledge/teams/payments/bottom-line.md",
+  "fix": null,
+  "rewritten": null,
+  "note": "denied — practices §pay-storage-001: Never delete a bucket",
+  "policy": {
+    "source": "artifact",
+    "rev": "sha256:2b5481a315c3b9cb…",
+    "degraded": null,
+    "clauses": 3,
+    "elapsedMs": 2.96
+  },
+  "selection": {
+    "matched": ["pay-storage-001"],
+    "shown": 1,
+    "subsetLine": "(1 of 3 clauses shown — policy revision 2b5481a3, core 0, selected 1)"
+  }
+}
+```
+
+`would` is `allow`, `deny` or `ask` — deliberately **not** `behavior`, so this object is not
+paste-compatible with a hook response. `policy.source` is `artifact` or `markdown` and always names
+what actually answered. `citation` carries the `@<rev7>` suffix only when an artifact answered;
+on the markdown fallback it is `null` and `clause` alone is the citation. `rewritten` is the
+correction lane's rewrite when there would be one, and `selection` is the bounded per-call set the
+classifier would receive — `null` on the markdown fallback, which has no selector.
 
 ### `policy check --json` <a id="policy-json"></a>
 

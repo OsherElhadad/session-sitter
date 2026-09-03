@@ -20,6 +20,13 @@
  *
  *     node out/policy/cli.js compile [--corpus <dir>] [--dry-run]
  *
+ *     node out/policy/cli.js explain <tool> [--command CMD | --input JSON] [--rev REV] [--json]
+ *
+ * `explain` answers "what would happen if the agent tried this, and which clause decides?" without
+ * running it. It calls the hook's own loader, matcher and selector — see `explain.ts` for why that
+ * is the whole design — and it writes nothing: an explain is not a decision, and hypotheticals in
+ * the audit trail would destroy the trail as a record.
+ *
  * `compile` is the write path's last gate. It reads the reviewed corpus and emits the artifact the
  * runtime loads — or emits nothing at all and exits non-zero, naming what is wrong. There is no
  * middle outcome on purpose: a broken corpus must never become live policy, and while it is broken
@@ -71,14 +78,20 @@ const paths_1 = require("../hooks/paths");
 const permissionRequest_1 = require("../hooks/permissionRequest");
 const settings_1 = require("../hooks/settings");
 const compile_1 = require("./compile");
+const explain_1 = require("./explain");
 const USAGE = `session-sitter policy — lint a practices file, or compile the corpus
 
 Usage:
   check <practices.md> [--replay] [--limit N]
+  explain <tool> [--command CMD | --input JSON] [--rev REVISION|current] [--json]
   compile [--corpus DIR] [--user U] [--project P] [--team T] [--registry FILE]
           [--data-dir DIR] [--dry-run]
 
 Options:
+  --command CMD   the shell command to explain (shorthand for --input)
+  --input JSON    the whole tool input to explain, as a JSON object
+  --rev REV       explain against a retained revision instead of the published one
+  --json          machine-readable output
   --replay        re-decide the recorded decisions with this file's clauses
   --limit N       how many recorded decisions to replay (default 50)
   --corpus DIR    knowledge checkout to compile (default: the configured local repo)
@@ -268,6 +281,12 @@ async function main(argv = process.argv.slice(2)) {
     }
     if (argv[0] === 'compile') {
         return compile(argv.slice(1));
+    }
+    if (argv[0] === 'explain') {
+        return (0, explain_1.runExplain)(argv.slice(1), {
+            out: t => process.stdout.write(t),
+            err: t => process.stderr.write(t),
+        });
     }
     if (argv[0] !== 'check') {
         process.stderr.write(`unknown command: ${argv[0]}\n\n${USAGE}`);

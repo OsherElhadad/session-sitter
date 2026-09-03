@@ -585,7 +585,20 @@ export function loadPolicy(
   expected?: { user: string; project: string; team: string } | null,
   env?: NodeJS.ProcessEnv,
 ): LoadedPolicy {
-  const file = currentPath(env);
+  return loadPolicyFile(currentPath(env), expected);
+}
+
+/**
+ * The same read, against a named file — how `policy explain --rev` resolves a retained artifact.
+ *
+ * Split out rather than duplicated: a second reader would be a second set of answers to "is this
+ * artifact usable", and the whole point of resolving an old citation is that it resolves to what
+ * actually fired. `loadPolicy` is this function against `current.json`, and nothing else.
+ */
+export function loadPolicyFile(
+  file: string,
+  expected?: { user: string; project: string; team: string } | null,
+): LoadedPolicy {
   let text: string;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return { policy: null, reason: 'absent' }; }
 

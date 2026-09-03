@@ -11,6 +11,7 @@
  *     session-sitter log                 the audit trail of supervision decisions
  *     session-sitter digest              what your agents did last night
  *     session-sitter policy check        lint a practices file, replay decisions against it
+ *     session-sitter policy explain      what would happen to this call, and which clause decides
  *
  * Exit codes are uniform across every command: 0 answered, 1 something it needed was missing or
  * unreadable, 2 the arguments were wrong.
@@ -33,7 +34,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   status: { summary: 'every agent session, and which of them need you', run: status.run },
   log: { summary: 'query the audit trail of supervision decisions', run: log.run },
   digest: { summary: 'what your agents did last night, one page per session', run: digest.run },
-  policy: { summary: 'lint a practices file and replay decisions against it', run: policy.run },
+  policy: { summary: 'lint a practices file, or ask what it would decide', run: policy.run },
 };
 
 const USAGE = `session-sitter — agent governance in the terminal
