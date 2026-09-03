@@ -311,7 +311,7 @@ function propose(opts) {
         // in the same run, which is a corpus contradicting itself in one commit. The green wins: it is
         // the lane with the stronger evidence bar (an `allow` on every supporting record).
         const claimed = new Set(greenLane.map(c => c.cluster));
-        const gapLane = collectCandidates((0, mine_1.clusterWindow)(usable, mine_1.NO_VERDICT).filter(c => !claimed.has(c.key)), line, opts, 'gap');
+        const gapLane = collectCandidates((0, mine_1.clusterWindow)(usable, 'gap').filter(c => !claimed.has(c.key)), line, opts, 'gap');
         const candidates = [...greenLane, ...gapLane];
         line.candidates.considered = candidates.length;
         const admitted = validate(candidates, records, opts.corpus, line);

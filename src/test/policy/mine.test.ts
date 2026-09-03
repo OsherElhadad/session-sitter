@@ -200,6 +200,45 @@ describe('E3b — what earns a green support event', () => {
     expect(isGreenSupport(bash('pnpm test', { decision: 'deny' }))).toBe(false);
     expect(isGreenSupport(bash('pnpm test', { decision: 'none' }))).toBe(false);
   });
+
+  it('earns nothing in the GAP lane either — neither lane will take a corrected call', () => {
+    // The green half above was proved before the gap lane existed. `clusterWindow` now selects a lane,
+    // so the same record has a second support set that could have taken it, and the answer has to be
+    // checked rather than inherited: a corrected call is `decision: 'allow'`, and the gap lane's
+    // support is `decision === 'none'`, so it is excluded by the field the lane keys on.
+    const records = [
+      corrected('git push --force origin main', { sessionId: 's-a', ts: '2026-08-25T09:00:00.000Z' }),
+      corrected('git push --force origin dev', { sessionId: 's-b', ts: '2026-08-27T09:00:00.000Z' }),
+      corrected('git push --force origin x', { sessionId: 's-c', ts: '2026-09-01T09:00:00.000Z' }),
+    ];
+    for (const lane of ['green', 'gap'] as const) {
+      const cluster = clusterWindow(records, lane)[0];
+      expect(cluster.all, lane).toHaveLength(3);
+      expect(cluster.support, lane).toHaveLength(0);
+      expect(cluster.segments, lane).toEqual([]);
+      expect(tierFor(supportOf(cluster), false).tier, lane).toBeNull();
+    }
+    // And the reverse: the gap lane does take an uncorrected `none`, so the assertion above is about
+    // `rewritten` and the `allow`, not about the lane being empty for everything.
+    const gap = bash('pnpm lint', { decision: 'none', light: null, actor: 'timeout' });
+    expect(clusterWindow([gap], 'gap')[0].support).toHaveLength(1);
+    expect(clusterWindow([gap], 'green')[0].support).toHaveLength(0);
+  });
+
+  it('a corrected call cannot be a gap record at all, which is why no guard is needed', () => {
+    // `rewritten` is `verdict.decision.updatedInput !== undefined`, `updatedInput` is set only by the
+    // correction branch, and that branch returns `behavior: 'allow'` — so `rewritten` with
+    // `decision: 'none'` is unreachable through the hook. Pinned as the *reason* the gap lane carries
+    // no `!rewritten` check: if this ever becomes constructible, that omission becomes a hole.
+    // Constructed by hand here precisely because the hook cannot produce it.
+    const impossible = bash('git push --force origin main', {
+      decision: 'none', rewritten: true, actor: 'correction',
+    });
+    expect(isGreenSupport(impossible)).toBe(false);
+    // Were it ever recorded, the clause mined from it is still a fix-less narrowing: a matcher for the
+    // call as asked and no rewrite, because `gate` never emits a `fix`. So there is nothing to license.
+    expect(clusterWindow([impossible], 'gap')[0].support).toHaveLength(1);
+  });
 });
 
 // --------------------------------------------------------------------------- §12.5 compound safety

@@ -62,7 +62,7 @@ import {
 } from '../supervisor/learnedClauses';
 import { Tier } from '../supervisor/knowledge';
 import { AblationReport, GREEN_PERSISTENCE_NOTE, RED_NOT_PROPOSED, SHADOWED_NOTE } from './ablate';
-import { Cluster, SHELL_TOOLS, Support, evidenceIds } from './mine';
+import { Cluster, Lane, SHELL_TOOLS, Support, evidenceIds } from './mine';
 import { prefixOf } from './generalise';
 import { escapeForMatcher } from './practices';
 import { ReplayCandidate } from './replay';
@@ -263,15 +263,11 @@ export function candidateId(kind: string, slug: string, shape12: string): string
   return id;
 }
 
-/**
- * Which lane a cluster is being gated for. The lane is the caller's, not derived here, because it is
- * fixed by *which support set the cluster was built over* (`clusterWindow`'s `SupportTest`) and
- * re-deriving it from the counters would let the two disagree.
- */
-export type Lane = 'green' | 'gap';
-
 export interface GateOptions {
-  /** Which lane (see {@link Lane}). Defaults to the green lane, which is the pre-existing behaviour. */
+  /**
+   * Which lane (see {@link Lane}). The caller's, never derived here: it is fixed by which support set
+   * the cluster was built over, and re-deriving it from the counters would let the two disagree.
+   */
   lane?: Lane;
   /** The project slug, when one is configured. Without it no candidate can be project-scoped. */
   projectSlug: string | null;

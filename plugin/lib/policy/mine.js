@@ -84,7 +84,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NO_VERDICT = exports.THRESHOLDS = exports.SHAPES_VERSION = exports.TAIL_BYTES = exports.DISTINCT_CAP = exports.SIGNALS = exports.SHELL_TOOLS = void 0;
+exports.THRESHOLDS = exports.SHAPES_VERSION = exports.TAIL_BYTES = exports.DISTINCT_CAP = exports.SIGNALS = exports.SHELL_TOOLS = void 0;
 exports.canonicalSegment = canonicalSegment;
 exports.shapeHash = shapeHash;
 exports.clusterKey = clusterKey;
@@ -637,26 +637,37 @@ const LABEL = {
     timeout: 'fail-closed', gap: 'gap', model: 'classifier-decided', repeat: 'repeat',
 };
 /**
- * The gap lane (§4.7): the hook returned no verdict, so nothing judged this call either way.
+ * What counts as *support* per lane. The one place either answer is defined.
  *
- * Keyed on `decision`, not on `actor`, for the same reason {@link signalOf} is: a sixth actor value
- * (`correction`) arrived while this was being written, and a seventh will arrive after it. `decision`
- * is the field that carries the meaning.
+ * The green lane is {@link isGreenSupport} — E3b's `allow` plus the `!rewritten` half, both of whose
+ * arguments are about *licensing a command*. Neither transfers to the gap lane, which is why that
+ * gets its own entry rather than a relaxation of this one: its support is `decision === 'none'`, the
+ * calls policy never reached. Those records license nothing — the clause mined from them is a
+ * narrowing that can only withhold an allow — so requiring an `allow` would be requiring the one
+ * thing that, by definition, never happened.
  *
- * No `!record.rewritten` here, deliberately: `rewritten` is set from `decision.updatedInput`, which
- * is allow-only, so `decision: 'none'` with a rewrite cannot occur. And if a future observe mode did
- * record a would-be rewrite, the clause mined from it is still a fix-less narrowing — it would carry
- * no rewrite, only a matcher for the call as asked — so there is nothing for the guard to protect.
+ * The gap lane keys on `decision`, never on `actor`, for the same reason {@link signalOf} does: a
+ * sixth actor value (`correction`) arrived while this was written and a seventh will arrive later.
+ *
+ * It carries no `!rewritten` check because that state cannot exist, verified at both writers rather
+ * than assumed: `rewritten` is `verdict.decision.updatedInput !== undefined`
+ * (`permissionRequest.ts:863`), `updatedInput` is set only by the correction branch, and that branch
+ * returns `behavior: 'allow'` — while the two sites that write `decision: 'none'` (an exempt tool
+ * and observe mode, `:736` and `:802`) both hardcode `rewritten: false`. A corrected call is
+ * therefore excluded from this lane by its `decision`, which is the check that would have to be
+ * wrong for the guard to be needed.
  */
-const NO_VERDICT = r => r.decision === 'none';
-exports.NO_VERDICT = NO_VERDICT;
+const SUPPORT = {
+    green: isGreenSupport,
+    gap: r => r.decision === 'none',
+};
 /**
  * Cluster a window of records by shape.
  *
- * `supports` selects the lane (see {@link SupportTest}). Everything derived from *every* record on
- * the shape — the signal, `contradictedBy`, the fail-closed and gap counters, E3a's `unconfident` —
- * is unaffected by it; only `support`, `segments`, `noCall` and `lights` follow the predicate, which
- * is exactly the set the emission gates read as "the evidence".
+ * `lane` selects what counts as support (see {@link SUPPORT}). Everything derived from *every* record
+ * on the shape — the signal, `contradictedBy`, the fail-closed and gap counters, E3a's `unconfident`
+ * — is unaffected by it; only `support`, `segments`, `noCall` and `lights` follow the lane, which is
+ * exactly the set the emission gates read as "the evidence".
  *
  * The `signal` label is derived from the records rather than being part of the key. `11-mine-v2.md`
  * gives two readings of this — §4.2 makes the signal part of the cluster key, while §11.2's own
@@ -667,7 +678,7 @@ exports.NO_VERDICT = NO_VERDICT;
  * requirement is still met — a `none` is never folded into a `deny`; the two are counted separately
  * and a `deny` reaches a green candidate only as a contradiction (E6).
  */
-function clusterWindow(records, supports = isGreenSupport) {
+function clusterWindow(records, lane = 'green') {
     const out = new Map();
     for (const record of records) {
         const { segments, confident } = segmentsOf(record);
@@ -710,7 +721,7 @@ function clusterWindow(records, supports = isGreenSupport) {
             if (record.decision === 'deny' && record.clause) {
                 cluster.contradictedBy = (0, replay_1.citedClauseId)(record.clause) ?? record.clause;
             }
-            if (!supports(record)) {
+            if (!SUPPORT[lane](record)) {
                 continue;
             }
             cluster.support.push(record);

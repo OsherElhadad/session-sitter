@@ -36,11 +36,11 @@ import { PluginSettings } from '../hooks/settings';
 import { STALE_LOCK_MS } from '../supervisor/store';
 import { AblationReport } from './ablate';
 import {
-  BarDistance, Cluster, FoldResult, NO_VERDICT, Signal, clusterWindow, fold, nudge, pipelineDir,
+  BarDistance, Cluster, FoldResult, Lane, Signal, clusterWindow, fold, nudge, pipelineDir,
   supportOf, tierFor, writeShapes,
 } from './mine';
 import {
-  Candidate, EMISSION_RULE, Lane, MAX_ADDITIONS, Refusal, RefusalReason, RetirementPlan,
+  Candidate, EMISSION_RULE, MAX_ADDITIONS, Refusal, RefusalReason, RetirementPlan,
   gate, planRetirements, renderClause, writeClause,
 } from './propose';
 import { CEILING_PER_TIER } from './ablate';
@@ -387,7 +387,7 @@ export function propose(opts: ProposeOptions): ProposeResult {
     // the lane with the stronger evidence bar (an `allow` on every supporting record).
     const claimed = new Set(greenLane.map(c => c.cluster));
     const gapLane = collectCandidates(
-      clusterWindow(usable, NO_VERDICT).filter(c => !claimed.has(c.key)), line, opts, 'gap');
+      clusterWindow(usable, 'gap').filter(c => !claimed.has(c.key)), line, opts, 'gap');
     const candidates = [...greenLane, ...gapLane];
     line.candidates.considered = candidates.length;
 

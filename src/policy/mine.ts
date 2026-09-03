@@ -722,39 +722,50 @@ export interface Cluster {
 }
 
 /**
- * Which records count as *support* for the lane being mined. One predicate, two lanes.
+ * Which lane a window is being clustered for.
  *
- * The green lane's is {@link isGreenSupport}, unchanged and still the default — E3b's `allow`, plus
- * the `!rewritten` half, and both of its arguments are about *licensing a command*.
- *
- * Neither transfers to the gap lane, which is why it gets a predicate rather than a relaxation of
- * that one. Its support is `decision === 'none'`: the calls policy never reached. Those records
- * license nothing — the clause mined from them is a narrowing that can only withhold an allow — so
- * requiring an `allow` on them would be requiring the one thing that, by definition, never happened.
+ * **A lane name, deliberately not a predicate.** An earlier revision of this took
+ * `(record) => boolean`, which made every call site a place the green lane's `!rewritten` requirement
+ * could be dropped by accident — a caller passing `r => r.decision === 'allow'` would look correct
+ * and silently reopen the hole {@link isGreenSupport} exists to close. A lane name cannot express
+ * that: every predicate lives in {@link SUPPORT}, next to the argument for it, and a third lane has
+ * to be added here rather than at the call site.
  */
-export type SupportTest = (record: DecisionRecord) => boolean;
+export type Lane = 'green' | 'gap';
 
 /**
- * The gap lane (§4.7): the hook returned no verdict, so nothing judged this call either way.
+ * What counts as *support* per lane. The one place either answer is defined.
  *
- * Keyed on `decision`, not on `actor`, for the same reason {@link signalOf} is: a sixth actor value
- * (`correction`) arrived while this was being written, and a seventh will arrive after it. `decision`
- * is the field that carries the meaning.
+ * The green lane is {@link isGreenSupport} — E3b's `allow` plus the `!rewritten` half, both of whose
+ * arguments are about *licensing a command*. Neither transfers to the gap lane, which is why that
+ * gets its own entry rather than a relaxation of this one: its support is `decision === 'none'`, the
+ * calls policy never reached. Those records license nothing — the clause mined from them is a
+ * narrowing that can only withhold an allow — so requiring an `allow` would be requiring the one
+ * thing that, by definition, never happened.
  *
- * No `!record.rewritten` here, deliberately: `rewritten` is set from `decision.updatedInput`, which
- * is allow-only, so `decision: 'none'` with a rewrite cannot occur. And if a future observe mode did
- * record a would-be rewrite, the clause mined from it is still a fix-less narrowing — it would carry
- * no rewrite, only a matcher for the call as asked — so there is nothing for the guard to protect.
+ * The gap lane keys on `decision`, never on `actor`, for the same reason {@link signalOf} does: a
+ * sixth actor value (`correction`) arrived while this was written and a seventh will arrive later.
+ *
+ * It carries no `!rewritten` check because that state cannot exist, verified at both writers rather
+ * than assumed: `rewritten` is `verdict.decision.updatedInput !== undefined`
+ * (`permissionRequest.ts:863`), `updatedInput` is set only by the correction branch, and that branch
+ * returns `behavior: 'allow'` — while the two sites that write `decision: 'none'` (an exempt tool
+ * and observe mode, `:736` and `:802`) both hardcode `rewritten: false`. A corrected call is
+ * therefore excluded from this lane by its `decision`, which is the check that would have to be
+ * wrong for the guard to be needed.
  */
-export const NO_VERDICT: SupportTest = r => r.decision === 'none';
+const SUPPORT: Record<Lane, (record: DecisionRecord) => boolean> = {
+  green: isGreenSupport,
+  gap: r => r.decision === 'none',
+};
 
 /**
  * Cluster a window of records by shape.
  *
- * `supports` selects the lane (see {@link SupportTest}). Everything derived from *every* record on
- * the shape — the signal, `contradictedBy`, the fail-closed and gap counters, E3a's `unconfident` —
- * is unaffected by it; only `support`, `segments`, `noCall` and `lights` follow the predicate, which
- * is exactly the set the emission gates read as "the evidence".
+ * `lane` selects what counts as support (see {@link SUPPORT}). Everything derived from *every* record
+ * on the shape — the signal, `contradictedBy`, the fail-closed and gap counters, E3a's `unconfident`
+ * — is unaffected by it; only `support`, `segments`, `noCall` and `lights` follow the lane, which is
+ * exactly the set the emission gates read as "the evidence".
  *
  * The `signal` label is derived from the records rather than being part of the key. `11-mine-v2.md`
  * gives two readings of this — §4.2 makes the signal part of the cluster key, while §11.2's own
@@ -766,7 +777,7 @@ export const NO_VERDICT: SupportTest = r => r.decision === 'none';
  * and a `deny` reaches a green candidate only as a contradiction (E6).
  */
 export function clusterWindow(
-  records: readonly DecisionRecord[], supports: SupportTest = isGreenSupport,
+  records: readonly DecisionRecord[], lane: Lane = 'green',
 ): Cluster[] {
   const out = new Map<string, Cluster>();
   for (const record of records) {
@@ -804,7 +815,7 @@ export function clusterWindow(
       if (record.decision === 'deny' && record.clause) {
         cluster.contradictedBy = citedClauseId(record.clause) ?? record.clause;
       }
-      if (!supports(record)) { continue; }
+      if (!SUPPORT[lane](record)) { continue; }
       cluster.support.push(record);
       if (!record.call) { cluster.noCall += 1; }
       if (record.light && !cluster.lights.includes(record.light)) {
