@@ -202,10 +202,29 @@ it, but there is nothing to focus and nothing to write to.
 Type anything and it is sent into that session as a user message. The topic answers with `✅` or with
 the reason it could not.
 
+### How much of a turn you get
+
+Each turn is mirrored **whole**, split across as many messages as it takes and numbered `(1/3)`,
+`(2/3)`, `(3/3)`. This is what `sessionSitter.telegram.fullMessages` controls, and it is on by
+default: the alternative is the ~250-character excerpt the Sessions panel draws in its preview
+bubbles, which is enough to recognise an answer sitting beside the session it came from and not
+enough to act on one when Telegram is all you have — the part you need in order to reply is usually
+the end of it.
+
+`sessionSitter.telegram.maxMessageParts` (default 4, ceiling 20) is the budget. Past it the last
+message ends with the exact number of characters left out and points at **📄 Full transcript**, so
+nothing is ever quietly dropped.
+
+The ceiling exists because Telegram accepts roughly 20 messages a minute for one group, and a topic
+that spends more than that holds up every other session's. The same arithmetic decides who gets the
+budget when several turns arrive in one pass: **the newest turn gets all of it and the earlier ones
+get one message each**, because the last turn is the one you are about to answer and the ones before
+it are context you skim.
+
 Two buttons on the topic header:
 
-- **Full transcript** — uploaded as a Markdown file. A transcript is far past Telegram's
-  4096-character message cap, so it cannot be a message.
+- **Full transcript** — uploaded as a Markdown file. A whole transcript is far past Telegram's
+  4096-character message cap, so it cannot be a message however it is split.
 - **Focus in IDE** — brings the session to the front on its own machine, reusing the same
   cross-window and cross-machine handshake a click in the panel uses.
 

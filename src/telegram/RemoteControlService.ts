@@ -46,7 +46,7 @@ import {
   claimCommand, dropCommand, expiredCommands, newCommandId, postCommand, postResult,
   readPendingCommands, takeResults, leasePath, sweep, type BusCommand,
 } from './bus';
-import { startupBlocker, type RemoteControlConfig } from './config';
+import { effectiveMessageParts, startupBlocker, type RemoteControlConfig } from './config';
 import { ForumApi, type ReplyMarkup } from './forum';
 import { classifyUpdate, decodeCallback, encodeCallback, type Intent } from './intent';
 import { ReaderLease, LEASE_RENEW_MS } from './lease';
@@ -328,7 +328,10 @@ export class RemoteControlService {
     }
 
     const turns = await this.turnsOf(session.sessionId);
-    const plan = planMirror(turns, record.mirroredTurns);
+    const plan = planMirror(turns, record.mirroredTurns, {
+      maxParts: effectiveMessageParts(this.deps.config),
+      recentlySent: this.recentlySent.get(session.sessionId) ?? [],
+    });
     // Reopen before posting, not after: Telegram will not take a message into a closed topic, so
     // posting first would drop the very turns that justified the reopen.
     if (record.closed && plan.messages.length > 0) {
@@ -339,12 +342,7 @@ export class RemoteControlService {
         changed = true;
       }
     }
-    const sentTexts = this.recentlySent.get(session.sessionId) ?? [];
     for (const message of plan.messages) {
-      // Skip the echo of a prompt this window just injected — it is already visible as the user's
-      // own Telegram message, and posting it again reads as a duplicate send.
-      const body = message.replace(/^🧑 /, '');
-      if (message.startsWith('🧑 ') && sentTexts.some(s => s.trim() === body.trim())) { continue; }
       const posted = await this.forum.send(message, record.threadId);
       if (!posted.ok) {
         this.log(`remote control: mirror post failed on ${record.threadId}: ${posted.error}`);
@@ -473,9 +471,17 @@ export class RemoteControlService {
     }
   }
 
+  /**
+   * The recent turns of a session, whole rather than excerpted when full mode is on.
+   *
+   * The excerpt the panel uses is 250 characters, which is a reasonable preview beside the session
+   * and useless as the only thing you can see of an answer you have to reply to. So the mirror asks
+   * for the full text and `planMirror` splits it across messages.
+   */
   private async turnsOf(sessionId: string) {
     try {
-      return await this.deps.sessionManager.getRecentExchanges(sessionId);
+      return await this.deps.sessionManager.getRecentExchanges(
+        sessionId, { full: this.deps.config.fullMessages });
     } catch {
       return [];
     }

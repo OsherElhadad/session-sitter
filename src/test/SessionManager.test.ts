@@ -1462,3 +1462,110 @@ describe('SessionManager.exportFullTranscript (Chat)', () => {
     expect(md).toContain('· 0 turns.*');
   });
 });
+
+describe('SessionManager.getRecentExchanges full mode', () => {
+  let tmpDir: string;
+  let sm: SessionManager;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sm-full-'));
+    sm = new SessionManager(makeContext());
+    (sm as unknown as { _projectsDir: string })._projectsDir = tmpDir;
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function seedPath(sessionId: string, filePath: string) {
+    (sm as unknown as { _sessionFilePaths: Map<string, string> })
+      ._sessionFilePaths.set(sessionId, filePath);
+  }
+
+  it('returns the whole assistant answer, not a 250-char preview', async () => {
+    // The reason the feature exists: the Telegram mirror was reading the panel's preview text, so
+    // no amount of message splitting downstream could show more than 250 characters.
+    const id = 'full-assistant';
+    const longText = 'A'.repeat(9000);
+    const file = await writeTempJsonl(tmpDir, id, [
+      { type: 'user', message: { content: 'ask' } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: longText }] } },
+    ]);
+    seedPath(id, file);
+    const result = await sm.getRecentExchanges(id, { full: true });
+    expect(result[1].text).toBe(longText);
+  });
+
+  it('returns the whole user prompt too', async () => {
+    // Not cosmetic: echo suppression compares the sent text against the transcript's, so a prompt
+    // over 150 characters used to fail the match and be reposted as a duplicate.
+    const id = 'full-user';
+    const longText = 'U'.repeat(4000);
+    const file = await writeTempJsonl(tmpDir, id, [
+      { type: 'user', message: { content: longText } },
+    ]);
+    seedPath(id, file);
+    const result = await sm.getRecentExchanges(id, { full: true });
+    expect(result[0].text).toBe(longText);
+  });
+
+  it('joins every text block of an answer instead of taking the first', async () => {
+    const id = 'full-blocks';
+    const file = await writeTempJsonl(tmpDir, id, [
+      { type: 'user', message: { content: 'ask' } },
+      {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: 'first thought' },
+            { type: 'tool_use', id: 't1', name: 'bash', input: {} },
+            { type: 'text', text: 'second thought' },
+          ],
+        },
+      },
+    ]);
+    seedPath(id, file);
+    const result = await sm.getRecentExchanges(id, { full: true });
+    expect(result[1].text).toBe('first thought\n\nsecond thought');
+  });
+
+  it('reads past the 32 KB preview window so a long answer is not lost entirely', async () => {
+    // A single record bigger than the preview tail is not merely truncated: the window starts
+    // mid-line, the JSON fails to parse, and the turn vanishes. Full mode must widen the read.
+    const id = 'full-beyond-tail';
+    const longText = 'A'.repeat(60_000);
+    const file = await writeTempJsonl(tmpDir, id, [
+      { type: 'user', message: { content: 'ask' } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: longText }] } },
+    ]);
+    seedPath(id, file);
+    const preview = await sm.getRecentExchanges(id);
+    expect(preview.some(e => e.role === 'assistant')).toBe(false);
+    const full = await sm.getRecentExchanges(id, { full: true });
+    expect(full.some(e => e.role === 'assistant' && e.text === longText)).toBe(true);
+  });
+
+  it('still caps by default, so the panel and the auto-responder are untouched', async () => {
+    const id = 'full-default-unchanged';
+    const file = await writeTempJsonl(tmpDir, id, [
+      { type: 'user', message: { content: 'U'.repeat(200) } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'A'.repeat(300) }] } },
+    ]);
+    seedPath(id, file);
+    const result = await sm.getRecentExchanges(id);
+    expect(result[0].text).toBe('U'.repeat(150) + '…');
+    expect(result[1].text).toBe('A'.repeat(250) + '…');
+  });
+
+  it('keeps the timestamps and the chronological order it always had', async () => {
+    const id = 'full-order';
+    const file = await writeTempJsonl(tmpDir, id, [
+      { type: 'user', message: { content: 'one' }, timestamp: '2024-01-01T00:00:00.000Z' },
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'two' }] }, timestamp: '2024-01-01T00:00:01.000Z' },
+    ]);
+    seedPath(id, file);
+    const result = await sm.getRecentExchanges(id, { full: true });
+    expect(result.map(e => e.text)).toEqual(['one', 'two']);
+    expect(result[0].timestamp).toBe('2024-01-01T00:00:00.000Z');
+  });
+});

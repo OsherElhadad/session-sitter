@@ -60,6 +60,67 @@ export function remotePeersEnabled(
 export type { ClaudeSession, MessageExchange, SessionSourceId } from './sessionScan';
 export { getActiveSessionIds, vscodeUserDir } from './sessionScan';
 
+/** How much of each turn `getRecentExchanges` should return. */
+export interface ExchangeOptions {
+  /**
+   * Return every character of each turn, and every text block of it, instead of a preview excerpt.
+   *
+   * For the Telegram mirror, which is a reader's only view of the session and splits a long turn
+   * across several messages rather than cutting it off.
+   */
+  full?: boolean;
+}
+
+/**
+ * Excerpt lengths for the panel's preview bubbles: enough to recognise a turn, not to read it.
+ *
+ * Asymmetric because the two roles are read differently — your own prompt you only need to
+ * identify, whereas the answer is the thing being skimmed.
+ */
+const PREVIEW_CAPS = { user: 150, assistant: 250 } as const;
+
+/** How much of the tail of a transcript is read for previews, and for full turns. */
+const PREVIEW_TAIL_BYTES = 32768;
+/**
+ * A megabyte, for full mode.
+ *
+ * Not merely "more of the same": a single record larger than the window is not truncated but
+ * *lost*, because the read starts mid-line and the JSON no longer parses. A long answer would
+ * disappear from the mirror altogether, which is the one failure worse than a short one. Still a
+ * partial read, and still bounded by collecting only the last few turns.
+ */
+const FULL_TAIL_BYTES = 1_048_576;
+
+/** Cut a turn to its preview length, or leave it whole in full mode. */
+function excerpt(text: string, role: 'user' | 'assistant', opts: ExchangeOptions): string {
+  if (opts.full) { return text; }
+  const cap = PREVIEW_CAPS[role];
+  return text.length > cap ? text.slice(0, cap) + '…' : text;
+}
+
+/**
+ * The text of a message's content, whether that is a bare string or a block array.
+ *
+ * In full mode every text block is joined; otherwise the first one wins. The difference matters
+ * where an answer is interrupted by tool calls: the model's reasoning arrives as several text
+ * blocks around them, and taking only the first hands back an opening sentence while the actual
+ * answer sits in the block after the tool result.
+ */
+function textOfContent(content: unknown, opts: ExchangeOptions): string | null {
+  if (typeof content === 'string') {
+    return content.trim().length > 0 ? content.trim() : null;
+  }
+  if (!Array.isArray(content)) { return null; }
+  const parts: string[] = [];
+  for (const block of content) {
+    const b = block as { type?: string; text?: string };
+    if (b.type !== 'text' || typeof b.text !== 'string' || b.text.trim().length === 0) { continue; }
+    parts.push(b.text.trim());
+    if (!opts.full) { break; }
+  }
+  return parts.length > 0 ? parts.join('\n\n') : null;
+}
+
 // Structured turn for full-transcript export. All fields optional so partial
 // turns (e.g. a user message without a completed assistant response yet) are
 // representable.
@@ -444,20 +505,33 @@ export class SessionManager implements vscode.Disposable {
   }
 
 
-  async getRecentExchanges(sessionId: string): Promise<MessageExchange[]> {
+  /**
+   * The last few turns of a session.
+   *
+   * Two callers with opposite needs share this. The panel draws preview bubbles a few lines tall,
+   * so it wants an excerpt; the Telegram mirror is the only view of the session a person has when
+   * they are away from the machine, so a 250-character excerpt there is unusable — the part of an
+   * answer you need in order to reply is usually the end of it. `full` is that second caller.
+   *
+   * The default is the excerpt, unchanged to the character, because the panel and `AutoResponder`
+   * both depend on it.
+   */
+  async getRecentExchanges(
+    sessionId: string, opts: ExchangeOptions = {},
+  ): Promise<MessageExchange[]> {
     const filePath = this._sessionFilePaths.get(sessionId);
     if (!filePath) { return []; }
 
     if (this._sessionSources.get(sessionId) === 'bob') {
-      return this._getBobRecentExchanges(filePath);
+      return this._getBobRecentExchanges(filePath, opts);
     }
 
     if (this._sessionSources.get(sessionId) === 'codex') {
-      return this._getCodexRecentExchanges(filePath);
+      return this._getCodexRecentExchanges(filePath, opts);
     }
 
     if (this._sessionSources.get(sessionId) === 'chat') {
-      return this._getChatRecentExchanges(filePath);
+      return this._getChatRecentExchanges(filePath, opts);
     }
 
 
@@ -468,7 +542,7 @@ export class SessionManager implements vscode.Disposable {
       return [];
     }
 
-    const TAIL = 32768;
+    const TAIL = opts.full ? FULL_TAIL_BYTES : PREVIEW_TAIL_BYTES;
     const offset = Math.max(0, stat.size - TAIL);
     const size = stat.size - offset;
     const buf = Buffer.alloc(size);
@@ -487,41 +561,21 @@ export class SessionManager implements vscode.Disposable {
           const record = JSON.parse(trimmed) as JsonlRecord;
 
           if (record.type === 'user') {
-            const content = record.message?.content;
-            let text: string | null = null;
-            if (typeof content === 'string' && content.trim().length > 0) {
-              text = content.trim();
-            } else if (Array.isArray(content)) {
-              for (const block of content) {
-                const b = block as { type?: string; text?: string };
-                if (b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0) {
-                  text = b.text.trim();
-                  break;
-                }
-              }
-            }
+            const text = textOfContent(record.message?.content, opts);
             if (text !== null) {
-              const truncated = text.length > 150 ? text.slice(0, 150) + '…' : text;
-              collected.push({ role: 'user', text: truncated, timestamp: record.timestamp });
+              collected.push({
+                role: 'user', text: excerpt(text, 'user', opts), timestamp: record.timestamp,
+              });
             }
 
           } else if (record.type === 'assistant') {
-            const content = record.message?.content;
-            let text: string | null = null;
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                const b = block as { type?: string; text?: string };
-                if (b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0) {
-                  text = b.text.trim();
-                  break;
-                }
-              }
-            } else if (typeof content === 'string' && content.trim().length > 0) {
-              text = content.trim();
-            }
+            const text = textOfContent(record.message?.content, opts);
             if (text !== null) {
-              const truncated = text.length > 250 ? text.slice(0, 250) + '…' : text;
-              collected.push({ role: 'assistant', text: truncated, timestamp: record.timestamp });
+              collected.push({
+                role: 'assistant',
+                text: excerpt(text, 'assistant', opts),
+                timestamp: record.timestamp,
+              });
             }
           }
         } catch {
@@ -547,7 +601,9 @@ export class SessionManager implements vscode.Disposable {
     this._onDidChangeSessions.dispose();
   }
 
-  private async _getBobRecentExchanges(taskId: string): Promise<MessageExchange[]> {
+  private async _getBobRecentExchanges(
+    taskId: string, opts: ExchangeOptions = {},
+  ): Promise<MessageExchange[]> {
     let rows: BobMessageRow[];
     try {
       rows = await queryBobDb<BobMessageRow>(this._bobDbPath, BOB_MESSAGES_SQL, [taskId]);
@@ -559,21 +615,14 @@ export class SessionManager implements vscode.Disposable {
     for (const row of rows) {
       try {
         const d = JSON.parse(row.data) as { content?: unknown };
-        let text: string | null = null;
-        const content = d.content;
-        if (typeof content === 'string' && content.trim()) {
-          text = content.trim();
-        } else if (Array.isArray(content)) {
-          for (const block of content) {
-            const b = block as { type?: string; text?: string };
-            if (b.type === 'text' && b.text?.trim()) { text = b.text.trim(); break; }
-          }
-        }
+        const text = textOfContent(d.content, opts);
         if (text === null) { continue; }
         const role = row.role === 'user' ? 'user' : 'assistant';
-        const maxLen = role === 'user' ? 150 : 250;
-        const truncated = text.length > maxLen ? text.slice(0, maxLen) + '…' : text;
-        collected.push({ role, text: truncated, timestamp: new Date(row.created_at).toISOString() });
+        collected.push({
+          role,
+          text: excerpt(text, role, opts),
+          timestamp: new Date(row.created_at).toISOString(),
+        });
       } catch { /* skip malformed */ }
     }
 
@@ -700,13 +749,15 @@ export class SessionManager implements vscode.Disposable {
 
   // Read the tail of a Codex rollout .jsonl and return the last <= 6 role-bearing
   // response_item records as MessageExchanges (user or assistant text only).
-  private async _getCodexRecentExchanges(filePath: string): Promise<MessageExchange[]> {
+  private async _getCodexRecentExchanges(
+    filePath: string, opts: ExchangeOptions = {},
+  ): Promise<MessageExchange[]> {
     let stat: { size: number };
     try {
       stat = await fs.promises.stat(filePath);
     } catch { return []; }
 
-    const TAIL = 32768;
+    const TAIL = opts.full ? FULL_TAIL_BYTES : PREVIEW_TAIL_BYTES;
     const offset = Math.max(0, stat.size - TAIL);
     const size = stat.size - offset;
     const buf = Buffer.alloc(size);
@@ -730,14 +781,14 @@ export class SessionManager implements vscode.Disposable {
           if (rec.type !== 'response_item') { continue; }
           const role = rec.payload?.role;
           if (role !== 'user' && role !== 'assistant') { continue; }
-          const first = (rec.payload?.content ?? []).find(
-            b => typeof b.text === 'string' && b.text.trim().length > 0,
-          );
-          const text = first?.text?.trim();
-          if (!text) { continue; }
-          const cap = role === 'user' ? 150 : 250;
-          const truncated = text.length > cap ? text.slice(0, cap) + '…' : text;
-          collected.push({ role, text: truncated, timestamp: rec.timestamp });
+          // Codex blocks carry no `type`, so they are selected on having text rather than on being
+          // a text block — the same rule the `find` here always used, applied to all of them.
+          const blocks = (rec.payload?.content ?? [])
+            .filter(b => typeof b.text === 'string' && b.text.trim().length > 0)
+            .map(b => (b.text as string).trim());
+          if (blocks.length === 0) { continue; }
+          const text = opts.full ? blocks.join('\n\n') : blocks[0];
+          collected.push({ role, text: excerpt(text, role, opts), timestamp: rec.timestamp });
         } catch { /* skip malformed line */ }
       }
       return collected.reverse();
@@ -955,7 +1006,9 @@ export class SessionManager implements vscode.Disposable {
   // Read the snapshot line of a VS Code Chat .jsonl and reconstruct the last
   // <= 3 request/response pairs as MessageExchanges (user text + concatenated
   // string `value` fields of the response array).
-  private async _getChatRecentExchanges(filePath: string): Promise<MessageExchange[]> {
+  private async _getChatRecentExchanges(
+    filePath: string, opts: ExchangeOptions = {},
+  ): Promise<MessageExchange[]> {
     let raw: string;
     try {
       raw = await fs.promises.readFile(filePath, 'utf8');
@@ -987,9 +1040,7 @@ export class SessionManager implements vscode.Disposable {
 
       const userText = r.message?.text?.trim();
       if (userText) {
-        const cap = 150;
-        const truncated = userText.length > cap ? userText.slice(0, cap) + '…' : userText;
-        collected.push({ role: 'user', text: truncated, timestamp: iso });
+        collected.push({ role: 'user', text: excerpt(userText, 'user', opts), timestamp: iso });
       }
 
       const responseText = (r.response ?? [])
@@ -998,9 +1049,9 @@ export class SessionManager implements vscode.Disposable {
         .join('')
         .trim();
       if (responseText) {
-        const cap = 250;
-        const truncated = responseText.length > cap ? responseText.slice(0, cap) + '…' : responseText;
-        collected.push({ role: 'assistant', text: truncated, timestamp: iso });
+        collected.push({
+          role: 'assistant', text: excerpt(responseText, 'assistant', opts), timestamp: iso,
+        });
       }
     }
     return collected;
