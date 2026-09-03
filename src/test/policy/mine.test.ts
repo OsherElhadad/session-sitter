@@ -24,6 +24,7 @@ import {
   evidenceIds,
   fold,
   foldRecord,
+  isGreenSupport,
   labelSignal,
   nudge,
   readNewBytes,
@@ -143,6 +144,61 @@ describe('the signal', () => {
     expect(labelSignal({ model: 5, timeout: 1 })).toBe('timeout');
     expect(labelSignal({ model: 5 })).toBe('model');
     expect(labelSignal({})).toBe('repeat');
+  });
+
+  it('reads a correction-lane record as a repeat, at both of its outcomes', () => {
+    // Both `actor: 'correction'` returns cite a clause, so neither is ever a gap. Pinned because the
+    // actor arrived in the record after this module did, and an unrecognised actor falling through to
+    // the gap lane would mine a permission out of a denial.
+    expect(signalOf(record({
+      actor: 'correction', decision: 'allow', light: 'yellow', rewritten: true,
+      clause: 'built-in §force-push-to-lease',
+    }))).toBe('repeat');
+    expect(signalOf(record({
+      actor: 'correction', decision: 'deny', light: 'red', clause: 'practices §team-git-002',
+    }))).toBe('repeat');
+  });
+});
+
+// --------------------------------------------------------------------------- E3b and the rewrite lane
+
+describe('E3b — what earns a green support event', () => {
+  const corrected = (command: string, over: Partial<DecisionRecord> = {}) =>
+    bash(command, {
+      decision: 'allow', light: 'yellow', actor: 'correction', rewritten: true,
+      clause: 'built-in §force-push-to-lease', ...over,
+    });
+
+  it('a corrected allow earns none — it was allowed as a different command', () => {
+    // The hook records `input.tool_input` (the call *as asked*) while `decision.updatedInput` carries
+    // the rewrite that was actually approved. So this record says `--force` was allowed when what ran
+    // was `--force-with-lease`, and counting it would mine a green for the form the lane refused.
+    expect(isGreenSupport(corrected('git push --force origin main'))).toBe(false);
+    const cluster = clusterWindow([
+      corrected('git push --force origin main', { sessionId: 's-a', ts: '2026-08-25T09:00:00.000Z' }),
+      corrected('git push --force origin dev', { sessionId: 's-b', ts: '2026-08-27T09:00:00.000Z' }),
+      corrected('git push --force origin x', { sessionId: 's-c', ts: '2026-09-01T09:00:00.000Z' }),
+    ])[0];
+    expect(cluster.all).toHaveLength(3);
+    expect(cluster.support).toHaveLength(0);
+    expect(cluster.segments).toEqual([]);
+    // Three sessions across three days, and it still clears no bar, because the bars measure support.
+    expect(distanceFrom('user', supportOf(cluster)).clears).toBe(false);
+    expect(tierFor(supportOf(cluster), false).tier).toBeNull();
+  });
+
+  it('the persisted fold agrees with the live cluster about it', () => {
+    const shapes = emptyShapes();
+    foldRecord(shapes.shapes, corrected('git push --force origin main'));
+    const stat = Object.values(shapes.shapes)[0];
+    expect(stat.records).toBe(1);
+    expect(stat.support).toBe(0);
+  });
+
+  it('an ordinary allow still earns one', () => {
+    expect(isGreenSupport(bash('pnpm test'))).toBe(true);
+    expect(isGreenSupport(bash('pnpm test', { decision: 'deny' }))).toBe(false);
+    expect(isGreenSupport(bash('pnpm test', { decision: 'none' }))).toBe(false);
   });
 });
 

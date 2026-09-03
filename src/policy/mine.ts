@@ -143,6 +143,30 @@ export function segmentsOf(record: DecisionRecord): Segmented {
     : { segments: [command.trim()], confident: false };
 }
 
+/**
+ * Does this record license a green support event for its segments? Gate E3b.
+ *
+ * An `allow` is necessary and not sufficient, and the second condition is the one that is easy to
+ * miss. **A corrected call was allowed as a different command than the one recorded.** The hook
+ * stores `recordedCall(toolName, input.tool_input)` — the input *as asked* — while
+ * `decision.updatedInput` carries the rewrite that was actually approved, so a record with
+ * `rewritten: true` says `git push --force` was allowed when what ran was `--force-with-lease`.
+ * Counting it as support would mine a green clause for the dangerous form out of evidence that the
+ * lane refused it.
+ *
+ * Both correction rules that exist today (`force-push-to-lease`, `chmod-777-to-755`) happen to be on
+ * E8's never-widen list, so this closes a hole that is latent rather than live — but the correction
+ * lane exists to grow, and the third rule is not going to arrive with a matching E8 axis. Checking
+ * `rewritten` fixes it once, here, for every rule that will ever be added.
+ *
+ * ponytail: `rewritten` records are dropped from the support set rather than mined as the
+ * yellow-with-a-`fix` candidate `11-mine-v2.md` §4.7 wants, because a learned yellow does not load
+ * today. That is the same blocker as the gap lane, and lifting it lights both up at once.
+ */
+export function isGreenSupport(record: DecisionRecord): boolean {
+  return record.decision === 'allow' && !record.rewritten;
+}
+
 /** Which signal a record carries. `clause !== null` means a written rule already reached it. */
 export function signalOf(record: DecisionRecord): Signal {
   if (record.clause !== null && record.clause !== undefined) { return 'repeat'; }
@@ -394,7 +418,7 @@ export function foldRecord(
     // Gate E3b, applied at fold time so the number the floor reads is already the green support
     // count: the runtime combines constituents with deny-wins, so an `allow` on a compound line
     // means every constituent was allowed. A segment inside a denied compound was never approved.
-    if (record.decision === 'allow') { stat.support += 1; }
+    if (isGreenSupport(record)) { stat.support += 1; }
     addDistinct(stat.sessions, record.sessionId);
     addDistinct(stat.days, day);
     if (record.ts < stat.firstSeen) { stat.firstSeen = record.ts; }
@@ -732,7 +756,7 @@ export function clusterWindow(records: readonly DecisionRecord[]): Cluster[] {
       if (record.decision === 'deny' && record.clause) {
         cluster.contradictedBy = citedClauseId(record.clause) ?? record.clause;
       }
-      if (record.decision !== 'allow') { continue; }
+      if (!isGreenSupport(record)) { continue; }
       cluster.support.push(record);
       if (!record.call) { cluster.noCall += 1; }
       if (record.light && !cluster.lights.includes(record.light)) {

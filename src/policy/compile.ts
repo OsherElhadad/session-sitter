@@ -47,7 +47,7 @@ import { createHash } from 'crypto';
 import { KnowledgeEntry, TIER_ORDER, Tier, loadKnowledge } from '../supervisor/knowledge';
 import {
   ClauseOrigin, ClauseStatus, ClauseWeight, Finding, LearnedClauseFile, RATIONALE_MIN_CHARS,
-  rationaleOf, readLearnedDir,
+  didYouMean, rationaleOf, readLearnedDir,
 } from '../supervisor/learnedClauses';
 import { ClauseLevel, PatternSpec, clauseIdFor, patternSpecs } from './practices';
 import { dataDir } from '../hooks/paths';
@@ -367,6 +367,42 @@ function expiredMessage(clause: CompiledClause, input: CompileInput): string {
 }
 
 /**
+ * Every supersession cycle among accepted clauses, each rotated to start at its lowest id so the
+ * message reads the same on every run whatever order the corpus walk produced.
+ *
+ * ponytail: a plain DFS over a graph of a few hundred nodes. Colour-marking (`done`) is what keeps
+ * one ring from being reported once per member.
+ */
+function supersessionCycles(pairs: readonly { clause: CompiledClause }[]): CompiledClause[][] {
+  const accepted = new Map<string, CompiledClause>();
+  for (const { clause } of pairs) {
+    if (clause.status === 'accepted') { accepted.set(clause.id, clause); }
+  }
+
+  const rings: CompiledClause[][] = [];
+  const done = new Set<string>();
+  const walk = (id: string, path: string[]): void => {
+    const at = path.indexOf(id);
+    if (at !== -1) {
+      const ids = path.slice(at);
+      const lowest = ids.indexOf([...ids].sort()[0]);
+      const rotated = [...ids.slice(lowest), ...ids.slice(0, lowest)];
+      rings.push(rotated.map(i => accepted.get(i)).filter((c): c is CompiledClause => c !== undefined));
+      return;
+    }
+    if (done.has(id)) { return; }
+    const clause = accepted.get(id);
+    if (!clause) { return; }
+    for (const next of clause.supersedes) { walk(next, [...path, id]); }
+    done.add(id);
+  };
+  for (const { clause } of pairs) {
+    if (clause.status === 'accepted') { walk(clause.id, []); }
+  }
+  return rings;
+}
+
+/**
  * Compile the corpus, or refuse.
  *
  * There is no middle outcome, and that asymmetry against the *loader* is the design. A malformed
@@ -396,16 +432,63 @@ export function compilePolicy(input: CompileInput): CompileResult {
   ];
 
   // A clause named by an accepted clause's `supersedes` is out: the replacement is present, and the
-  // old text stays resolvable through the older artifact and the corpus.
-  const superseded = new Set<string>();
+  // old text stays resolvable through the older artifact and the corpus. Which superseder did it is
+  // kept, not just the fact — the warning below is the only record the removal happened, and a
+  // reviewer needs to know whose edit removed their clause.
+  // Only an accepted clause supersedes anything, and a clause still under review has said so
+  // nowhere. `declined`, `superseded` and `retired` are past tense — their `supersedes` is history,
+  // and warning about it on every compile forever would be noise.
+  for (const f of input.learned) {
+    if ((f.status === 'proposed' || f.status === 'audit') && f.supersedes.length > 0) {
+      warnings.push(`practices §${f.id} (${f.sourceFile ?? '?'}) is \`${f.status}\`, so `
+        + `\`supersedes: ${f.supersedes.join(', ')}\` has no effect until it is accepted`);
+    }
+  }
+
+  const corpusIds = new Set(pairs.map(p => p.clause.id));
+  const superseded = new Map<string, CompiledClause>();
   for (const { clause } of pairs) {
-    if (clause.status === 'accepted') { clause.supersedes.forEach(id => superseded.add(id)); }
+    if (clause.status !== 'accepted') { continue; }
+    for (const id of clause.supersedes) {
+      if (!corpusIds.has(id)) {
+        // An error rather than a warning, because the author's stated intent did not happen: the
+        // old clause keeps firing while its file's history says it was retired. Safe to refuse —
+        // a refused compile writes nothing, the runtime keeps serving the last good revision, and
+        // `policy block` is a deny-only channel outside the artifact, so no brake is lost.
+        const near = didYouMean(id, corpusIds);
+        errors.push(`${clause.citation} (${clause.source_file ?? '?'}): \`supersedes: ${id}\` names `
+          + 'no clause in the corpus, so it retires nothing and the old rule keeps firing'
+          + `${near === null ? '' : ` — did you mean ${JSON.stringify(near)}?`}`);
+        continue;
+      }
+      superseded.set(id, clause);
+    }
+  }
+
+  // Two clauses each claiming to replace the other is incoherent rather than a judgement call, and
+  // the loop below would drop *every* clause in the ring — a cycle of reds removes every one of
+  // those protections, and the per-clause warnings never say the ring annihilated. There is no
+  // correct artifact to emit, so this refuses, on the same terms as an unknown id: a refused compile
+  // writes nothing, the last good revision keeps serving, and `policy block` is outside the artifact.
+  for (const ring of supersessionCycles(pairs)) {
+    errors.push(`supersession cycle: ${ring.map(c => `${c.citation} (${c.source_file ?? '?'})`)
+      .join(' → ')} → ${ring[0].citation}. Every clause in the cycle would be dropped and none of `
+      + 'them replaced. Break it: one of these supersessions is the wrong direction');
   }
 
   const clauses: CompiledClause[] = [];
   const byId = new Map<string, CompiledClause>();
   for (const { clause, specs } of pairs) {
-    if (superseded.has(clause.id)) { continue; }
+    const supersededBy = superseded.get(clause.id);
+    if (supersededBy) {
+      // A warning, not an error: superseding is legitimate. Doing it invisibly is not — on the human
+      // lane there is no `status` field at all, so an edit to one file removes another file's entry
+      // from live policy with nothing in that file, or its history, saying so.
+      warnings.push(`${clause.citation} (${clause.source_file ?? '?'}) is superseded by `
+        + `${supersededBy.citation} (${supersededBy.source_file ?? '?'}) and is not in this `
+        + 'revision — nothing in its own file records that');
+      continue;
+    }
 
     // The highest-value check in this file. `practices.ts` drops an unparseable pattern so that one
     // bad clause cannot take a tier down at load time; the consequence is a red clause that

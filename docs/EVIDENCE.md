@@ -753,18 +753,28 @@ claude --plugin-dir "$TAP" --permission-mode manual   # driven interactively, se
 node "$OLDPWD/plugin/lib/audit/cli.js" digest --since 24h
 ```
 
+The transcripts committed under `docs/evidence/` are the artefact: each one came from a real
+`claude` session, not a reconstruction, and stands on its own whether or not the harness that
+drove it still exists.
+
 `setup.sh` writes only under `$ROOT` (default `/tmp/ss-e2e`) and needs credentials from the
 environment; it copies nothing out of `~/.claude`. The `claude` step above was not typed by
 hand — it was scripted through a small, ad hoc Python harness (not part of this repo, so
 nothing to `git checkout`), driven from a JSONL step file of `{"wait": "<substring>",
 "timeout": <seconds>}` / `{"send": "<text or \r>"}` / `{"sleep": <seconds>}` objects like the
-one in the walkthrough above. The harness forked `claude` under a real pty (Python's
-`pty.fork()`), fed it the scripted keystrokes, stripped ANSI escapes as it read the pty's
-output, and wrote both the raw byte stream and the de-ANSI'd transcript to disk. Reproducing
-a run means writing an equivalent driver — real terminal semantics matter here, since a plain
-pipe changes how an interactive CLI behaves, and Node's standard library has no pty
-allocator. `tap-plugin.sh` is optional and only needed to capture the hook's own stdin and
-stdout; the decisions are identical without it.
+one in the walkthrough above: each step waited for a substring to appear on screen, sent
+keystrokes, or slept. The harness forked `claude` under a real pty (Python's `pty.fork()`),
+fed it the scripted keystrokes, and read the pty's output as two parallel records: the raw
+byte stream, untouched, and a de-ANSI'd "clean" transcript with cursor-movement and color
+codes stripped for readability — the raw file is what to trust if the two ever disagree.
+
+Reproducing a run means writing an equivalent driver. Real terminal semantics matter here — a
+plain pipe changes how an interactive CLI behaves — and Node's standard library has no pty
+allocator, which is why this harness was never ported into the repo. A pty is still one
+command away on any Unix: the standard tool is `script`, but its flags are not the same
+between macOS/BSD and Linux (util-linux), so check `man script` on your platform rather than
+copying a one-liner verbatim. `tap-plugin.sh` is optional and only needed to capture the
+hook's own stdin and stdout; the decisions are identical without it.
 
 Two things to expect if you re-run this. Session ids, timestamps and costs will differ.
 And the model may not do what the prompt asks — in §5 it declined step 3 entirely — so a
