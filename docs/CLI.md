@@ -14,6 +14,7 @@ session-sitter status --watch 5       # the same, redrawing in place
 session-sitter log --denied --since 2h
 session-sitter digest                 # what your agents did last night
 session-sitter policy check
+session-sitter export --html > report.html   # one file you can send someone
 ```
 
 ---
@@ -25,6 +26,7 @@ session-sitter policy check
 - [`log`](#log)
 - [`digest`](#digest)
 - [`policy check`](#policy-check)
+- [`export`](#export)
 - [Where state is read from](#where-state-is-read-from)
 - [The `--json` contracts](#the---json-contracts)
 
@@ -297,6 +299,100 @@ absent, `policy check` says so and exits 1 rather than guessing.
 `--replay` needs a decision function from that module. Decisions with no recorded tool input are
 counted as **skipped**, never as unchanged — a replay that quietly ignores half the trail would
 report a reassuring number about the wrong half.
+
+---
+
+## `export`
+
+The decision trail, as ndjson or as one self-contained HTML file. **The app never pushes** — `export`
+writes to stdout and whatever you chose reads it, so there is no exporter, no agent, no SDK, and
+nothing that has to keep in step with somebody else's schema.
+
+```
+session-sitter export --jsonline [options]
+session-sitter export --html [options] > report.html
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--jsonline` | — | newline-delimited JSON on stdout, one object per decision |
+| `--html` | — | one self-contained HTML snapshot on stdout |
+| `--scope local\|team` | `local` | `team` applies the allow-list below |
+| `--since WHEN` | all | `2h`, `7d`, `2026-08-30`, or an ISO instant |
+| `--limit N` | 2000 | keep the newest N records |
+
+Exactly one of `--jsonline` / `--html` is required. Exit `1` when there is no trail to read, `2` on a
+bad flag.
+
+### `--jsonline`, and why the shipper is `curl`
+
+A `DecisionRecord` already *is* ndjson with an ISO `ts`, so nothing needs converting:
+
+```bash
+# once — a 10.4 MB zero-config binary, no installer, no account
+curl -sL https://github.com/VictoriaMetrics/VictoriaLogs/releases/download/v1.52.0/victoria-logs-darwin-arm64-v1.52.0.tar.gz | tar xz
+
+# -httpListenAddr is NOT optional. The default binds every interface, which on a café
+# network publishes your audit trail to every device on it.
+./victoria-logs -storageDataPath=./vlogs -httpListenAddr=127.0.0.1:9428 -retentionPeriod=90d
+
+session-sitter export --jsonline --since 7d \
+  | curl -s -X POST --data-binary @- \
+    '127.0.0.1:9428/insert/jsonline?_time_field=ts&_msg_field=note,inputSummary&_stream_fields=tool,actor'
+
+open http://127.0.0.1:9428/select/vmui
+```
+
+Nothing ships automatically. There is no `SessionEnd` egress: this is a command you run, or a cron
+you wrote.
+
+### `--html` is a report, not a live view
+
+One file, opened over `file://`, mailed, or committed to a private repo. No CDN, no chart library, no
+web fonts, no remote images — offline `file://` and the webview CSP both forbid remote fetches, so the
+only chart is an inline `<svg>` and the bars are CSS gradients in ordinary tables.
+
+A stale page that looks live is worse than no page, so it says what it is in seven places: the title
+and heading end in **"— snapshot"** and never say the other word; a header band carries the generation
+instant, the window as two **absolute** instants, the revisions, the record count and whether
+`--limit` truncated it, and the version and host; **the regeneration command ships verbatim inside the
+thing that goes stale**; there are no relative timestamps anywhere, because "3 minutes ago" is exactly
+the lie a static file tells; a few lines of script compare your clock to the embedded generation
+instant and paint a band past 24 h, which is the only staleness signal that can be true at *view*
+time; there are no live affordances at all — no meta refresh, no poll, no heartbeat; and a cell
+nothing recorded prints **"not recorded"**, never `0`.
+
+What it therefore cannot do: tail, ad-hoc query, roll up across machines, alert. Those are why you
+pipe `--jsonline` into something instead, and the header band says which ones you are missing.
+
+### `--scope=team`: projection, not redaction
+
+**Masking is not anonymisation.** `redactSecrets` matches credential *shapes*. It cannot know that
+`curl https://payments-internal.example/v2/…` names a customer, that a path under `customers/` names a
+deal, or that a `note` quotes a sentence somebody typed about an unannounced product.
+
+So the team scope is an explicit allow-list that **drops keys**, never blanks them — a dashboard
+filter is a display choice over data that already left the machine, and a blanked key is a column
+somebody later fills in.
+
+| Field | `local` (default) | `team` |
+|---|---|---|
+| `ts`, `latencyMs`, `tool`, `decision`, `light`, `actor`, `rewritten` | as written | as written |
+| `clause`, `rev`, `policySource` | as written | as written — a clause is the team's own written practice, the least sensitive thing in the record |
+| `telemetry` token counts | as written | as written — counts, never content |
+| `sessionId`, `cwd` | raw | HMAC under a key generated once per machine (`.export-key`, mode 0600): correlatable *within* a stream, not back to a repository |
+| `inputSummary` | as written (already redacted) | **dropped**, replaced by `toolShape` — `Bash git push`, never the command line — plus `inputFingerprint` |
+| `note`, `call` (`original_input` / `updated_input`), `ask`, `session_name`, assessment prose | as written | **dropped** |
+
+**There is no flag that ships the excluded set**, and because the projection drops keys the ship
+command above is **byte-identical in both scopes**: `_msg_field=note,inputSummary` simply finds
+neither field in a team payload and falls back. That is the design, not a coincidence — there is no
+scope-aware branch downstream, no second code path to get wrong, and no toggle anyone can flip. A
+command that is safe in both scopes cannot be misconfigured into unsafety; a `--redact` toggle can be,
+and eventually is.
+
+A team log store is a **new system of record with its own retention**, not a mirror. Set
+`-retentionPeriod` explicitly and bind it to `127.0.0.1`.
 
 ---
 
