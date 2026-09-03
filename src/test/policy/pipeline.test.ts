@@ -20,6 +20,7 @@ import type { DecisionRecord } from '../../audit/trail';
 import type { PluginSettings } from '../../hooks/settings';
 import { parsePractices } from '../../policy/practices';
 import { readShapes } from '../../policy/mine';
+import { parseLearnedClause } from '../../supervisor/learnedClauses';
 import {
   RunLine, accumulate, acquireLock, appendRunLine, exitReasonFor, headlineFor, pipelinePath,
   propose, recentRuns, runFingerprint, stalenessLine,
@@ -499,5 +500,69 @@ describe('the surfaces a human reads', () => {
     const { line } = run(r);
     appendRunLine(line, r.env);
     expect(lines(r).at(-1)!.runId).toBe(line.runId);
+  });
+});
+
+// --------------------------------------------------------------------------- the gap lane (§4.7)
+
+/**
+ * `decision: 'none'` in, `level: yellow` out.
+ *
+ * A gap record is a call this layer never reached — observe mode, or nothing matched in a session
+ * that could not prompt. It is evidence in neither direction, so the clause mined from it may not
+ * permit anything: it is a yellow with no fix, which withholds an allow and asks a human instead.
+ */
+describe('the gap lane proposes a narrowing yellow, never a green', () => {
+  const gap = (command: string, over: Partial<DecisionRecord> = {}): DecisionRecord =>
+    bash(command, { decision: 'none', light: null, actor: 'timeout', clause: null, ...over });
+
+  /** Three occurrences, three sessions, two days — the user bar, and nothing over it. */
+  const GAPS: DecisionRecord[] = [
+    gap('pnpm lint --fix', { sessionId: 'g-A', ts: '2026-08-25T09:00:00.000Z' }),
+    gap('pnpm lint packages', { sessionId: 'g-B', ts: '2026-08-26T09:00:00.000Z' }),
+    gap('pnpm lint', { sessionId: 'g-C', ts: '2026-08-26T11:00:00.000Z' }),
+  ];
+
+  it('writes a yellow clause with no fix, and the file loads', () => {
+    const r = rig(GAPS);
+    const { line, written } = run(r);
+    expect(line.error).toBeNull();
+    expect(written).toHaveLength(1);
+    const proposed = line.proposals.clauses[0];
+    expect(proposed.level).toBe('yellow');
+    expect(proposed.id).toMatch(/^gap-ask-/);
+
+    // The clause the run wrote has to survive the loader that used to refuse this level outright,
+    // and it has to come back as a yellow with no fix — the shape that has a rung.
+    const text = fs.readFileSync(path.join(r.corpus, written[0]), 'utf8');
+    const parsed = parseLearnedClause(text, 'user', written[0]);
+    expect(parsed.findings.filter(f => f.severity === 'error')).toEqual([]);
+    expect(parsed.clause?.level).toBe('yellow');
+    expect(parsed.clause?.fix).toBeNull();
+    expect(parsed.clause?.status).toBe('proposed');
+    expect(text).toContain('does not permit anything and cannot');
+  });
+
+  it('proposes a green, not a yellow, when the same shape is allowed rather than unreached', () => {
+    // The same commands, the same counts, one field different. A shape with real allows belongs to
+    // the green lane; a gap-lane yellow on it would be the corpus saying "allowed" and "ask about
+    // this" about one shape in one commit.
+    const allowed = GAPS.map(r => ({ ...r, decision: 'allow' as const, light: 'green' }));
+    const { line } = run(rig(allowed));
+    // Asserted positively as well, so "no yellow" cannot pass by proposing nothing at all.
+    expect(line.proposals.clauses.map(c => c.level)).toEqual(['green']);
+  });
+
+  it('does not emit a yellow for a shape the green lane already claimed', () => {
+    // Both lanes clear the floor on `pnpm lint` here. Exactly one clause is written, and it is the
+    // green: it has the stronger bar (an `allow` on every supporting record).
+    const mixed = [...GAPS, ...GAPS.map((r, i) => ({
+      ...r, decision: 'allow' as const, light: 'green', sessionId: `h-${i}`,
+      ts: `2026-08-2${7 + i}T09:00:00.000Z`,
+    }))];
+    const { line } = run(rig(mixed));
+    const shapes = line.proposals.clauses.map(c => c.id);
+    expect(shapes.filter(id => id.startsWith('gap-ask-'))).toEqual([]);
+    expect(shapes.filter(id => id.startsWith('green-repeat-'))).toHaveLength(1);
   });
 });

@@ -27,8 +27,8 @@ unmerged `pr/policy-compile` branch: `src/policy/practices.ts`, `src/policy/cli.
    pipeline's write surface is an *enforced* invariant (§3.3.2): every write goes to
    `learned/<id>.md` through one path-producing function, and anything else is a hard error that
    writes nothing.
-3. **Precedence is a four-rung ladder over clauses: human red → human green → learned red → learned
-   green.** Humans decide first and completely; machine clauses speak only where humans are silent.
+3. **Precedence is a five-rung ladder over clauses: human red → human green → learned red →
+   learned yellow (no `fix`) → learned green.** Humans decide first and completely; machine clauses speak only where humans are silent.
    The surprising rung — a human green beating a learned red — is deliberate and defended in §3.3.1:
    a machine proposal overrides a human's explicit practice in *neither* direction. This is a
    deterministic evaluation order, not prose in a doc.
@@ -456,7 +456,17 @@ the learned file — a normal edit, in a normal PR. `status: accepted` on a lear
 human approved this machine clause*, which is a strictly weaker statement, and the ladder treats it
 as such.
 
-### 3.3 Precedence: a four-rung ladder
+### 3.3 Precedence: a five-rung ladder
+
+> **Amended by `pr/learned-yellow`.** This section was written when only red and green were
+> enforceable for a learned clause, and the loader refused every other level for the reason 3.3 gives.
+> A fifth rung now sits between 3c and 3d — **learned yellow with no `fix`** — whose only effect is to
+> *withhold* an allow a learned green would have granted and send the call to a human. It cannot deny
+> and it cannot permit, so both properties below still hold unchanged. A yellow *with* a `fix` has no
+> rung at all and cannot reach `status: accepted`: nothing in the runtime applies a clause `fix`, so
+> an accepted one would be matched and never applied. `orange` remains unenforceable. See
+> `learnedClauses.ts`'s `LADDER_RUNGS` and `checkFix` for the current rules.
+
 
 The existing hook ladder (`permissionRequest.ts:19-30`) evaluates written red clauses before written
 green ones, across all tiers, because "a deterministic matcher has to break the tie somehow, and
@@ -469,6 +479,16 @@ allowed. So rungs 3 and 4 of the existing ladder become four:
 3b. human   green — any tier, narrower first   → allow, citing the clause
 3c. learned red   — any tier, narrower first   → deny, citing the clause
 3d. learned green — any tier, narrower first   → allow, citing the clause
+```
+
+As amended, with the fifth rung in place:
+
+```
+3a. human   red                   → deny, citing the clause
+3b. human   green                 → allow, citing the clause
+3c. learned red                   → deny, citing the clause
+3d. learned yellow, no `fix`      → withhold the allow; the call goes on to a human
+3e. learned green                 → allow, citing the clause
 ```
 
 Two properties fall out, and both are testable:

@@ -22,7 +22,9 @@
  *     clauses before it is returned, so a rewrite can never smuggle a denied call through.
  *  3. **A written red clause** matches. Deny, citing the clause.
  *  4. **A written green clause** matches. Allow, citing the clause. This is what makes an overnight
- *     run survivable: the standing policy that says what the agent may do without asking.
+ *     run survivable: the standing policy that says what the agent may do without asking — unless a
+ *     yellow clause of at least equal authority also matches, in which case the allow is *withheld*
+ *     and the call carries on down the ladder to a human. See {@link withholdingYellow}.
  *  5. **The engine's deterministic red table** (`preClassify` RED). Deny.
  *  6. **The classifier**, with the practices as context — only when explicitly enabled.
  *  7. **Fail closed.** Deny, saying plainly that the supervisor was unreachable.
@@ -171,6 +173,7 @@ function clauseFromCompiled(clause) {
             .map(p => (0, practices_1.compileMatcher)(p.raw))
             .filter((p) => p !== null),
         sourceFile: clause.source_file,
+        origin: clause.origin,
     };
 }
 /**
@@ -184,7 +187,7 @@ function clauseFromCompiled(clause) {
  * artifact so they *can* be matched, but they must not change an outcome.
  *
  * TODO: record their would-be verdicts. `learnedClauses.ts` already has `auditVerdicts()`; wiring it
- * needs `decideOne` replaced by the four-rung `decideByLadder`, which belongs with the governance
+ * needs `decideOne` replaced by the five-rung `decideByLadder`, which belongs with the governance
  * work rather than here. Until then an audit trial records nothing, and `accept --audit` should say so.
  */
 async function loadPolicyInputs(settings) {
@@ -329,8 +332,9 @@ function decideOne(toolName, toolInput, clauses) {
     // 4. A written green clause — the standing policy that makes an overnight run survivable.
     // Deliberately the identity haystack: a green clause must never be satisfied by the bytes a
     // Write happens to contain. See haystackFor.
-    const green = (0, practices_1.findMatchingClause)(clauses, (0, session_1.haystackFor)(toolName, toolInput, 'identity-only'), 'green');
-    if (green) {
+    const identityHay = (0, session_1.haystackFor)(toolName, toolInput, 'identity-only');
+    const green = (0, practices_1.findMatchingClause)(clauses, identityHay, 'green');
+    if (green && withholdingYellow(clauses, identityHay, green) === null) {
         return {
             decision: { behavior: 'allow' },
             light: models_1.TrafficLight.GREEN,
@@ -341,6 +345,13 @@ function decideOne(toolName, toolInput, clauses) {
             allowedBy: green,
         };
     }
+    // A withheld green falls through to rung 5 and then to ambiguity. Nothing is granted and nothing
+    // is denied here: the call goes to the classifier or to the fail-closed deny, which is where a
+    // "somebody should look at this" belongs.
+    //
+    // ponytail: the withholding clause is not named in the decision record, because there is no
+    // "escalated by" field on a Verdict and adding one is plumbing through three modules for a line of
+    // prose. Upgrade path when it matters: carry the clause on the ambiguity instead of returning null.
     // 5. The engine's built-in deterministic red table.
     if ((0, tiers_1.preClassify)(session) === models_1.TrafficLight.RED) {
         return {
@@ -358,6 +369,34 @@ function decideOne(toolName, toolInput, clauses) {
         };
     }
     return null;
+}
+/**
+ * The yellow clause that withholds this green's allow, or null.
+ *
+ * A yellow is "a human should look at this". It cannot deny — that is red — and it must not allow,
+ * so the only thing it can do to a decision is *take an allow away*, which is why it is checked here
+ * and nowhere else. The call then continues down the ladder to rung 5 and on to the classifier or
+ * the fail-closed deny, so the worst a wrong yellow costs is friction: a prompt that should not have
+ * appeared, visible immediately, reversible by deleting the clause.
+ *
+ * The origin comparison is the same rule the whole ladder rests on, applied here in one line: a
+ * yellow withholds a green only when it is *at least as authoritative*. So a human yellow withholds
+ * a human green and a learned green, and a **learned yellow withholds only a learned green** — it
+ * can never take away a permission a human wrote, which is the direction that would let one bad
+ * extraction stop a team's work overnight.
+ *
+ * Note what is deliberately not checked: whether the yellow carries a `fix`. A fix-carrying clause
+ * cannot be `accepted` (F3, `checkFix`) and only `accepted` clauses reach this function, so the
+ * state does not exist — and writing a branch for a state that cannot occur is how two rules got
+ * written against impossible inputs this week.
+ */
+function withholdingYellow(clauses, haystack, green) {
+    const yellow = (0, practices_1.findMatchingClause)(clauses, haystack, 'yellow');
+    if (yellow === null) {
+        return null;
+    }
+    const rank = (c) => (c.origin === 'learned' ? 1 : 0);
+    return rank(yellow) <= rank(green) ? yellow : null;
 }
 /**
  * Combine one verdict per constituent into the verdict for the whole command line.

@@ -84,7 +84,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.THRESHOLDS = exports.SHAPES_VERSION = exports.TAIL_BYTES = exports.DISTINCT_CAP = exports.SIGNALS = exports.SHELL_TOOLS = void 0;
+exports.NO_VERDICT = exports.ALLOWED = exports.THRESHOLDS = exports.SHAPES_VERSION = exports.TAIL_BYTES = exports.DISTINCT_CAP = exports.SIGNALS = exports.SHELL_TOOLS = void 0;
 exports.canonicalSegment = canonicalSegment;
 exports.shapeHash = shapeHash;
 exports.clusterKey = clusterKey;
@@ -598,8 +598,19 @@ function nudge(crossed) {
 const LABEL = {
     timeout: 'fail-closed', gap: 'gap', model: 'classifier-decided', repeat: 'repeat',
 };
+/** The green lane (E3b). */
+const ALLOWED = r => r.decision === 'allow';
+exports.ALLOWED = ALLOWED;
+/** The gap lane (§4.7): the hook returned no verdict, so nothing judged this call either way. */
+const NO_VERDICT = r => r.decision === 'none';
+exports.NO_VERDICT = NO_VERDICT;
 /**
  * Cluster a window of records by shape.
+ *
+ * `supports` selects the lane (see {@link SupportTest}). Everything derived from *every* record on
+ * the shape — the signal, `contradictedBy`, the fail-closed and gap counters, E3a's `unconfident` —
+ * is unaffected by it; only `support`, `segments`, `noCall` and `lights` follow the predicate, which
+ * is exactly the set the emission gates read as "the evidence".
  *
  * The `signal` label is derived from the records rather than being part of the key. `11-mine-v2.md`
  * gives two readings of this — §4.2 makes the signal part of the cluster key, while §11.2's own
@@ -610,7 +621,7 @@ const LABEL = {
  * requirement is still met — a `none` is never folded into a `deny`; the two are counted separately
  * and a `deny` reaches a green candidate only as a contradiction (E6).
  */
-function clusterWindow(records) {
+function clusterWindow(records, supports = exports.ALLOWED) {
     const out = new Map();
     for (const record of records) {
         const { segments, confident } = segmentsOf(record);
@@ -653,7 +664,7 @@ function clusterWindow(records) {
             if (record.decision === 'deny' && record.clause) {
                 cluster.contradictedBy = (0, replay_1.citedClauseId)(record.clause) ?? record.clause;
             }
-            if (record.decision !== 'allow') {
+            if (!supports(record)) {
                 continue;
             }
             cluster.support.push(record);

@@ -299,10 +299,20 @@ function propose(opts) {
             line.error = calibration.message;
             return finish(line, written, 'calibration-failed', started, release, env, 'calibration failed — no number in this run can be trusted, so nothing was proposed');
         }
-        const clusters = (0, mine_1.clusterWindow)(records.filter(r => !permissionRequest_1.EXEMPT_TOOLS.has(r.tool)));
+        const usable = records.filter(r => !permissionRequest_1.EXEMPT_TOOLS.has(r.tool));
+        const clusters = (0, mine_1.clusterWindow)(usable);
         line.clusters.total = clusters.length;
         line.clusters.contradicted = clusters.filter(c => c.contradictedBy !== null).length;
-        const candidates = collectCandidates(clusters, line, opts);
+        // Two lanes, two support sets, one clustering pass each (§4.7). The shapes are identical — every
+        // record lands in every shape it touches either way — so `clusters.total` is the same number for
+        // both and is not double-counted; what differs is which records count as *evidence*.
+        const greenLane = collectCandidates(clusters, line, opts, 'green');
+        // A green already says "this is allowed"; a yellow on the same shape would say "ask about it"
+        // in the same run, which is a corpus contradicting itself in one commit. The green wins: it is
+        // the lane with the stronger evidence bar (an `allow` on every supporting record).
+        const claimed = new Set(greenLane.map(c => c.cluster));
+        const gapLane = collectCandidates((0, mine_1.clusterWindow)(usable, mine_1.NO_VERDICT).filter(c => !claimed.has(c.key)), line, opts, 'gap');
+        const candidates = [...greenLane, ...gapLane];
         line.candidates.considered = candidates.length;
         const admitted = validate(candidates, records, opts.corpus, line);
         const capped = admitted.slice(0, propose_1.MAX_ADDITIONS);
@@ -437,7 +447,7 @@ function describeWindow(line, records, env) {
     }
 }
 // --------------------------------------------------------------------------- gating and validation
-function collectCandidates(clusters, line, opts) {
+function collectCandidates(clusters, line, opts, lane = 'green') {
     const out = [];
     const proseOnly = new Set(['no-matcher-shape', 'prefix-too-short']);
     for (const cluster of clusters) {
@@ -448,6 +458,7 @@ function collectCandidates(clusters, line, opts) {
             line.belowFloor.push({ cluster: cluster.key, distances });
         }
         const result = (0, propose_1.gate)(cluster, support, tier, declinedTeam, {
+            lane,
             projectSlug: opts.settings.project,
             userSlug: opts.settings.user ?? '',
             windowRotated: line.window.rotated,

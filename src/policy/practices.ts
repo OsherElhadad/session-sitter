@@ -83,6 +83,16 @@ export interface Clause {
   /** Compiled matchers from the `Match:` line. Empty means "not deterministically matchable". */
   patterns: ClauseMatcher[];
   sourceFile: string | null;
+  /**
+   * Who wrote the clause — `learnedClauses.ts`'s `ClauseOrigin`, spelled out rather than imported so
+   * the corpus loader keeps its one-way dependency on `knowledge.ts`.
+   *
+   * **Absent means `human`, and that default is the safe one.** Everything `parsePractices` reads is
+   * `bottom-line.md`, which is the human lane by definition; only `clauseFromCompiled` sets this,
+   * and it always sets it explicitly. The one consumer is the yellow rung, which uses it to make
+   * sure a machine-proposed narrowing can never withhold a human's own green.
+   */
+  origin?: 'human' | 'learned';
 }
 
 /** Pulled off the front of a body line: `Match: a, b, c`. */

@@ -93,7 +93,7 @@ const WEIGHT_RANK = { high: 0, medium: 1, low: 2 };
  * replayable.
  *
  * `origin` leads, and it leads for a reading reason rather than a semantic one. This is rendering
- * order: it changes nothing about precedence, which the four-rung ladder decides. But a reviewer who
+ * order: it changes nothing about precedence, which the five-rung ladder decides. But a reviewer who
  * sees a machine clause listed above a human's will reasonably conclude precedence is broken. With
  * origin first, the rendered order visibly agrees with the ladder — a machine proposal never appears
  * to outrank a human's explicit practice.
@@ -129,7 +129,12 @@ function selectClauses(clauses, opts) {
             // An expiry date may prune the prompt; it may never disarm a block. A stale red that still
             // fires is loud and self-reporting; a red that silently stopped firing is invisible until the
             // incident it was written to prevent. Disarming one is a human act with a diff.
-            if (clause.level === 'red' || clause.level === 'orange') {
+            // `yellow` is here for the same reason red and orange are: an accepted yellow is always a
+            // *narrowing* — it carries no fix, because a fix-carrying clause cannot be accepted (F3,
+            // `learnedClauses.ts`'s `checkFix`) — and its whole effect is to withhold an allow. Letting an
+            // expiry date remove it silently turns "ask a human about this" back into "allowed" with no
+            // diff and nothing said, which is the failure this branch exists to prevent.
+            if (clause.level === 'red' || clause.level === 'orange' || clause.level === 'yellow') {
                 expiredSafety.push(clause.id);
                 dropped['expired-safety']++;
             }

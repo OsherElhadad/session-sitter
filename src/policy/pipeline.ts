@@ -36,11 +36,11 @@ import { PluginSettings } from '../hooks/settings';
 import { STALE_LOCK_MS } from '../supervisor/store';
 import { AblationReport } from './ablate';
 import {
-  BarDistance, Cluster, FoldResult, Signal, clusterWindow, fold, nudge, pipelineDir,
+  BarDistance, Cluster, FoldResult, NO_VERDICT, Signal, clusterWindow, fold, nudge, pipelineDir,
   supportOf, tierFor, writeShapes,
 } from './mine';
 import {
-  Candidate, EMISSION_RULE, MAX_ADDITIONS, Refusal, RefusalReason, RetirementPlan,
+  Candidate, EMISSION_RULE, Lane, MAX_ADDITIONS, Refusal, RefusalReason, RetirementPlan,
   gate, planRetirements, renderClause, writeClause,
 } from './propose';
 import { CEILING_PER_TIER } from './ablate';
@@ -373,11 +373,22 @@ export function propose(opts: ProposeOptions): ProposeResult {
         'calibration failed — no number in this run can be trusted, so nothing was proposed');
     }
 
-    const clusters = clusterWindow(records.filter(r => !EXEMPT_TOOLS.has(r.tool)));
+    const usable = records.filter(r => !EXEMPT_TOOLS.has(r.tool));
+    const clusters = clusterWindow(usable);
     line.clusters.total = clusters.length;
     line.clusters.contradicted = clusters.filter(c => c.contradictedBy !== null).length;
 
-    const candidates = collectCandidates(clusters, line, opts);
+    // Two lanes, two support sets, one clustering pass each (§4.7). The shapes are identical — every
+    // record lands in every shape it touches either way — so `clusters.total` is the same number for
+    // both and is not double-counted; what differs is which records count as *evidence*.
+    const greenLane = collectCandidates(clusters, line, opts, 'green');
+    // A green already says "this is allowed"; a yellow on the same shape would say "ask about it"
+    // in the same run, which is a corpus contradicting itself in one commit. The green wins: it is
+    // the lane with the stronger evidence bar (an `allow` on every supporting record).
+    const claimed = new Set(greenLane.map(c => c.cluster));
+    const gapLane = collectCandidates(
+      clusterWindow(usable, NO_VERDICT).filter(c => !claimed.has(c.key)), line, opts, 'gap');
+    const candidates = [...greenLane, ...gapLane];
     line.candidates.considered = candidates.length;
 
     const admitted = validate(candidates, records, opts.corpus, line);
@@ -512,7 +523,7 @@ function describeWindow(line: RunLine, records: DecisionRecord[], env?: NodeJS.P
 // --------------------------------------------------------------------------- gating and validation
 
 function collectCandidates(
-  clusters: readonly Cluster[], line: RunLine, opts: ProposeOptions,
+  clusters: readonly Cluster[], line: RunLine, opts: ProposeOptions, lane: Lane = 'green',
 ): Candidate[] {
   const out: Candidate[] = [];
   const proseOnly = new Set<RefusalReason>(['no-matcher-shape', 'prefix-too-short']);
@@ -524,6 +535,7 @@ function collectCandidates(
       line.belowFloor.push({ cluster: cluster.key, distances });
     }
     const result = gate(cluster, support, tier, declinedTeam, {
+      lane,
       projectSlug: opts.settings.project,
       userSlug: opts.settings.user ?? '',
       windowRotated: line.window.rotated,

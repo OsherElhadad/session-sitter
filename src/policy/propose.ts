@@ -77,7 +77,7 @@ import { ReplayCandidate } from './replay';
  * suppression permanence: bump the tag and every `declined` file stops blocking its candidate.
  * Permanence is worth more, so the version informs a reader without moving a filename.
  */
-export const EMISSION_RULE = 1;
+export const EMISSION_RULE = 2;
 
 /** Reviewer-fatigue caps, not runtime caps. A run proposing 40 clauses gets ignored. */
 export const MAX_ADDITIONS = 5;
@@ -223,7 +223,12 @@ export interface Candidate extends ReplayCandidate {
   kind: string;
   slug: string;
   shape12: string;
-  level: 'green';
+  /**
+   * `green` from the fail-closed/repeat lane, `yellow` from the gap lane (§4.7). Never `red` or
+   * `orange` — proposing a safety clause from the *absence* of one manufactures a deny from silence
+   * — and never a yellow with a `fix`; see {@link gate}.
+   */
+  level: 'green' | 'yellow';
   tier: Tier;
   scope: string;
   match: string[];
@@ -258,7 +263,16 @@ export function candidateId(kind: string, slug: string, shape12: string): string
   return id;
 }
 
+/**
+ * Which lane a cluster is being gated for. The lane is the caller's, not derived here, because it is
+ * fixed by *which support set the cluster was built over* (`clusterWindow`'s `SupportTest`) and
+ * re-deriving it from the counters would let the two disagree.
+ */
+export type Lane = 'green' | 'gap';
+
 export interface GateOptions {
+  /** Which lane (see {@link Lane}). Defaults to the green lane, which is the pre-existing behaviour. */
+  lane?: Lane;
   /** The project slug, when one is configured. Without it no candidate can be project-scoped. */
   projectSlug: string | null;
   userSlug: string;
@@ -280,17 +294,25 @@ export interface GateResult {
 /**
  * Run every gate over one cluster. A failure refuses the **whole cluster** and writes nothing.
  *
- * The level is always `green` and never `red`, `orange` or `yellow`, and the reasons are different
- * for each:
+ * The level follows the lane, and the two the lanes cannot produce are the interesting ones:
  *
+ *  - **`green`, from the fail-closed / classifier-decided lane.** A widening: it asks for a
+ *    permission, and it goes to the full widening bar.
+ *  - **`yellow` with no fix, from the gap lane** (§4.7). A narrowing: its whole effect is to withhold
+ *    an allow a *learned* green would have granted and send the call to a human
+ *    (`permissionRequest.ts`'s `withholdingYellow`). It licenses nothing even if accepted carelessly.
  *  - **Never red or orange**, because proposing a safety clause from the *absence* of one manufactures
- *    a deny from silence.
- *  - **Never yellow**, and this is a departure from `11-mine-v2.md` §4.7 forced by the code:
- *    `parseLearnedClause` raises an *error* finding for any learned clause whose level is not red or
- *    green ("the ladder only has red/green rungs"), and a file with an error finding does not load.
- *    So a `level: yellow` proposal would be a file the loader rejects — written, unreadable, and
- *    counted as output. §4.7 routes gaps there; they are reported in the run line instead. See the
- *    PR body for the full argument.
+ *    a deny from silence. `orange` additionally has no rung and does not load (`checkFix`'s sibling
+ *    check in `parseLearnedClause`).
+ *  - **Never a yellow with a `fix`.** §4.7 routes `rewritten: true` records here, and the lane is
+ *    deliberately not built. Two independent reasons, either one sufficient: (1) the only rewrite a
+ *    learned clause may legally carry is one `applyCorrection` already performs (F2, `checkFix`) —
+ *    and `applyCorrection` runs at ladder rung 2, *before* any clause is consulted, so such a clause
+ *    can never change a decision; it is inert by construction, not by accident. (2) Every command
+ *    the shipped correction table rewrites is on the E8 never-widen list — `git push --force` hits
+ *    `force-push`, `chmod 777` hits `chmod`, and `--force-with-lease` still contains `--force` so
+ *    the rewritten form hits it too. Making the lane reachable means repealing E8 for exactly the
+ *    axes E8 exists for. Neither is worth doing; see the PR body.
  */
 export function gate(
   cluster: Cluster, support: Support, tier: 'user' | 'project' | null,
@@ -300,6 +322,7 @@ export function gate(
     candidate: null, refusal: { cluster: cluster.key, why, detail }, declinedTeam,
     alreadyStated: false,
   });
+  const lane: Lane = opts.lane ?? 'green';
 
   // E3a — an unconfident split refuses the whole cluster, not just the record. Per-record skipping
   // would let a cluster be assembled while silently dropping the one line we could not parse.
@@ -330,7 +353,12 @@ export function gate(
   // The gap that justifies asking for a permission at all: a record where policy did not reach the
   // call. Without one there is nothing for the clause to close, and `replay.ts`'s INERT finding
   // would reject it anyway — refusing here says so in the ledger instead of in a replay report.
-  if (cluster.failClosed === 0 && cluster.gaps === 0 && cluster.modelDecided === 0) {
+  //
+  // The gap lane skips it because it cannot fail it: its support set *is* the `decision: 'none'`
+  // records, so a non-empty support set is a non-empty gap. Running the check anyway would be a
+  // branch that can only ever be true, which is the kind of thing that reads as a real guard later.
+  if (lane === 'green'
+    && cluster.failClosed === 0 && cluster.gaps === 0 && cluster.modelDecided === 0) {
     return refuse('no-gap');
   }
 
@@ -342,7 +370,9 @@ export function gate(
   const literal = commonLiteral(cluster.segments);
   if (literal === null) { return refuse('prefix-too-short'); }
 
-  const kind = 'green-repeat';
+  // The kind is part of the id, so a shape that clears the floor in both lanes gets two distinct,
+  // dateless ids and one lane's `declined` file cannot suppress the other's candidate.
+  const kind = lane === 'gap' ? 'gap-ask' : 'green-repeat';
   const slug = slugOf(cluster.segment, cluster.tool);
   const scope = tier === 'project' ? (opts.projectSlug ?? '') : opts.userSlug;
   if (!scope) { return refuse('below-floor', 'no slug configured for the chosen tier'); }
@@ -354,10 +384,13 @@ export function gate(
       kind,
       slug,
       shape12: cluster.shape12,
-      level: 'green',
+      level: lane === 'gap' ? 'yellow' : 'green',
+      // Stated rather than left undefined: `directionOf` reads it, and a gap-lane yellow is a
+      // narrowing precisely *because* there is no fix. The value is the load-bearing part.
+      hasFix: false,
       tier,
       scope,
-      title: titleFor(literal),
+      title: titleFor(literal, lane),
       match: [commandMatcher(literal)],
       literal,
       cluster: cluster.key,
@@ -385,8 +418,10 @@ export function gate(
   };
 }
 
-function titleFor(literal: string): string {
-  return `Allow \`${literal}\` without a classifier round-trip`;
+function titleFor(literal: string, lane: Lane): string {
+  return lane === 'gap'
+    ? `Ask a human about \`${literal}\` rather than letting a learned green settle it`
+    : `Allow \`${literal}\` without a classifier round-trip`;
 }
 
 // --------------------------------------------------------------------------- rendering
@@ -428,7 +463,7 @@ export function renderClause(candidate: Candidate, today: string): string {
     `| level | ${candidate.level} |`,
     `| scope | ${TIER_DIR[candidate.tier]}/${candidate.scope} |`,
     `| added | ${today} |`,
-    `| tags | learned, ${candidate.signal}, latency |`,
+    `| tags | learned, ${candidate.signal}, ${candidate.level === 'yellow' ? 'gap' : 'latency'} |`,
     '',
     `Match: \`${candidate.match[0]}\``,
     '',
@@ -436,24 +471,38 @@ export function renderClause(candidate: Candidate, today: string): string {
   // The rationale is template-generated and no model is involved. It clears
   // `RATIONALE_MIN_CHARS` (80) by an order of magnitude, which is the point: a clause whose *why* is
   // gone cannot be deleted without risking a regression, and that is how a corpus becomes permanent.
+  const isGap = candidate.level === 'yellow';
   const prose: string[] = [
     `Observed ${candidate.support.occurrences} times across ${candidate.support.sessions} `
       + `session(s) between ${candidate.firstSeen.slice(0, 10)} and `
-      + `${candidate.lastSeen.slice(0, 10)}, always allowed, never contradicted by a written rule.`,
+      + `${candidate.lastSeen.slice(0, 10)}, `
+      + (isGap
+        ? 'and on every one of them this layer returned no verdict at all — no clause matched, so '
+        + 'nothing judged the call in either direction.'
+        : 'always allowed, never contradicted by a written rule.'),
   ];
-  if (candidate.failClosed > 0) {
+  if (isGap) {
+    prose.push('This clause does not permit anything and cannot. A yellow with no fix sits above the '
+      + 'learned green rung and below the learned red one, so the only thing it can do to a decision '
+      + 'is withhold an allow a *learned* green would have granted and send the call to a human. It '
+      + 'can never take away a permission a human wrote, and it can never turn a denial into an '
+      + 'allow. Accepting it wrongly costs a prompt that should not have appeared; deleting it undoes '
+      + 'that completely.');
+  }
+  if (candidate.failClosed > 0 && !isGap) {
     prose.push(`${candidate.failClosed} call(s) on this shape were denied fail-closed because no `
       + `clause covered them, costing ${bar(candidate.failClosedLatencyMs)} before the developer `
       + 'retried.');
   }
-  if (candidate.modelDecided > 0) {
+  if (candidate.modelDecided > 0 && !isGap) {
     prose.push(`${candidate.modelDecided} were decided by the classifier at `
       + `${bar(candidate.modelLatencyMs)} of model time that a written clause makes free.`);
   }
   prose.push(`Observed variants: ${candidate.variants.map(v => `\`${v}\``).join(', ')}.`);
   prose.push('The matcher is anchored at the start of the command value and ends on a word boundary, '
-    + 'so it licenses arguments to this command and nothing else; a compound line is decomposed into '
-    + 'its constituents before matching, so it cannot license a second command on the same line.');
+    + `so it ${isGap ? 'covers' : 'licenses'} arguments to this command and nothing else; a compound `
+    + 'line is decomposed into its constituents before matching, so it cannot reach a second command '
+    + 'on the same line.');
   prose.push('Counts are scoped to the decision-trail window, which rotates at 4 MiB keeping one '
     + `generation${candidate.windowRotated ? ' and had rotated when this was mined' : ''}, so `
     + 'earlier occurrences may exist and are not counted here.');

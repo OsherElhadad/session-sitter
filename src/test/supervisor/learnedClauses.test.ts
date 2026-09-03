@@ -1,6 +1,6 @@
 /**
  * Learned clauses: the restricted frontmatter subset, the `learned/` walk, the status semantics,
- * the four-rung precedence ladder, and the write boundary.
+ * the five-rung precedence ladder, and the write boundary.
  *
  * The invariant numbers in the test names are `10-schema.md` §10's, so a reader can go from a
  * failing test to the paragraph that argues for it.
@@ -18,7 +18,9 @@ import {
   RATIONALE_MIN_CHARS,
   assertWritable,
   auditVerdicts,
+  onRung,
   compareLadder,
+  LADDER_RUNGS,
   decideByLadder,
   hasErrors,
   isEnforceable,
@@ -32,6 +34,7 @@ import {
   sortByLadder,
 } from '../../supervisor/learnedClauses';
 import { Tier } from '../../supervisor/knowledge';
+import { applyCorrection } from '../../policy/corrections';
 import { makeTmpDir } from './fixtures';
 
 let tmp: string;
@@ -266,15 +269,20 @@ describe('parseLearnedClause — required fields', () => {
     expect(errors(findings).join()).toContain('`supersedes` must be an inline list');
   });
 
-  it('rejects orange and yellow: the ladder only has red/green rungs for a learned clause', () => {
-    // `orange`/`yellow` are recognised level words (a human bottom-line.md clause can use all
-    // four), but `decideByLadder` can only return red or green — so an `accepted` learned clause
-    // at `orange`/`yellow` would match and then never be selected: inert, but not visibly so.
-    for (const level of ['orange', 'yellow']) {
-      const { clause, findings } = parse(clauseFile({ level }));
-      expect(clause?.level, level).toBeNull();
-      expect(errors(findings).join(), level).toContain('not enforceable');
-    }
+  it('still rejects orange: it has no rung, so an accepted one would be silently unenforced', () => {
+    // `orange` is a recognised level word (a human bottom-line.md clause can use all four), but
+    // `LADDER_RUNGS` has no orange rung — so an `accepted` learned orange would match and then never
+    // be selected: inert, but not visibly so. That is the same failure an unrecognised level is.
+    const { clause, findings } = parse(clauseFile({ level: 'orange' }));
+    expect(clause?.level).toBeNull();
+    expect(errors(findings).join()).toContain('not enforceable');
+    expect(errors(findings).join()).toContain('not orange');
+  });
+
+  it('accepts yellow, which now has rung 4', () => {
+    const { clause, findings } = parse(clauseFile({ level: 'yellow' }));
+    expect(errors(findings)).toEqual([]);
+    expect(clause?.level).toBe('yellow');
   });
 
   it('accepts a prose-only clause with no level', () => {
@@ -316,9 +324,77 @@ describe('parseLearnedClause — required fields', () => {
       .toContain('both-or-neither');
     expect(errors(parse(clauseFile({ extraFrontmatter: 'fix_to: --force-with-lease\n' })).findings).join())
       .toContain('both-or-neither');
-    const both = parse(clauseFile({ extraFrontmatter: 'fix_from: --force\nfix_to: --force-with-lease\n' }));
-    expect(errors(both.findings)).toEqual([]);
-    expect(both.clause?.fix).toEqual({ from: '--force', to: '--force-with-lease' });
+  });
+
+  // ------------------------------------------------------------------- the rewrite bar, F1-F4
+  //
+  // Every fixture below derives its rewrite by CALLING `applyCorrection`, never by writing a
+  // `from`/`to` pair by hand. That is not tidiness: a hand-typed pair passes F2 only as long as the
+  // correction table happens to still produce it, so a test written that way would keep passing
+  // after the table changed underneath it and would be asserting nothing. `REWRITE` fails to build
+  // — loudly, at load — if the table stops rewriting this command at all.
+
+  const REWRITE = (() => {
+    const command = 'git push --force origin main';
+    const corrected = applyCorrection('Bash', { command });
+    if (corrected === null) {
+      throw new Error('the correction table no longer rewrites `git push --force`; F2 has no '
+        + 'reachable passing case and these fixtures are vacuous');
+    }
+    return { from: command, to: String(corrected.updatedInput.command) };
+  })();
+
+  /** A fix-carrying clause. Yellow and `audit` are the only level/status a legal one can have. */
+  function fixClause(opts: ClauseOpts = {}, fix = REWRITE): string {
+    return clauseFile({
+      level: 'yellow', status: 'audit',
+      extraFrontmatter: `fix_from: ${fix.from}\nfix_to: ${fix.to}\n`,
+      ...opts,
+    });
+  }
+
+  it('F1: a fix is only legal on a yellow — on any other level it has no consumer', () => {
+    for (const level of ['red', 'green']) {
+      expect(errors(parse(fixClause({ level })).findings).join(), level).toContain('F1');
+    }
+    expect(errors(parse(fixClause()).findings)).toEqual([]);
+  });
+
+  it('F2: a rewrite the correction table does not perform does not load', () => {
+    // The whole of the machine-authored-rewrite risk, in one assertion: this pair is a perfectly
+    // plausible-looking rewrite, and it is refused because `applyCorrection` does not produce it.
+    const forged = { from: 'git push --force origin main', to: 'git push origin main --no-verify' };
+    expect(errors(parse(fixClause({}, forged)).findings).join()).toContain('F2');
+  });
+
+  it('F2: altering either half of a legal rewrite breaks it', () => {
+    expect(errors(parse(fixClause({}, { ...REWRITE, to: `${REWRITE.to} --no-verify` })).findings)
+      .join()).toContain('F2');
+    expect(errors(parse(fixClause({}, { ...REWRITE, from: 'git push origin main' })).findings)
+      .join()).toContain('F2');
+  });
+
+  it('F2: the reproduced rewrite loads, and is the one the correction lane actually produces', () => {
+    const { clause, findings } = parse(fixClause());
+    expect(errors(findings)).toEqual([]);
+    expect(clause?.fix).toEqual(REWRITE);
+    expect(clause?.fix?.to).toContain('--force-with-lease');
+  });
+
+  it('F3: a fix-carrying clause may not be accepted — nothing applies a clause fix', () => {
+    expect(errors(parse(fixClause({ status: 'accepted' })).findings).join()).toContain('F3');
+    // And `audit` is reachable, so the trial that would earn the promotion is not blocked with it.
+    expect(errors(parse(fixClause({ status: 'audit' })).findings)).toEqual([]);
+  });
+
+  it('F4: a rewrite trial needs extracted evidence and an explicit zero contradictions', () => {
+    expect(errors(parse(fixClause({ evidence: 'INFERRED' })).findings).join()).toContain('F4');
+    const noCount = fixClause().replace('contradictions: 0\n', '');
+    expect(errors(parse(noCount).findings).join()).toContain('F4');
+    // A learned green needs neither: that asymmetry is the point, so it is asserted, not assumed.
+    const green = clauseFile({ level: 'green', evidence: 'INFERRED' })
+      .replace('contradictions: 0\n', '');
+    expect(errors(parse(green).findings)).toEqual([]);
   });
 
   // T8.
@@ -628,7 +704,7 @@ describe('status semantics', () => {
 
 // --------------------------------------------------------------------------- the ladder
 
-describe('the four-rung precedence ladder (§3.3)', () => {
+describe('the five-rung precedence ladder (§3.3)', () => {
   const clause = (
     id: string, origin: 'human' | 'learned', level: 'red' | 'green' | null,
     tier = 'team', status = 'accepted',
@@ -674,6 +750,66 @@ describe('the four-rung precedence ladder (§3.3)', () => {
       clause('project-red', 'human', 'red', 'project'),
     ], all);
     expect(hit?.clause.id).toBe('user-red');
+  });
+
+  // ------------------------------------------------------------------- the yellow rungs
+  //
+  // Every clause below is a *parsed file*, not a `LadderClause` literal. Writing `level: 'yellow'`
+  // as an object literal would test that `decideByLadder` honours a string, which nothing doubts;
+  // the failure the old loader comment predicted is that a yellow written in a file cannot reach the
+  // selector at all, and only the real parse can falsify it.
+
+  const parsedLadder = (id: string, level: string, extra = ''): LadderClause => {
+    const file = clauseFile({ id, level, extraFrontmatter: extra });
+    const parsed = parseLearnedClause(file, 'team', `data/knowledge/teams/t/learned/${id}.md`);
+    if (parsed.clause === null || hasErrors(parsed.findings)) {
+      throw new Error(`fixture does not load: ${errors(parsed.findings).join('; ')}`);
+    }
+    return parsed.clause;
+  };
+
+  it('a learned yellow written in a file loads AND changes the decision', () => {
+    const green = parsedLadder('learned-green', 'green');
+    const yellow = parsedLadder('learned-yellow', 'yellow');
+    // Before: the learned green settles it and the call is allowed.
+    expect(decideByLadder([green], all)?.level).toBe('green');
+    // After: the yellow is reached first, so the allow is withheld and a human is asked.
+    const hit = decideByLadder([green, yellow], all);
+    expect(hit?.level).toBe('yellow');
+    expect(hit?.clause.id).toBe('learned-yellow');
+  });
+
+  it('a learned yellow never withholds a HUMAN green: origin still leads', () => {
+    const hit = decideByLadder(
+      [parsedLadder('learned-yellow', 'yellow'), clause('human-green', 'human', 'green')], all);
+    expect(hit?.clause.id).toBe('human-green');
+  });
+
+  it('a learned red still beats a learned yellow — safety before friction', () => {
+    const hit = decideByLadder(
+      [parsedLadder('learned-yellow', 'yellow'), clause('learned-red', 'learned', 'red')], all);
+    expect(hit?.clause.id).toBe('learned-red');
+  });
+
+  it('the fix is what separates the two yellows, structurally', () => {
+    // Same parsed clause, one field different. The no-fix yellow sits on rung 4; the fix-carrying
+    // one sits on no rung at all, so it can never be selected — which is why F3 refuses to let it
+    // reach `accepted` in the first place.
+    const yellow = parsedLadder('learned-yellow', 'yellow');
+    const rung = LADDER_RUNGS.find(r => r.level === 'yellow');
+    expect(rung).toBeDefined();
+    expect(onRung(yellow, rung!)).toBe(true);
+    expect(onRung({ ...yellow, fix: { from: 'a', to: 'b' } }, rung!)).toBe(false);
+    expect(LADDER_RUNGS.some(r => r.hasFix === true)).toBe(false);
+  });
+
+  it('has a rung for every level a learned clause is allowed to load at', () => {
+    // The invariant the old comment was really about, stated once so it cannot drift: if a level can
+    // be loaded and accepted, it must be selectable. Derived by parsing, not by listing.
+    for (const level of ['red', 'green', 'yellow']) {
+      const parsed = parsedLadder(`l-${level}`, level);
+      expect(LADDER_RUNGS.some(r => onRung(parsed, r)), level).toBe(true);
+    }
   });
 
   // T5b's loader half: rung 5's built-in destructive-action table is the engine's, not this

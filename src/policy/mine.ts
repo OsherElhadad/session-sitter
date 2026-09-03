@@ -684,7 +684,32 @@ export interface Cluster {
 }
 
 /**
+ * Which records count as *support* for the lane being mined. One predicate, two lanes.
+ *
+ * The green lane's support is E3b: `decision === 'allow'`, sound because the runtime combines a
+ * compound's constituents deny-wins, so an allow on a compound line means every constituent was
+ * allowed. That argument is about *licensing a command*, and it does not transfer, which is why the
+ * gap lane needs its own predicate rather than a relaxation of this one.
+ *
+ * The gap lane's support is `decision === 'none'`: the calls policy never reached. Those records
+ * license nothing — the clause mined from them is a narrowing that can only withhold an allow — so
+ * requiring an `allow` on them would be requiring the one thing that, by definition, never happened.
+ */
+export type SupportTest = (record: DecisionRecord) => boolean;
+
+/** The green lane (E3b). */
+export const ALLOWED: SupportTest = r => r.decision === 'allow';
+
+/** The gap lane (§4.7): the hook returned no verdict, so nothing judged this call either way. */
+export const NO_VERDICT: SupportTest = r => r.decision === 'none';
+
+/**
  * Cluster a window of records by shape.
+ *
+ * `supports` selects the lane (see {@link SupportTest}). Everything derived from *every* record on
+ * the shape — the signal, `contradictedBy`, the fail-closed and gap counters, E3a's `unconfident` —
+ * is unaffected by it; only `support`, `segments`, `noCall` and `lights` follow the predicate, which
+ * is exactly the set the emission gates read as "the evidence".
  *
  * The `signal` label is derived from the records rather than being part of the key. `11-mine-v2.md`
  * gives two readings of this — §4.2 makes the signal part of the cluster key, while §11.2's own
@@ -695,7 +720,9 @@ export interface Cluster {
  * requirement is still met — a `none` is never folded into a `deny`; the two are counted separately
  * and a `deny` reaches a green candidate only as a contradiction (E6).
  */
-export function clusterWindow(records: readonly DecisionRecord[]): Cluster[] {
+export function clusterWindow(
+  records: readonly DecisionRecord[], supports: SupportTest = ALLOWED,
+): Cluster[] {
   const out = new Map<string, Cluster>();
   for (const record of records) {
     const { segments, confident } = segmentsOf(record);
@@ -732,7 +759,7 @@ export function clusterWindow(records: readonly DecisionRecord[]): Cluster[] {
       if (record.decision === 'deny' && record.clause) {
         cluster.contradictedBy = citedClauseId(record.clause) ?? record.clause;
       }
-      if (record.decision !== 'allow') { continue; }
+      if (!supports(record)) { continue; }
       cluster.support.push(record);
       if (!record.call) { cluster.noCall += 1; }
       if (record.light && !cluster.lights.includes(record.light)) {
