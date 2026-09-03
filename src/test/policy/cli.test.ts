@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { lint, replay } from '../../policy/cli';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { compile, lint, replay } from '../../policy/cli';
+import { currentPath } from '../../policy/compile';
 import { parsePractices } from '../../policy/practices';
 import type { DecisionRecord } from '../../audit/trail';
 
@@ -76,5 +80,125 @@ describe('replay', () => {
   it('reports an allow that the candidate would make ambiguous', () => {
     const changes = replay([record({ decision: 'allow', inputSummary: 'npm run build' })], []);
     expect(changes[0]).toContain('allow → ambiguous');
+  });
+});
+
+// --------------------------------------------------------------------------- policy compile
+
+describe('policy compile', () => {
+  let tmp: string;
+  const saved = { ...process.env };
+  const out: string[] = [];
+  const err: string[] = [];
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ss-policy-cli-'));
+    process.env.SESSION_SITTER_DATA_DIR = path.join(tmp, 'data');
+    out.length = 0;
+    err.length = 0;
+    vi.spyOn(process.stdout, 'write').mockImplementation(s => { out.push(String(s)); return true; });
+    vi.spyOn(process.stderr, 'write').mockImplementation(s => { err.push(String(s)); return true; });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    process.env = { ...saved };
+  });
+
+  const RATIONALE =
+    'An apply against a shared workspace changes infrastructure other people depend on, and the '
+    + 'plan nobody read is the one that deletes a database.';
+
+  /** An invented corpus checkout: one human tier, one learned clause. */
+  const corpus = (learnedBody: string | null): string => {
+    const root = path.join(tmp, 'corpus');
+    const teamDir = path.join(root, 'data', 'knowledge', 'teams', 'payments');
+    fs.mkdirSync(path.join(teamDir, 'learned'), { recursive: true });
+    fs.writeFileSync(path.join(teamDir, 'bottom-line.md'),
+      '### Intention: Never delete a bucket\n\n| Field | Value |\n|---|---|\n'
+      + '| id | pay-storage-001 |\n| level | red |\n\nMatch: aws s3 rb\n\n'
+      + 'A bucket takes its contents and its name with it.\n', 'utf8');
+    if (learnedBody !== null) {
+      fs.writeFileSync(path.join(teamDir, 'learned', 'pay-tf-001.md'), learnedBody, 'utf8');
+    }
+    return root;
+  };
+
+  const learnedClause = (match: string): string => `---
+id: pay-tf-001
+status: accepted
+level: red
+evidence: EXTRACTED
+support: 12
+weight: medium
+contradictions: 0
+learned_at: 2026-08-30
+adopted_at: 2026-09-01
+learned_from:
+  sessions: []
+  decisions: [d-11aa22]
+---
+
+### Intention: Terraform apply outside the sandbox is a change nobody reviewed
+
+Match: ${match}
+
+${RATIONALE}
+`;
+
+  const run = (learnedBody: string | null, ...argv: string[]) => compile(
+    ['--corpus', corpus(learnedBody), '--user', 'dana', '--project', 'ledger-api',
+      '--team', 'payments', ...argv]);
+
+  it('publishes an artifact and reports the revision it wrote', async () => {
+    expect(await run(learnedClause('terraform apply'))).toBe(0);
+    const printed = out.join('');
+    expect(printed).toContain('2 clauses');
+    expect(printed).toMatch(/revision {3}sha256:[0-9a-f]{64}/);
+    expect(fs.existsSync(currentPath())).toBe(true);
+  });
+
+  it('writes nothing on --dry-run', async () => {
+    expect(await run(learnedClause('terraform apply'), '--dry-run')).toBe(0);
+    expect(out.join('')).toContain('dry run');
+    expect(fs.existsSync(currentPath())).toBe(false);
+  });
+
+  it('refuses a dropped pattern with a non-zero exit and no artifact', async () => {
+    expect(await run(learnedClause('`/terraform (apply/`'))).toBe(1);
+    expect(err.join('')).toContain('does not compile');
+    expect(err.join('')).toContain('no artifact written');
+    expect(fs.existsSync(currentPath())).toBe(false);
+  });
+
+  it('refuses a malformed learned file, and leaves the previous revision published', async () => {
+    expect(await run(learnedClause('terraform apply'))).toBe(0);
+    const good = fs.readFileSync(currentPath(), 'utf8');
+
+    const root = corpus(learnedClause('terraform apply').replace('status: accepted', 'status: PURPLE'));
+    expect(await compile(['--corpus', root, '--user', 'dana', '--project', 'ledger-api',
+      '--team', 'payments'])).toBe(1);
+    expect(err.join('')).toContain('unknown `status: PURPLE`');
+    // The runtime keeps serving the last good revision while the corpus is broken.
+    expect(fs.readFileSync(currentPath(), 'utf8')).toBe(good);
+  });
+
+  it('refuses an unknown flag instead of writing somewhere else', async () => {
+    // The bug this pins: `--data-dir` was not a flag, so a compile aimed at a scratch directory
+    // silently published into the user's live `~/.claude/session-sitter/`.
+    expect(await compile(['--corpus', tmp, '--user', 'dev', '--data-durr', '/tmp/x'])).toBe(2);
+    expect(err.join('')).toContain('unknown option: --data-durr');
+    expect(err.join('')).toContain('--data-dir');
+  });
+
+  it('publishes where --data-dir says', async () => {
+    const elsewhere = path.join(tmp, 'elsewhere');
+    expect(await run(learnedClause('terraform apply'), '--data-dir', elsewhere)).toBe(0);
+    expect(fs.existsSync(path.join(elsewhere, 'policy', 'current.json'))).toBe(true);
+  });
+
+  it('needs a corpus and a user before it will do anything', async () => {
+    expect(await compile([])).toBe(2);
+    expect(await compile(['--corpus', tmp])).toBe(2);
   });
 });

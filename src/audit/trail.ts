@@ -65,6 +65,20 @@ export interface DecisionRecord {
   rewritten: boolean;
   /** One line a human can read without decoding the rest of the record. */
   note?: string;
+  /**
+   * The compiled policy revision this decision was evaluated against, `sha256:<hex>`. Null when the
+   * decision came from the markdown fallback, and *absent* on a record written before stamping
+   * existed.
+   *
+   * Added additively, and nothing already written is ever rewritten — an audit trail you edit is not
+   * an audit trail. JSONL has no schema, so a reader normalises a missing key to null and reports
+   * those records in their own bucket. Never folded into a real revision: that would fabricate
+   * provenance, and it is why the pipeline may not mine unstamped records for before/after
+   * comparisons.
+   */
+  rev?: string | null;
+  /** Where the policy came from. Absent on a pre-stamping record. */
+  policySource?: 'artifact' | 'markdown' | 'none';
 }
 
 export interface ActivityRecord {

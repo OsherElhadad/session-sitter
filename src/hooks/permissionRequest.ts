@@ -52,7 +52,11 @@ import { buildSupervisionPrompt } from '../supervisor/prompt';
 import { parseAndValidate } from '../supervisor/schema';
 import { buildEngine } from '../supervisor/factory';
 import { KnowledgeBundle } from '../supervisor/knowledge';
-import { Clause, findMatchingClause, loadPractices, parsePractices } from '../policy/practices';
+import {
+  Clause, ClauseMatcher, compileMatcher, findMatchingClause, loadPractices, parsePractices,
+} from '../policy/practices';
+import { CompiledClause, CompiledPolicy, loadPolicy } from '../policy/compile';
+import { selectForPolicy } from '../policy/select';
 import { splitShellCommand } from '../policy/shell';
 import { generalisedPermission } from '../policy/generalise';
 import { applyCorrection } from '../policy/corrections';
@@ -141,9 +145,78 @@ export async function loadClauses(settings: PluginSettings): Promise<Clause[]> {
   });
 }
 
-/** The clauses, shaped as the bundle the existing prompt builder consumes. */
-function bundleFor(clauses: Clause[], settings: PluginSettings): KnowledgeBundle {
+/**
+ * A compiled clause, shaped as the `Clause` every existing consumer already reads.
+ *
+ * The patterns are recompiled from the text the author wrote, not from a serialised `RegExp`: a
+ * substring matcher has been escaped and had its whitespace loosened, so `RegExp.source` could not
+ * be turned back into the original. 600 patterns recompile in 0.034 ms, so there is nothing here
+ * worth caching.
+ */
+export function clauseFromCompiled(clause: CompiledClause): Clause {
   return {
+    clauseId: clause.id,
+    citation: clause.citation,
+    kind: clause.kind,
+    level: clause.level,
+    title: clause.title,
+    tier: clause.tier,
+    text: clause.body,
+    tags: [],
+    patterns: clause.patterns
+      .map(p => compileMatcher(p.raw))
+      .filter((p): p is ClauseMatcher => p !== null),
+    sourceFile: clause.source_file,
+  };
+}
+
+/** What the hook decided to evaluate against, and where it came from. */
+export interface PolicyInputs {
+  clauses: Clause[];
+  /** The artifact, when one was loaded — the selector needs the fields `Clause` drops. */
+  compiled: CompiledPolicy | null;
+  source: 'artifact' | 'markdown';
+  /** Stamped on the decision record. Null on the markdown fallback. */
+  rev: string | null;
+}
+
+/**
+ * Load the policy: the compiled artifact when there is a usable one, the markdown corpus otherwise.
+ *
+ * Falling back is not fail-open. The corpus is the source of truth, so a tampered artifact that
+ * *removed* a red clause is defeated by re-reading the markdown — and the existing rule still holds
+ * above this: a configured-but-unreadable source is an error, never an empty policy.
+ *
+ * Only `accepted` clauses are handed to the deterministic ladder. `audit` clauses are in the
+ * artifact so they *can* be matched, but they must not change an outcome.
+ *
+ * TODO: record their would-be verdicts. `learnedClauses.ts` already has `auditVerdicts()`; wiring it
+ * needs `decideOne` replaced by the four-rung `decideByLadder`, which belongs with the governance
+ * work rather than here. Until then an audit trial records nothing, and `accept --audit` should say so.
+ */
+export async function loadPolicyInputs(settings: PluginSettings): Promise<PolicyInputs> {
+  if (!settings.practicesFile && settings.user) {
+    const { policy } = loadPolicy({
+      user: settings.user, project: settings.project ?? '', team: settings.team ?? '',
+    });
+    if (policy) {
+      return {
+        clauses: policy.clauses.filter(c => c.status === 'accepted').map(clauseFromCompiled),
+        compiled: policy,
+        source: 'artifact',
+        rev: policy.revision,
+      };
+    }
+  }
+  return { clauses: await loadClauses(settings), compiled: null, source: 'markdown', rev: null };
+}
+
+/** The clauses, shaped as the bundle the existing prompt builder consumes. */
+function bundleFor(
+  clauses: Clause[], settings: PluginSettings, policyBlock: string | null = null,
+): KnowledgeBundle {
+  return {
+    policyBlock,
     user: settings.user ?? '',
     project: settings.project ?? '',
     team: settings.team ?? '',
@@ -455,12 +528,41 @@ export function decideDeterministically(
   })));
 }
 
-/** Rung 6: the classifier, with the practices as context. Throws when it cannot produce a verdict. */
+/**
+ * Rung 6: the classifier, with the practices as context. Throws when it cannot produce a verdict.
+ *
+ * When an artifact was loaded, the knowledge block is *bounded* by selector `v1` instead of dumping
+ * every clause: at 200 clauses the unbounded render is ~11.5 k tokens of policy crowding out the
+ * transcript it is supposed to reason about, which is a correctness bug rather than a cost line.
+ *
+ * TODO (PR #37's `fastClassifier`) — the split is already decided, so wire it rather than re-derive
+ * it. Two regions, and which half goes where is not interchangeable:
+ *
+ *  - `policy.compiled.prompt_core` → the **`system` knowledge block**, inside `cache_control` on the
+ *    last system block. It is revision-stable, so it belongs in the cached prefix; any byte change
+ *    there is *supposed* to invalidate the cache, and the revision is what says one happened.
+ *  - `selection.selected` + `selection.subsetLine` → the **trailing user turn**. There is no
+ *    trailing-system channel, and nothing after the last breakpoint is cached, so per-call content
+ *    costs nothing there. In the `system` block it would invalidate the prefix on every decision.
+ *
+ * This hook still calls `buildSupervisionPrompt`, which has one knowledge block and no breakpoint,
+ * so both halves go in it — no worse than the unbounded dump, and strictly smaller.
+ */
 async function decideWithClassifier(
-  input: PermissionRequestInput, clauses: Clause[], settings: PluginSettings,
+  input: PermissionRequestInput, policy: PolicyInputs, settings: PluginSettings,
 ): Promise<Verdict> {
   const session = sessionFromPermissionRequest(input);
-  const prompt = buildSupervisionPrompt(session, bundleFor(clauses, settings));
+  let clauses = policy.clauses;
+  let policyBlock: string | null = null;
+  if (policy.compiled) {
+    const selection = selectForPolicy(policy.compiled, {
+      haystack: haystackFor(input.tool_name ?? '', input.tool_input),
+      today: new Date().toISOString().slice(0, 10),
+    });
+    clauses = selection.selected.map(clauseFromCompiled);
+    policyBlock = `${policy.compiled.prompt_core}\n${selection.subsetLine}`;
+  }
+  const prompt = buildSupervisionPrompt(session, bundleFor(clauses, settings, policyBlock));
   const result = await buildEngine(settings.supervisor).classify(prompt);
   const assessment = parseAndValidate(result.raw);
   const light = assessment.traffic_light as string;
@@ -502,19 +604,23 @@ export async function handle(
       latencyMs: Date.now() - started,
       rewritten: false,
       note: `${toolName} is a question to a human — no verdict returned, so the human answers it`,
+      // No policy is loaded for an exempt tool, so there is no revision to name. `none` rather than
+      // a null revision on the `markdown` source: nothing was consulted.
+      rev: null,
+      policySource: 'none',
     } satisfies DecisionRecord);
     return {};
   }
 
-  let clauses: Clause[] = [];
+  let policy: PolicyInputs = { clauses: [], compiled: null, source: 'markdown', rev: null };
   let loadError: string | null = null;
   try {
-    clauses = await loadClauses(settings);
+    policy = await loadPolicyInputs(settings);
   } catch (err) {
     loadError = String(err);
   }
 
-  let verdict = loadError === null ? decideDeterministically(input, clauses) : null;
+  let verdict = loadError === null ? decideDeterministically(input, policy.clauses) : null;
 
   // When the reason for ambiguity is that the command line could not be split with certainty, say
   // so — otherwise the fail-closed denial reads as "nothing covered this", which is a different and
@@ -534,7 +640,7 @@ export async function handle(
 
   if (verdict === null && settings.classifierEnabled) {
     try {
-      verdict = await decideWithClassifier(input, clauses, settings);
+      verdict = await decideWithClassifier(input, policy, settings);
     } catch (err) {
       verdict = {
         decision: { behavior: 'deny', message: `${UNREACHABLE_MESSAGE}\n\n(classifier: ${String(err)})` },
@@ -561,6 +667,8 @@ export async function handle(
         latencyMs: Date.now() - started,
         rewritten: false,
         note: 'observe mode — no verdict returned; enforce mode would have denied',
+        rev: policy.rev,
+        policySource: policy.source,
       } satisfies DecisionRecord);
       // An empty object, not a `decision`-less `hookSpecificOutput`: schema-invalid JSON is
       // reported as a hook error in the transcript, and `{}` is unambiguously "no verdict".
@@ -611,6 +719,10 @@ export async function handle(
     latencyMs: Date.now() - started,
     rewritten: verdict.decision.updatedInput !== undefined,
     note: verdict.note,
+    // Every decision names the revision it was evaluated against. Null on the markdown fallback,
+    // which is a distinct answer from "before stamping existed" and must stay tellable apart.
+    rev: policy.rev,
+    policySource: policy.source,
   } satisfies DecisionRecord);
 
   return out(verdict.decision);

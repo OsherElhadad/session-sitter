@@ -22,6 +22,9 @@ import {
   handle,
 } from '../../hooks/permissionRequest';
 import { parsePractices } from '../../policy/practices';
+import { compilePolicy, currentPath, writePolicy } from '../../policy/compile';
+import { parseBottomLine } from '../../supervisor/knowledge';
+import { parseLearnedClause } from '../../supervisor/learnedClauses';
 import { DecisionRecord, readJsonl } from '../../audit/trail';
 import { decisionsPath } from '../../hooks/paths';
 
@@ -652,5 +655,114 @@ describe('handle — the audit record', () => {
     process.env.SESSION_SITTER_MODE = 'observe';
     await handle(req('Bash', { command: `curl -H "Authorization: Bearer ${'z'.repeat(32)}"` }));
     expect(only().inputSummary).not.toContain('zzzz');
+  });
+});
+
+// --------------------------------------------------------------------------- the compiled artifact
+
+describe('the compiled policy artifact on the hot path', () => {
+  const only = (): DecisionRecord => {
+    const records = readJsonl<DecisionRecord>(decisionsPath());
+    expect(records).toHaveLength(1);
+    return records[0];
+  };
+
+  const ROUTING = { user: 'dana', project: 'ledger-api', team: 'payments' };
+
+  /** Publish an artifact into the temp data dir, the way `policy compile` would. */
+  const publish = (over: Parameters<typeof compilePolicy>[0]['learned'] = []) => {
+    const { policy, errors } = compilePolicy({
+      routing: ROUTING, human: parseBottomLine(ARTIFACT_PRACTICES, 'team'), learned: over,
+      today: '2026-09-02', builtAt: '2026-09-02T00:00:00.000Z', corpusRef: 'git:1a2b3c4',
+    });
+    expect(errors).toEqual([]);
+    if (!policy) { throw new Error('expected a policy'); }
+    writePolicy(policy);
+    return policy;
+  };
+
+  const ARTIFACT_PRACTICES = `
+### Intention: Never delete a bucket
+
+| Field | Value |
+|---|---|
+| id | pay-storage-001 |
+| level | red |
+
+Match: aws s3 rb
+
+Deleting a bucket takes its contents and its name with it, and the name cannot be reclaimed.
+`;
+
+  beforeEach(() => {
+    process.env.SESSION_SITTER_USER = ROUTING.user;
+    process.env.SESSION_SITTER_PROJECT = ROUTING.project;
+    process.env.SESSION_SITTER_TEAM = ROUTING.team;
+  });
+
+  it('decides from the artifact and stamps the revision it was evaluated against', async () => {
+    const policy = publish();
+    const output = await handle(req('Bash', { command: 'aws s3 rb s3://ledger-nightly' }));
+    expect(decisionOf(output).behavior).toBe('deny');
+    expect(only()).toMatchObject({
+      clause: 'practices §pay-storage-001',
+      rev: policy.revision,
+      policySource: 'artifact',
+    });
+  });
+
+  it('falls back to the markdown corpus when there is no artifact, and says so', async () => {
+    await handle(req('Bash', { command: 'aws s3 rb s3://ledger-nightly' }));
+    // No artifact and no configured corpus: the existing rule holds unchanged — a
+    // configured-but-unreadable policy source denies rather than reading as "no rules". What is new
+    // is only that the record says which source was tried.
+    expect(only()).toMatchObject({
+      decision: 'deny', actor: 'timeout', rev: null, policySource: 'markdown',
+    });
+  });
+
+  it('falls back rather than reading a corrupt artifact as "no rules"', async () => {
+    publish();
+    fs.writeFileSync(currentPath(), '{"schema_version":1,"clauses":', 'utf8');
+    await handle(req('Bash', { command: 'aws s3 rb s3://ledger-nightly' }));
+    // An unparsable artifact must never mean an empty policy: in enforce mode that denies the world
+    // for a reason nobody can see. It falls back to the corpus, which here is unconfigured, so the
+    // existing fail-closed deny stands.
+    expect(only()).toMatchObject({ decision: 'deny', policySource: 'markdown', rev: null });
+  });
+
+  it('never lets an audit clause change the outcome', async () => {
+    process.env.SESSION_SITTER_MODE = 'observe';
+    const trial = parseLearnedClause(`---
+id: pay-trial-001
+status: audit
+level: red
+evidence: EXTRACTED
+support: 3
+weight: low
+contradictions: 0
+learned_at: 2026-08-30
+learned_from:
+  sessions: []
+  decisions: [d-11aa22]
+---
+
+### Intention: Terraform apply outside the sandbox is a change nobody reviewed
+
+Match: terraform apply
+
+An apply against a shared workspace changes infrastructure other people depend on, and the plan
+nobody read is the one that deletes a database.
+`, 'team', 'data/knowledge/teams/payments/learned/pay-trial-001.md');
+    if (!trial.clause) { throw new Error('fixture does not parse'); }
+    publish([trial.clause]);
+    await handle(req('Bash', { command: 'terraform apply -auto-approve' }));
+    expect(only()).toMatchObject({ decision: 'none', clause: null, policySource: 'artifact' });
+  });
+
+  it('records no revision for an exempt tool, because no policy was consulted', async () => {
+    publish();
+    await handle(req('AskUserQuestion', { question: 'ship it?' }));
+    expect(only()).toMatchObject({ decision: 'none', rev: null, policySource: 'none' });
   });
 });
