@@ -356,12 +356,47 @@ The haystack is the tool name plus its arguments as JSON, so `Bash` commands, `W
 
 ```bash
 /session-sitter:policy /path/to/practices.md --replay
+/session-sitter:explain Bash --command 'git push --force origin main'
 ```
 
 An `error` finding means a clause declares a level but carries no `Match:` line — it enforces
 nothing while looking like it does, which is the most expensive failure this format has. `--replay`
 re-decides your recorded decisions with the edited file and prints only the verdicts that change, so
 you see a policy change's blast radius before you ship it.
+
+### Ask what a call would do, before running it
+
+`/session-sitter:explain` answers "what would happen, and which clause decides?" — the clause, the
+rung, the traffic light and the artifact revision — without running the call, without a model call,
+and without writing a record.
+
+```console
+$ /session-sitter:explain Bash --command 'aws s3 rb s3://ledger-nightly'
+WOULD DENY  ·  rung 3 (written red clause)  ·  revision 2b5481a3
+  practices §pay-storage-001@2b5481a — Never delete a bucket
+  Deleting a bucket takes its contents and its name with it, and the name cannot be reclaimed.
+  ↳ source: data/knowledge/teams/payments/bottom-line.md
+```
+
+It calls the hook's own loader, matcher and selector — not a second evaluator — so what it says and
+what the hook does cannot disagree. Full flags, the `--json` contract and the degradation table are
+in [`docs/CLI.md`](CLI.md#policy-explain); the same command runs as
+`session-sitter policy explain …` with no `claude` session at all, which is the CI and SSH path.
+
+The `checking-a-call-against-policy` skill wraps the same command for the pre-flight case: an agent
+about to write a deploy script asks first, instead of being denied three times mid-file. It carries
+no policy logic — a trigger and one command — because a skill that restated the rules would be a
+second source of truth about what they are.
+
+Two things it deliberately is **not**:
+
+- **not an authority.** It writes nothing and returns no verdict. The `PermissionRequest` hook is the
+  only thing that enforces anything, and it decides again when the call actually runs.
+- **not an MCP tool.** A repo-resident `.mcp.json` can declare a server, so a hostile checkout could
+  ship one named `session-sitter` whose answer is "green" for everything — the same channel the
+  classifier already refuses to read `.claude/settings.json` over. Tool schemas also render *before*
+  `system` in every agent request, so they would cost tokens for the session's whole life and
+  invalidate the agent's cached prefix on every description edit.
 
 ### Three tiers instead of one file
 

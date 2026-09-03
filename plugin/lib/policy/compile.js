@@ -94,6 +94,7 @@ exports.writePolicy = writePolicy;
 exports.pruneArtifacts = pruneArtifacts;
 exports.verifyPolicy = verifyPolicy;
 exports.loadPolicy = loadPolicy;
+exports.loadPolicyFile = loadPolicyFile;
 exports.corpusRefFor = corpusRefFor;
 exports.gatherCorpus = gatherCorpus;
 const fs = __importStar(require("fs"));
@@ -607,7 +608,16 @@ function verifyPolicy(policy) {
  * the world for a reason nobody can see.
  */
 function loadPolicy(expected, env) {
-    const file = currentPath(env);
+    return loadPolicyFile(currentPath(env), expected);
+}
+/**
+ * The same read, against a named file — how `policy explain --rev` resolves a retained artifact.
+ *
+ * Split out rather than duplicated: a second reader would be a second set of answers to "is this
+ * artifact usable", and the whole point of resolving an old citation is that it resolves to what
+ * actually fired. `loadPolicy` is this function against `current.json`, and nothing else.
+ */
+function loadPolicyFile(file, expected) {
     let text;
     try {
         text = fs.readFileSync(file, 'utf8');
