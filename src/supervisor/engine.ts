@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { extractJsonObject } from './schema';
+import type { FastTelemetry } from './fastClassifier';
 
 /** A classifier invocation failed (non-zero exit, no output, unreadable result). */
 export class EngineError extends Error {
@@ -34,6 +35,11 @@ export class EngineTimeout extends EngineError {
 export interface EngineResult {
   invocationId: string;
   raw: string;
+  /**
+   * What the call cost, when the engine's own output says. Null when it does not — the honest answer
+   * for a CLI that reports no usage, and never a zero, which would read as a free call.
+   */
+  telemetry?: FastTelemetry | null;
 }
 
 export interface ClassifierEngine {
@@ -164,6 +170,7 @@ export class ClaudeCodeEngine implements ClassifierEngine {
     if (this.baseUrl) { env.ANTHROPIC_BASE_URL = this.baseUrl; }
     if (this.authToken) { env.ANTHROPIC_AUTH_TOKEN = this.authToken; }
 
+    const started = Date.now();
     const res = await this.run(this.cli, args, prompt, {
       cwd: this.cwd, env, timeoutMs: this.timeoutMs,
     });
@@ -176,7 +183,51 @@ export class ClaudeCodeEngine implements ClassifierEngine {
     }
     const raw = (res.stdout || '').trim();
     if (!raw) { throw new EngineError('claude produced no output'); }
-    return { invocationId, raw: ClaudeCodeEngine.extractResult(raw) };
+    return {
+      invocationId,
+      raw: ClaudeCodeEngine.extractResult(raw),
+      telemetry: ClaudeCodeEngine.extractTelemetry(raw, Date.now() - started),
+    };
+  }
+
+  /**
+   * The `usage` block of the Claude Code envelope, as a {@link FastTelemetry}.
+   *
+   * The envelope already carries the four token counts this repository measures prompt-cache health
+   * on; `extractResult` reads one field out of it and drops the rest, so the numbers were being
+   * thrown away rather than being unavailable.
+   *
+   * Returns null whenever the shape is not there — a plain-text stdout, an older CLI, an envelope
+   * with no `usage`. The transcript JSONL and this envelope are both officially internal and
+   * unstable, so a miss must degrade to "not recorded" and never to a fabricated zero.
+   */
+  static extractTelemetry(stdout: string, latencyMs: number): FastTelemetry | null {
+    let env: unknown;
+    try {
+      env = JSON.parse(stdout);
+    } catch {
+      return null;
+    }
+    const last = Array.isArray(env) ? env[env.length - 1] : env;
+    if (!last || typeof last !== 'object') { return null; }
+    const usage = (last as Record<string, unknown>).usage;
+    if (!usage || typeof usage !== 'object') { return null; }
+    const count = (key: string): number => {
+      const v = (usage as Record<string, unknown>)[key];
+      return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+    };
+    const models = (last as Record<string, unknown>).modelUsage;
+    const model = models && typeof models === 'object' && !Array.isArray(models)
+      ? Object.keys(models)[0] ?? '' : '';
+    return {
+      tier: 'agent_cli',
+      model,
+      latency_ms: latencyMs,
+      input_tokens: count('input_tokens'),
+      cache_creation_input_tokens: count('cache_creation_input_tokens'),
+      cache_read_input_tokens: count('cache_read_input_tokens'),
+      output_tokens: count('output_tokens'),
+    };
   }
 
   /** Unwrap the Claude Code JSON envelope to the assistant text, if present. */
