@@ -681,6 +681,7 @@ cost, at both the session and the totals level.
   "would": "deny",
   "rung": 3,
   "rungLabel": "written red clause",
+  "actor": "policy",
   "light": "red",
   "clause": "practices §pay-storage-001",
   "citation": "practices §pay-storage-001@2b5481a",
@@ -706,7 +707,10 @@ cost, at both the session and the totals level.
 ```
 
 `would` is `allow`, `deny` or `ask` — deliberately **not** `behavior`, so this object is not
-paste-compatible with a hook response. `policy.source` is `artifact` or `markdown` and always names
+paste-compatible with a hook response. `actor` is the tier the trail would record — `deterministic`,
+`policy`, `correction`, `model`, `timeout` — so a script can diff an explain against the record of the
+same call field for field; it is `null` only on the classifier rung, where which actor reaches the
+record depends on a model call an explain never makes. `policy.source` is `artifact` or `markdown` and always names
 what actually answered. `citation` carries the `@<rev7>` suffix only when an artifact answered;
 on the markdown fallback it is `null` and `clause` alone is the citation. `rewritten` is the
 correction lane's rewrite when there would be one, and `selection` is the bounded per-call set the
