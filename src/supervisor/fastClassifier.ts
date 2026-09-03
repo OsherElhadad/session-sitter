@@ -50,8 +50,12 @@ export const MIN_FAST_CONFIDENCE = 0.6;
 
 /** Per-call measurements, recorded on the supervision record so the audit can prove the speedup. */
 export interface FastTelemetry {
-  /** Which tier produced the answer. Always 'fast_llm' here; the record says who else ran. */
-  tier: 'fast_llm';
+  /**
+   * Which tier produced the answer. `fast_llm` is this module's own HTTP tier; `agent_cli` is the
+   * agent-CLI classifier in `engine.ts`, which reports the same counts in its result envelope. One
+   * struct for both, because a reader asking "what did governing this call cost" wants one shape.
+   */
+  tier: 'fast_llm' | 'agent_cli';
   model: string;
   latency_ms: number;
   /** The UNCACHED remainder only — total prompt = this + cache_creation + cache_read. */

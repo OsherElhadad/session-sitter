@@ -33,9 +33,23 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import { redactSecrets } from '../corpus/mask';
 import { RecordedCall } from '../supervisor/models';
+import type { FastTelemetry } from '../supervisor/fastClassifier';
 
-/** Who actually made the call. `human` and `timeout` arrive from the escalation path. */
-export type Actor = 'deterministic' | 'policy' | 'model' | 'human' | 'timeout';
+/**
+ * Who actually made the call. `human` and `timeout` arrive from the escalation path.
+ *
+ * `correction` is the rung-2 lane — the rewrite-and-re-check path — and it is a *different decider*
+ * from a written clause, which is why it is rung 2 and not rung 3. Reporting it as `policy` made its
+ * rejection outcome ("we tried to make this safe and the safe form was also forbidden") byte-
+ * identical to a plain written red: both `policy` + `deny` + `rewritten: false`, since a rejected
+ * rewrite sets no `updatedInput`. With this member, `(actor, decision)` identifies the rung on its
+ * own.
+ *
+ * Records written before this member existed keep `policy` and are never rewritten. A reader that
+ * buckets by rung must show them as their own bucket — "before the correction actor" — and never
+ * fold them into a real rung.
+ */
+export type Actor = 'deterministic' | 'policy' | 'model' | 'human' | 'timeout' | 'correction';
 
 /** Rotate at 4 MiB — roughly 20k decisions, far more than a digest ever reads. */
 export const MAX_BYTES = 4 * 1024 * 1024;
@@ -97,6 +111,25 @@ export interface DecisionRecord {
    * what a stored tool input looks like.
    */
   call?: RecordedCall | null;
+  /**
+   * What the model rung cost, as the classifier itself measured it: model, latency, and the four
+   * token counts. The existing {@link FastTelemetry} struct verbatim — a second shape for the same
+   * facts is worse than either shape.
+   *
+   * **Null means no model ran**, which is the case on rungs 1–5 and is emphatically not a cache
+   * miss. Filter to `telemetry !== null` before computing any cache figure and print the surviving
+   * row count as the denominator: an average over every decision silently counts each deterministic
+   * one as a total miss and reports a number nobody can interpret.
+   *
+   * No hit/miss boolean is derived, and none should be. A *partial* hit is the normal case — the
+   * judging instruction rides a trailing user turn after the cached prefix by design, so
+   * `input_tokens` is nonzero on a healthy request. The figure worth watching is
+   * `cache_creation_input_tokens > 0` grouped by `rev`: those are the prefix rewrites.
+   *
+   * Additive and optional exactly like `rev` and `call`: **absent** on a record written before this
+   * field existed, and a reader normalises a missing key to null.
+   */
+  telemetry?: FastTelemetry | null;
 }
 
 export interface ActivityRecord {
