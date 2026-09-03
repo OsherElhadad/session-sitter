@@ -2,7 +2,7 @@
   "name": "session-sitter",
   "displayName": "Session Sitter",
   "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "publisher": "eranra",
   "icon": "resources/logo.png",
   "galleryBanner": {
@@ -380,6 +380,18 @@
               "type": "string"
             },
             "markdownDescription": "Telegram **user ids** permitted to drive the remote interface. **An empty list authorises nobody**, which is the default.\n\nThis matters more than it does for supervision cards: a group is not a private chat, so anyone who was ever invited could otherwise send text straight into your coding agents.\n\nTo find your id, turn the feature on, send any message in the group, and read the extension's Output log — the id of each rejected sender is logged for you to copy in.\n\nExample:\n\n```json\n[\"123456789\"]\n```"
+          },
+          "sessionSitter.telegram.fullMessages": {
+            "type": "boolean",
+            "default": true,
+            "markdownDescription": "Mirror the **whole text** of each turn into its Telegram topic, split across as many messages as it needs.\n\nWith this off, a turn is shown as the same short preview the Sessions panel draws beside a session — about 250 characters. That is enough to recognise an answer next to the session it belongs to, and not enough to *act* on one when Telegram is all you have: the part you need in order to reply is usually the end of it.\n\nTelegram caps a message at 4096 characters, so a long answer becomes several messages, numbered `(1/3)`, `(2/3)`, `(3/3)`. Use `sessionSitter.telegram.maxMessageParts` to say how many.\n\nOnly the mirror is affected. The panel's preview bubbles are unchanged."
+          },
+          "sessionSitter.telegram.maxMessageParts": {
+            "type": "number",
+            "default": 4,
+            "minimum": 1,
+            "maximum": 20,
+            "markdownDescription": "How many Telegram messages one turn may be split into when `#sessionSitter.telegram.fullMessages#` is on. Four covers roughly 16,000 characters.\n\nAnything past the budget is not silently dropped: the last message ends with the exact number of characters left out and points at the **📄 Full transcript** button, which uploads the whole thing as a file.\n\nThe ceiling is 20 because that is about what Telegram accepts per minute for one group — a larger budget would let a single long answer hold up every other session's topic. When several turns arrive in the same pass, the budget goes to the **newest** one and the earlier ones get one message each, on the same reasoning: the last turn is the one you are about to answer."
           },
           "sessionSitter.supervisor.orangeResponseTimeoutMinutes": {
             "type": "number",

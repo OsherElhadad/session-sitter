@@ -19,6 +19,7 @@
  * a synced-token mistake is at least visible in the log.
  */
 
+import { MAX_MESSAGE_PARTS_DEFAULT, MAX_MESSAGE_PARTS_LIMIT } from './render';
 import type { SupervisorConfig } from '../supervisor/config';
 
 export interface RemoteControlConfig {
@@ -29,12 +30,17 @@ export interface RemoteControlConfig {
   chatId: string;
   /** Telegram user ids permitted to drive the bot. Empty authorises nobody. */
   allowedUserIds: string[];
+  /** Mirror the whole text of a turn, split over several messages, rather than a short preview. */
+  fullMessages: boolean;
+  /** Messages one turn may be split into. Clamped to 1..`MAX_MESSAGE_PARTS_LIMIT`. */
+  maxMessageParts: number;
 }
 
 /** What a settings reader has to provide. Keeps this module free of the `vscode` module. */
 export interface SettingsReader {
   getBoolean(key: string, fallback: boolean): boolean;
   getStringArray(key: string, fallback: string[]): string[];
+  getNumber(key: string, fallback: number): number;
 }
 
 /**
@@ -56,7 +62,36 @@ export function remoteControlConfigFrom(
       .getStringArray('telegram.allowedUserIds', [])
       .map(id => String(id).trim())
       .filter(id => id.length > 0),
+    fullMessages: settings.getBoolean('telegram.fullMessages', true),
+    maxMessageParts: clampParts(
+      settings.getNumber('telegram.maxMessageParts', MAX_MESSAGE_PARTS_DEFAULT)),
   };
+}
+
+/**
+ * Hold the parts budget inside what Telegram will actually take.
+ *
+ * A group accepts on the order of 20 messages a minute, so a budget above that lets one long answer
+ * hold up every other topic for over a minute. Clamped rather than reported as a setup error: a
+ * number too large is a guess about how the limit works, not a broken configuration, and refusing
+ * to start over it would be out of proportion.
+ *
+ * A non-number reaches here whenever `settings.json` has been hand-edited, so it falls back to the
+ * default instead of turning into `NaN` and silently mirroring nothing.
+ */
+function clampParts(value: number): number {
+  if (!Number.isFinite(value)) { return MAX_MESSAGE_PARTS_DEFAULT; }
+  return Math.min(MAX_MESSAGE_PARTS_LIMIT, Math.max(1, Math.floor(value)));
+}
+
+/**
+ * The parts budget the mirror should actually use — 1 when full mode is off.
+ *
+ * Combining the two settings in one place means the service never has to, so "full mode off" cannot
+ * come to mean something subtly different in two call sites.
+ */
+export function effectiveMessageParts(config: RemoteControlConfig): number {
+  return config.fullMessages ? config.maxMessageParts : 1;
 }
 
 /**

@@ -5,6 +5,44 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.10 — The mirror was showing you 250 characters of the answer
+
+Telegram topics mirrored a session's turns, and the turns arrived cut off. Not at Telegram's
+4096-character message cap, which would at least have been most of an answer — at **250 characters**,
+because the mirror was reading `getRecentExchanges`, the function written for the preview bubbles the
+Sessions panel draws beside each session. 250 characters is a good preview when the session is on
+screen next to it. It is unusable as the only thing you can see of an answer you have to reply to,
+and the part you need is almost always the end.
+
+Three losses were stacked, and only the last was Telegram's:
+
+- the reader capped assistant text at 250 characters and user text at 150,
+- it took only the **first** text block of a message, so an answer written around a tool call came
+  back as its opening sentence, and
+- the renderer then truncated whatever survived at 4096.
+
+So `getRecentExchanges` grew a `full` option: no caps, every text block joined, and a tail read
+widened from 32 KB to 1 MB — because a record larger than the window is not truncated but *lost*, the
+read starting mid-line and the JSON no longer parsing. The panel and `AutoResponder` call it without
+the option and are unchanged to the character.
+
+A long turn is now **split** across messages rather than cut, numbered `(1/3)`, `(2/3)`, `(3/3)`, on
+paragraph, line or word boundaries. `sessionSitter.telegram.fullMessages` turns this on and **is on
+by default**; `sessionSitter.telegram.maxMessageParts` is the budget, 4 by default and 20 at most.
+Past the budget the last message names the exact number of characters left out and points at
+**📄 Full transcript**.
+
+The ceiling is Telegram's own: about 20 messages a minute to one group. Splitting and the
+four-turns-per-pass cap pull against each other — four turns at four parts each is most of a minute's
+allowance — so the budget is not shared out evenly. **The newest turn of a pass gets all of it and
+the earlier ones get one message each**, because the last turn is the one being answered and the
+ones before it are context you skim. Worst case per pass is three messages plus the budget.
+
+One thing that quietly stops being broken: echo suppression, which keeps a prompt sent from Telegram
+from being posted back as a duplicate, compares the sent text against the transcript's. A prompt over
+150 characters was read back truncated, failed the match, and came back. The comparison also moved
+into `planMirror`, ahead of splitting, so a prompt long enough to be split is still recognised.
+
 ### 0.8.9 — A window can be alive with nobody in it
 
 0.8.8 stopped a closed window's finished sessions from sitting in the worklist forever, by making a
