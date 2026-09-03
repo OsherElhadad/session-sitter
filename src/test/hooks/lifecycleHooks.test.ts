@@ -244,3 +244,71 @@ describe('SessionEnd', () => {
     expect(await sessionEnd({ session_id: 'sess-a' })).toEqual({});
   });
 });
+
+// --------------------------------------------------------------------------- SessionEnd: Stage A
+
+/**
+ * Stage A of the learning pipeline rides on this hook. The middle test is the one that matters: the
+ * fold is driven by a committed offset rather than by the event, so a `SessionEnd` that never fires
+ * costs delay and never data.
+ */
+describe('SessionEnd folds the trail (Stage A)', () => {
+  const decision = (command: string, over: Record<string, unknown> = {}): void => {
+    appendJsonl(decisionsPath(), {
+      ts: '2026-08-25T09:00:00.000Z',
+      sessionId: 's-A', cwd: '/w/api', tool: 'Bash', inputSummary: command,
+      light: 'green', decision: 'allow', clause: null, actor: 'model', latencyMs: 2000,
+      rewritten: false, call: { tool_name: 'Bash', input: { command } },
+      ...over,
+    });
+  };
+
+  /** Three sessions across three calendar days — the cheapest support set that clears the user bar. */
+  const crossTheFloor = (): void => {
+    decision('pnpm test', { sessionId: 's-A', ts: '2026-08-25T09:00:00.000Z' });
+    decision('pnpm test --watch', { sessionId: 's-B', ts: '2026-08-27T09:00:00.000Z' });
+    decision('pnpm test --filter x', { sessionId: 's-C', ts: '2026-09-01T09:00:00.000Z' });
+  };
+
+  it('nudges once when a shape crosses the support floor, and never twice', async () => {
+    crossTheFloor();
+    const first = await sessionEnd({ session_id: 's-C', reason: 'clear' });
+    expect(first.systemMessage).toContain('crossed the support floor');
+    expect(first.systemMessage).toContain('session-sitter learn');
+    // A second close with nothing new folds nothing, so it says nothing.
+    expect(await sessionEnd({ session_id: 's-C', reason: 'clear' })).toEqual({});
+  });
+
+  it('says nothing when nothing crossed', async () => {
+    decision('pnpm test');
+    expect(await sessionEnd({ session_id: 's-A', reason: 'clear' })).toEqual({});
+  });
+
+  it('folds bytes from sessions whose own SessionEnd never fired', async () => {
+    // ONE hook invocation, for the last session only. The other two crashed out.
+    crossTheFloor();
+    const out = await sessionEnd({ session_id: 's-C', reason: 'other' });
+    const shapes = JSON.parse(fs.readFileSync(path.join(dir, 'pipeline', 'shapes.json'), 'utf8'));
+    expect(shapes.shapes['Bash|pnpm test'].records).toBe(3);
+    expect([...shapes.shapes['Bash|pnpm test'].sessions].sort()).toEqual(['s-A', 's-B', 's-C']);
+    expect(out.systemMessage).toBeDefined();
+  });
+
+  it('proposes nothing — no clause file, ever, from a hook', async () => {
+    crossTheFloor();
+    await sessionEnd({ session_id: 's-C', reason: 'clear' });
+    expect(fs.existsSync(path.join(dir, 'data'))).toBe(false);
+    const run = JSON.parse(fs.readFileSync(path.join(dir, 'pipeline.jsonl'), 'utf8').trim());
+    expect(run.stage).toBe('accumulate');
+    expect(run.candidates.proposed).toBe(0);
+    expect(run.model.calls).toBe(0);
+  });
+
+  it('still closes the session out when the fold cannot run', async () => {
+    // `pipeline` is a file, not a directory, so every write beneath it fails.
+    fs.writeFileSync(path.join(dir, 'pipeline'), 'not a directory', 'utf8');
+    decision('pnpm test');
+    expect(await sessionEnd({ session_id: 's-A', reason: 'clear' })).toEqual({});
+    expect(readSession('s-A')).toMatchObject({ sessionId: 's-A', endReason: 'clear' });
+  });
+});

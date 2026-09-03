@@ -1,0 +1,701 @@
+// GENERATED FILE — DO NOT EDIT.
+// Compiled from src/policy/mine.ts by scripts/build-plugin-lib.js (`make plugin`).
+// Edit the TypeScript source and re-run `make plugin`; CI fails if this tree is stale.
+"use strict";
+/**
+ * Stage A — accumulate. Fold new decision records into one aggregate, exercising zero judgement.
+ *
+ * This is the half of `learn` that is safe to run fifty times a day: ~80 ms, no model, no clause
+ * written, nothing to review. It exists so that the half which *does* exercise judgement can be
+ * explicit and attended (`session-sitter learn`) without that choice costing any data.
+ *
+ * ## Offset-driven, not event-driven — the load-bearing detail
+ *
+ * `SessionEnd` is not guaranteed to fire. A `kill -9`, a crashed terminal, a flat battery: the hook
+ * never runs. So Stage A never means "analyse the session that just ended". It means **fold
+ * everything in `decisions.jsonl` after the committed offset**. The trigger is a hint that new bytes
+ * exist; the offset is the truth, and a missed trigger costs nothing because the next one picks up
+ * both sessions' records.
+ *
+ * ## One file, so there is no two-phase problem
+ *
+ * The offset and the counts live in the *same* file, `pipeline/shapes.json`, written tmp + rename.
+ * Two files — an append-only aggregate plus a separate offset — have a crash window between the two
+ * commits, and recovering from it needs per-record dedupe keys and an unbounded seen-set. One rename
+ * makes the whole fold atomic: either the offset advanced and the counts moved, or neither did.
+ *
+ * Rotation is caught by `tailSha`: the trail rotates at 4 MiB keeping one generation, so a stored
+ * offset can outlive the bytes it pointed at. A tail-hash mismatch forces a full re-read of that
+ * file rather than a silently wrong offset.
+ *
+ * ## What the fold is for, and what it is not for
+ *
+ * The persisted counters are the **lossless** part: they survive trail rotation, so they are what
+ * the support floor and the nudge are measured against, and they are what makes "not running
+ * `learn` costs delay, never data" true.
+ *
+ * They are deliberately *not* the evidence a clause is emitted from. Emission re-derives its support
+ * set from the records it can still read and re-evaluate (`src/policy/propose.ts`), because gate E1
+ * requires `call` on every supporting record and a rotated-out record cannot satisfy any gate. The
+ * counters say a shape is worth looking at; the window says what may be written about it. Where the
+ * two disagree the window wins, and `window.rotated` in the run line is what makes that honest.
+ *
+ * ## The shape
+ *
+ * Each *segment* of a command line is its own shape (§4.1), so `git status && rm -rf /` contributes
+ * one event to the `git status` shape and one to the `rm` shape. The `rm` therefore cannot be
+ * licensed by a `git status` clause — not because a guardrail caught it, but because it was never in
+ * that clause's support set to begin with.
+ *
+ * Spec: `11-mine-v2.md` §2 (two stages), §4.1–4.2 (segments and the cluster key), §5 (thresholds),
+ * §7.1 (one atomic file).
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.THRESHOLDS = exports.SHAPES_VERSION = exports.TAIL_BYTES = exports.DISTINCT_CAP = exports.SIGNALS = exports.SHELL_TOOLS = void 0;
+exports.canonicalSegment = canonicalSegment;
+exports.shapeHash = shapeHash;
+exports.clusterKey = clusterKey;
+exports.segmentsOf = segmentsOf;
+exports.signalOf = signalOf;
+exports.pipelineDir = pipelineDir;
+exports.shapesPath = shapesPath;
+exports.emptyShapes = emptyShapes;
+exports.readShapes = readShapes;
+exports.writeShapes = writeShapes;
+exports.readNewBytes = readNewBytes;
+exports.foldRecord = foldRecord;
+exports.fold = fold;
+exports.labelSignal = labelSignal;
+exports.distanceFrom = distanceFrom;
+exports.clearsFloor = clearsFloor;
+exports.supportOfStat = supportOfStat;
+exports.tierFor = tierFor;
+exports.nudge = nudge;
+exports.clusterWindow = clusterWindow;
+exports.supportOf = supportOf;
+exports.evidenceIds = evidenceIds;
+const crypto_1 = require("crypto");
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
+const paths_1 = require("../hooks/paths");
+const replay_1 = require("./replay");
+const shell_1 = require("./shell");
+// --------------------------------------------------------------------------- shapes and clusters
+/** Tools whose input is a command line. Mirrors `permissionRequest.ts`'s `SHELL_TOOLS`. */
+exports.SHELL_TOOLS = new Set(['Bash', 'execute_command']);
+/**
+ * The canonical segment: `argv0` plus the subcommand, lowercased.
+ *
+ * Two tokens, and the number is the whole judgement in this function. One token is a whole tool
+ * (`git`, `npm`, `rm`) and clusters everything it can do into one rule; three starts splitting on
+ * arguments, so `pnpm test --filter core` and `pnpm test --filter cli` stop being the same shape.
+ * The subcommand is where the rule actually lives: `git status` and `git push` are different rules.
+ *
+ * A second token that is a flag is not a subcommand, so `rm -rf dist` shapes as `rm` — which is on
+ * the never-widen list anyway, and shaping it wider than it is would be the wrong direction.
+ *
+ * The wider literal a clause is finally written with is *not* this: it is the longest common token
+ * prefix of the real supporting segments (gate E4), which can be longer than two tokens.
+ */
+function canonicalSegment(command) {
+    const tokens = command.trim().split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length === 0) {
+        return '';
+    }
+    const argv0 = tokens[0].toLowerCase();
+    const sub = tokens[1];
+    return sub !== undefined && !sub.startsWith('-') ? `${argv0} ${sub.toLowerCase()}` : argv0;
+}
+/**
+ * The 12 hex that names a shape, and half of every clause id.
+ *
+ * **Hash then slice, never slice the input.** The tuple's *prefix* is near-identical across almost
+ * every candidate (`Bash\0git …`, `Bash\0npm …`), so slicing the input would collide for essentially
+ * everything — the same lesson `recordStem`/`shortId` learned about agent session ids sharing long
+ * prefixes. 12 hex over sha256 rather than 8 over sha1: a larger space at no cost, and
+ * `createHash('sha256')` is already in the trail.
+ */
+function shapeHash(tool, segment) {
+    return (0, crypto_1.createHash)('sha256').update(`${tool}\0${segment}`, 'utf8').digest('hex').slice(0, 12);
+}
+/** `signal | tool | shape` — the cluster's identity, and the string the run line reports. */
+function clusterKey(signal, tool, segment) {
+    return `${signal}|${tool}|${segment}`;
+}
+exports.SIGNALS = ['timeout', 'gap', 'model', 'repeat'];
+/**
+ * The segments a record contributes.
+ *
+ * A shell call is split by `splitShellCommand`. An **unconfident** split does not vanish: the raw
+ * line is kept as one pseudo-segment so it still lands in a cluster and can refuse it (gate E3a).
+ * Dropping it instead would let a cluster be assembled while silently discarding the one line we
+ * could not parse — and the unparseable line is the one most likely to be the dangerous one.
+ *
+ * A non-shell call has one segment, the empty string: the shape is the tool name alone, which is the
+ * only thing stable about it.
+ */
+function segmentsOf(record) {
+    if (!exports.SHELL_TOOLS.has(record.tool)) {
+        return { segments: [''], confident: true };
+    }
+    const raw = record.call?.input?.command;
+    const command = typeof raw === 'string' ? raw : record.inputSummary;
+    if (typeof command !== 'string' || command.trim() === '') {
+        return { segments: [''], confident: true };
+    }
+    const split = (0, shell_1.splitShellCommand)(command);
+    return split.confident
+        ? { segments: split.commands, confident: true }
+        : { segments: [command.trim()], confident: false };
+}
+/** Which signal a record carries. `clause !== null` means a written rule already reached it. */
+function signalOf(record) {
+    if (record.clause !== null && record.clause !== undefined) {
+        return 'repeat';
+    }
+    if (record.actor === 'timeout') {
+        return 'timeout';
+    }
+    if (record.decision === 'none') {
+        return 'gap';
+    }
+    if (record.actor === 'model') {
+        return 'model';
+    }
+    return 'repeat';
+}
+/** How many distinct sessions or days one shape tracks. See {@link ShapeStat}. */
+exports.DISTINCT_CAP = 32;
+/** Enough bytes that two different files cannot plausibly agree, few enough to read on every fold. */
+exports.TAIL_BYTES = 4096;
+exports.SHAPES_VERSION = 1;
+function pipelineDir(env) {
+    return path.join((0, paths_1.dataDir)(env), 'pipeline');
+}
+function shapesPath(env) {
+    return path.join(pipelineDir(env), 'shapes.json');
+}
+function emptyShapes() {
+    return {
+        version: exports.SHAPES_VERSION,
+        sources: {},
+        shapes: {},
+        counters: { folded: 0, folds: 0, lastFoldAt: null },
+    };
+}
+/**
+ * Read the aggregate, or a fresh empty one.
+ *
+ * A file from a different `version` is discarded rather than migrated: it is derived data, a full
+ * re-read rebuilds it from the trail, and a half-understood migration of the numbers the support
+ * floor is measured against is the kind of quiet wrongness this pipeline exists to avoid.
+ */
+function readShapes(env) {
+    let parsed;
+    try {
+        parsed = JSON.parse(fs.readFileSync(shapesPath(env), 'utf8'));
+    }
+    catch {
+        return emptyShapes();
+    }
+    if (parsed?.version !== exports.SHAPES_VERSION || typeof parsed.shapes !== 'object') {
+        return emptyShapes();
+    }
+    return {
+        version: parsed.version,
+        sources: parsed.sources ?? {},
+        shapes: parsed.shapes ?? {},
+        counters: parsed.counters ?? { folded: 0, folds: 0, lastFoldAt: null },
+    };
+}
+/** One rename, so the offset and the counts commit together or not at all (§7.1). */
+function writeShapes(shapes, env) {
+    const dir = pipelineDir(env);
+    fs.mkdirSync(dir, { recursive: true });
+    const target = shapesPath(env);
+    const tmp = path.join(dir, `.shapes.${process.pid}.tmp`);
+    const fd = fs.openSync(tmp, 'w');
+    try {
+        fs.writeSync(fd, `${JSON.stringify(shapes, null, 2)}\n`);
+        fs.fsyncSync(fd);
+    }
+    finally {
+        fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, target);
+}
+// --------------------------------------------------------------------------- reading new bytes
+/** The tail hash for an offset, or `''` when there is nothing behind it yet. */
+function tailShaAt(file, offset) {
+    if (offset <= 0) {
+        return '';
+    }
+    const from = Math.max(0, offset - exports.TAIL_BYTES);
+    const length = offset - from;
+    const buf = Buffer.alloc(length);
+    const fd = fs.openSync(file, 'r');
+    try {
+        fs.readSync(fd, buf, 0, length, from);
+    }
+    finally {
+        fs.closeSync(fd);
+    }
+    return (0, crypto_1.createHash)('sha256').update(buf).digest('hex').slice(0, 16);
+}
+/**
+ * Everything after the committed offset, as complete lines.
+ *
+ * A partial trailing line is never consumed. An appender writes one line per `appendFileSync`, so a
+ * torn write is possible in principle and consuming half a record would fold a broken one and then
+ * skip the rest of it forever. Leaving the partial line costs one fold's latency and nothing else.
+ */
+function readNewBytes(file, prior) {
+    let stat;
+    try {
+        stat = fs.statSync(file);
+    }
+    catch {
+        return null;
+    }
+    let start = prior?.offset ?? 0;
+    let reread = false;
+    if (start > 0) {
+        // Either the file was rotated out from under the offset, or it was truncated. Both mean the
+        // offset points at bytes that are not the bytes it was taken over.
+        if (start > stat.size || tailShaAt(file, start) !== prior?.tailSha) {
+            start = 0;
+            reread = true;
+        }
+    }
+    if (start === stat.size) {
+        return { lines: [], offset: start, size: stat.size, mtimeMs: stat.mtimeMs, reread };
+    }
+    const length = stat.size - start;
+    const buf = Buffer.alloc(length);
+    const fd = fs.openSync(file, 'r');
+    try {
+        fs.readSync(fd, buf, 0, length, start);
+    }
+    finally {
+        fs.closeSync(fd);
+    }
+    const text = buf.toString('utf8');
+    const lastBreak = text.lastIndexOf('\n');
+    if (lastBreak < 0) {
+        return { lines: [], offset: start, size: stat.size, mtimeMs: stat.mtimeMs, reread };
+    }
+    return {
+        lines: text.slice(0, lastBreak).split('\n').filter(l => l.trim().length > 0),
+        offset: start + Buffer.byteLength(text.slice(0, lastBreak + 1), 'utf8'),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        reread,
+    };
+}
+// --------------------------------------------------------------------------- the fold
+function bump(counter, key) {
+    counter[key] = (counter[key] ?? 0) + 1;
+}
+function addDistinct(list, value) {
+    if (value === '' || list.includes(value) || list.length >= exports.DISTINCT_CAP) {
+        return;
+    }
+    list.push(value);
+}
+/**
+ * Fold one record's segments into the aggregate. Pure counting — no judgement, no thresholds.
+ *
+ * Returns the shape keys it touched, so the caller can ask "did *these* cross the floor" instead of
+ * rescanning every shape after every record.
+ */
+function foldRecord(shapes, record) {
+    const touched = [];
+    const { segments } = segmentsOf(record);
+    const day = record.ts.slice(0, 10);
+    const signal = signalOf(record);
+    for (const raw of segments) {
+        const segment = exports.SHELL_TOOLS.has(record.tool) ? canonicalSegment(raw) : '';
+        const key = `${record.tool}|${segment}`;
+        const stat = shapes[key] ?? (shapes[key] = {
+            tool: record.tool,
+            segment,
+            shape12: shapeHash(record.tool, segment),
+            support: 0,
+            records: 0,
+            sessions: [],
+            days: [],
+            firstSeen: record.ts,
+            lastSeen: record.ts,
+            signals: {},
+            cwds: {},
+            noCall: 0,
+        });
+        if (!touched.includes(key)) {
+            touched.push(key);
+        }
+        stat.records += 1;
+        // Gate E3b, applied at fold time so the number the floor reads is already the green support
+        // count: the runtime combines constituents with deny-wins, so an `allow` on a compound line
+        // means every constituent was allowed. A segment inside a denied compound was never approved.
+        if (record.decision === 'allow') {
+            stat.support += 1;
+        }
+        addDistinct(stat.sessions, record.sessionId);
+        addDistinct(stat.days, day);
+        if (record.ts < stat.firstSeen) {
+            stat.firstSeen = record.ts;
+        }
+        if (record.ts > stat.lastSeen) {
+            stat.lastSeen = record.ts;
+        }
+        bump(stat.signals, signal);
+        if (record.cwd) {
+            bump(stat.cwds, record.cwd);
+        }
+        if (!record.call) {
+            stat.noCall += 1;
+        }
+    }
+    return touched;
+}
+/**
+ * Fold everything after the committed offset, across the trail and its rotated generation.
+ *
+ * `.1` is folded first so records arrive in roughly chronological order; nothing depends on the
+ * order, because every counter is a union or a sum, but a `firstSeen` that walks backwards is
+ * confusing to read in a file a human is meant to be able to open.
+ */
+function fold(env, now = new Date()) {
+    const shapes = readShapes(env);
+    const knownBefore = new Set(Object.keys(shapes.shapes));
+    const base = (0, paths_1.decisionsPath)(env);
+    const files = [`${base}.1`, base];
+    const result = {
+        folded: 0, newShapes: 0, crossedFloor: [], reread: [], shapes, files: [],
+    };
+    for (const file of files) {
+        const prior = shapes.sources[path.basename(file)];
+        const next = readNewBytes(file, prior);
+        if (next === null) {
+            continue;
+        }
+        result.files.push(path.basename(file));
+        if (next.reread) {
+            result.reread.push(path.basename(file));
+            // The offset was not the offset it claimed to be, so the counts derived through it are not
+            // trustworthy either. Rebuilding the whole aggregate is the only honest answer, and it is
+            // cheap: the trail keeps one 4 MiB generation.
+            shapes.shapes = {};
+            for (const other of Object.keys(shapes.sources)) {
+                shapes.sources[other].offset = 0;
+            }
+        }
+        for (const line of next.lines) {
+            let record;
+            try {
+                record = JSON.parse(line);
+            }
+            catch {
+                continue; // a torn line from a crashed writer; the trail's own rule
+            }
+            if (typeof record?.ts !== 'string' || typeof record.tool !== 'string') {
+                continue;
+            }
+            const before = new Map(segmentsOf(record).segments.map(raw => {
+                const key = `${record.tool}|${exports.SHELL_TOOLS.has(record.tool) ? canonicalSegment(raw) : ''}`;
+                const stat = shapes.shapes[key];
+                return [key, stat !== undefined && clearsFloor(stat)];
+            }));
+            const touched = foldRecord(shapes.shapes, record);
+            result.folded += 1;
+            for (const key of touched) {
+                if (before.get(key) === true) {
+                    continue;
+                }
+                if (!clearsFloor(shapes.shapes[key])) {
+                    continue;
+                }
+                result.crossedFloor.push({ key, signal: labelSignal(shapes.shapes[key].signals) });
+            }
+        }
+        shapes.sources[path.basename(file)] = {
+            size: next.size, mtimeMs: next.mtimeMs, offset: next.offset,
+            tailSha: next.offset > 0 ? tailShaAt(file, next.offset) : '',
+        };
+    }
+    if (result.reread.length > 0) {
+        // A full re-read replaces the aggregate, so the lifetime counter has to be replaced with it
+        // rather than added to — otherwise it reports the same records twice and stops meaning anything.
+        shapes.counters.folded = result.folded;
+    }
+    else {
+        shapes.counters.folded += result.folded;
+    }
+    if (result.folded > 0) {
+        shapes.counters.folds += 1;
+        shapes.counters.lastFoldAt = now.toISOString();
+    }
+    result.newShapes = Object.keys(shapes.shapes)
+        .filter(key => !knownBefore.has(key)).length;
+    return result;
+}
+/** The strongest signal a shape carries — the one label the nudge and the run line print. */
+function labelSignal(signals) {
+    for (const signal of exports.SIGNALS) {
+        if ((signals[signal] ?? 0) > 0) {
+            return signal;
+        }
+    }
+    return 'repeat';
+}
+// --------------------------------------------------------------------------- the thresholds (§5)
+/**
+ * The promotion bars. Every number is window-scoped, and `window.rotated` in the run line is what
+ * makes that honest.
+ *
+ * ponytail: all of them in one block, and the run ledger records every shape's distance from every
+ * bar, so after a month of ledgers they can be set from data. They are **reasoned, not measured**;
+ * do not let that become a reason to ship them adaptive — an adaptive threshold is a threshold
+ * nobody can review.
+ *
+ * The justifications that are not obvious from the number:
+ *
+ *  - **3 occurrences, not 2.** Two is routinely the *same* command re-run after a fail-closed
+ *    denial — the trail records the retry as a second identical-shape record — so a bar of 2 turns
+ *    every frustration into a rule.
+ *  - **3 sessions, and it is the load-bearing bar.** One active developer clears any record floor
+ *    before lunch on `git status`; records do not discriminate, sessions do. And 3 rather than 2
+ *    because a Claude Code session splits on `--resume`, on a crash, and on a context compaction, so
+ *    two sessions is routinely one interrupted piece of work.
+ *  - **2 days.** Session churn is unbounded within an afternoon; a calendar boundary is the one
+ *    thing it cannot game.
+ *  - **7 days at project.** One full working week: the pattern survived a weekend and a context
+ *    switch away and back. A better justification than any occurrence count.
+ *  - **90% confinement, not 100%.** One stray record from another repo must not sink a genuine
+ *    project pattern, and 90% still means the shape is overwhelmingly about one project.
+ *
+ * There is no red row. `team` is here for the run line's `declinedPromotions` and is unreachable
+ * from one machine (§5.3), and red/orange are never proposed at all (§4.7) — so a halved red bar
+ * would be a threshold no code path can reach, which is exactly the unreachable-rule failure the
+ * test invariants exist to catch.
+ */
+exports.THRESHOLDS = {
+    user: { occurrences: 3, sessions: 3, days: 2, confinement: 0 },
+    project: { occurrences: 8, sessions: 5, days: 7, confinement: 0.9 },
+    team: { occurrences: 12, sessions: 8, days: 14, confinement: 0.9, hosts: 2 },
+};
+function distanceFrom(tier, support) {
+    const bar = exports.THRESHOLDS[tier];
+    const d = {
+        tier,
+        occurrences: support.occurrences - bar.occurrences,
+        sessions: support.sessions - bar.sessions,
+        days: support.days - bar.days,
+        confinement: support.confinement - bar.confinement,
+        clears: false,
+    };
+    d.clears = d.occurrences >= 0 && d.sessions >= 0 && d.days >= 0 && d.confinement >= 0;
+    return d;
+}
+/** Does this shape clear the cheapest bar in the system? The nudge's and `belowFloor`'s question. */
+function clearsFloor(stat) {
+    return distanceFrom('user', supportOfStat(stat)).clears;
+}
+/** A persisted shape's support, as the bars measure it. */
+function supportOfStat(stat) {
+    const counts = Object.entries(stat.cwds).sort((a, b) => b[1] - a[1]);
+    const total = counts.reduce((sum, [, n]) => sum + n, 0);
+    return {
+        occurrences: stat.support,
+        sessions: stat.sessions.length,
+        days: stat.days.length,
+        confinement: total === 0 ? 0 : (counts[0]?.[1] ?? 0) / total,
+        cwd: counts[0]?.[0] ?? null,
+    };
+}
+/**
+ * The tier a candidate is proposed at, chosen by **scope** and then gated on that scope's bars.
+ *
+ * Narrowest wins, and demote rather than drop: a pattern clearing team bars but confined to one
+ * project is a *project* clause, and a pattern that misses the project bars is written at `user`
+ * rather than thrown away. Erring low is right because the tiers are not symmetric — a user-tier
+ * `proposed` clause is the cheapest false positive in the system, while a wrong project clause is
+ * read and cited by people who never saw the evidence.
+ *
+ * `team` is never returned. `DecisionRecord` has no user field and one `dataDir` is one machine and
+ * one user, so from a single laptop "two developers agreed" is not a measurable proposition at any
+ * threshold. The caller records a `declinedPromotions` entry so the ceiling is visible rather than
+ * mysterious.
+ */
+function tierFor(support, hasProjectSlug) {
+    const user = distanceFrom('user', support);
+    const project = distanceFrom('project', support);
+    const team = distanceFrom('team', support);
+    const distances = [user, project, team];
+    // Recorded even though `team` can never be returned: a candidate whose *evidence* clears the team
+    // row and is held back only by the missing second host is the case a reader most needs named, and
+    // the `hosts` column is the one bar no single-machine trail can speak to at all.
+    const declinedTeam = team.occurrences >= 0 && team.sessions >= 0 && team.days >= 0;
+    if (hasProjectSlug && project.clears) {
+        return { tier: 'project', distances, declinedTeam };
+    }
+    if (user.clears) {
+        return { tier: 'user', distances, declinedTeam };
+    }
+    return { tier: null, distances, declinedTeam };
+}
+// --------------------------------------------------------------------------- the nudge (§6)
+/**
+ * The one line printed at `SessionEnd`, at the moment the developer has just stopped working and
+ * has their terminal back. Null when nothing crossed, because a hook that prints on every session
+ * close is a hook people turn off.
+ */
+function nudge(crossed) {
+    if (crossed.length === 0) {
+        return null;
+    }
+    const counts = new Map();
+    for (const c of crossed) {
+        counts.set(c.signal, (counts.get(c.signal) ?? 0) + 1);
+    }
+    const parts = exports.SIGNALS.filter(s => counts.has(s)).map(s => `${counts.get(s)} ${LABEL[s]}`);
+    return `session-sitter: ${crossed.length} shape${crossed.length === 1 ? '' : 's'} crossed the `
+        + `support floor (${parts.join(', ')}). Run \`session-sitter learn\`.`;
+}
+const LABEL = {
+    timeout: 'fail-closed', gap: 'gap', model: 'classifier-decided', repeat: 'repeat',
+};
+/**
+ * Cluster a window of records by shape.
+ *
+ * The `signal` label is derived from the records rather than being part of the key. `11-mine-v2.md`
+ * gives two readings of this — §4.2 makes the signal part of the cluster key, while §11.2's own
+ * worked `shapes.json` keys by shape and carries the signals as counters inside it, and §11.3 then
+ * assembles one candidate from a support set that mixes a fail-closed record with five
+ * classifier-decided ones. The worked example is followed here: partitioning by signal would split
+ * exactly the evidence §11.3 combines, and would have refused the doc's own example clause. §3.2's
+ * requirement is still met — a `none` is never folded into a `deny`; the two are counted separately
+ * and a `deny` reaches a green candidate only as a contradiction (E6).
+ */
+function clusterWindow(records) {
+    const out = new Map();
+    for (const record of records) {
+        const { segments, confident } = segmentsOf(record);
+        const isShell = exports.SHELL_TOOLS.has(record.tool);
+        for (const raw of segments) {
+            const segment = isShell ? canonicalSegment(raw) : '';
+            const key = `${record.tool}|${segment}`;
+            const cluster = out.get(key) ?? {
+                key,
+                tool: record.tool,
+                segment,
+                shape12: shapeHash(record.tool, segment),
+                signal: 'repeat',
+                support: [], all: [], segments: [],
+                unconfident: false, noCall: 0, lights: [], contradictedBy: null,
+                failClosed: 0, gaps: 0, modelDecided: 0, modelLatencyMs: 0, failClosedLatencyMs: 0,
+            };
+            out.set(key, cluster);
+            cluster.all.push(record);
+            if (!confident) {
+                cluster.unconfident = true;
+            }
+            const signal = signalOf(record);
+            if (exports.SIGNALS.indexOf(signal) < exports.SIGNALS.indexOf(cluster.signal)) {
+                cluster.signal = signal;
+            }
+            if (signal === 'timeout') {
+                cluster.failClosed += 1;
+                cluster.failClosedLatencyMs += record.latencyMs ?? 0;
+            }
+            if (signal === 'gap') {
+                cluster.gaps += 1;
+            }
+            if (signal === 'model') {
+                cluster.modelDecided += 1;
+                cluster.modelLatencyMs += record.latencyMs ?? 0;
+            }
+            // E6: a *written red* deny contradicts a green candidate. A fail-closed deny does not — it
+            // means "nothing said this was safe", which is the gap the candidate exists to close.
+            if (record.decision === 'deny' && record.clause) {
+                cluster.contradictedBy = (0, replay_1.citedClauseId)(record.clause) ?? record.clause;
+            }
+            if (record.decision !== 'allow') {
+                continue;
+            }
+            cluster.support.push(record);
+            if (!record.call) {
+                cluster.noCall += 1;
+            }
+            if (record.light && !cluster.lights.includes(record.light)) {
+                cluster.lights.push(record.light);
+            }
+            if (!cluster.segments.includes(raw)) {
+                cluster.segments.push(raw);
+            }
+        }
+    }
+    return [...out.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+/** A cluster's support, as the bars measure it. Same shape as {@link supportOfStat}, live records. */
+function supportOf(cluster) {
+    const cwds = new Map();
+    const sessions = new Set();
+    const days = new Set();
+    for (const r of cluster.support) {
+        sessions.add(r.sessionId);
+        days.add(r.ts.slice(0, 10));
+        if (r.cwd) {
+            cwds.set(r.cwd, (cwds.get(r.cwd) ?? 0) + 1);
+        }
+    }
+    const ranked = [...cwds].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const total = [...cwds.values()].reduce((a, b) => a + b, 0);
+    return {
+        occurrences: cluster.support.length,
+        sessions: sessions.size,
+        days: days.size,
+        confinement: total === 0 ? 0 : (ranked[0]?.[1] ?? 0) / total,
+        cwd: ranked[0]?.[0] ?? null,
+    };
+}
+/** The record ids a clause cites as its evidence, oldest first, capped so the file stays readable. */
+function evidenceIds(cluster, cap = 12) {
+    return [...cluster.support]
+        .sort((a, b) => a.ts.localeCompare(b.ts))
+        .slice(0, cap)
+        .map(replay_1.recordId);
+}
