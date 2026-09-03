@@ -483,9 +483,14 @@ function writeClause(corpusRoot, candidate, body) {
         }
     }
     catch (err) {
-        if (err.code !== 'ENOENT') {
-            // Present but unreadable. Refusing is the only fail-closed answer: we cannot confirm it is
-            // `proposed`, and overwriting a `declined` file would release a permanent suppression.
+        const code = err.code;
+        // `ENOTDIR` means some *parent* of the target is not a directory, so there is no clause file here
+        // and there never was one: a broken corpus root has to surface as an error rather than as a
+        // suppression, which would read like a human had declined something.
+        //
+        // Anything else — a file we can see and cannot read — is refused. We cannot confirm it is
+        // `proposed`, and overwriting a `declined` file would release a permanent suppression.
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') {
             return { outcome: 'status-guard', file: rel };
         }
     }
