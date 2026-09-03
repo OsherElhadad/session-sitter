@@ -3,6 +3,7 @@ import * as path from 'path';
 import { queryBobDb } from './BobDatabase';
 import { PendingApproval } from './agents/BobApprover';
 import { bobStatus, isQuestionTool } from './sessionStatus';
+import { EXPORT_SCHEMA_VERSION, TranscriptError } from './supervisor/transcript';
 
 // ── Full-transcript export contract ──────────────────────────────────────────
 // This extension is the single reader of Bob/Claude sessions. It exports the full
@@ -10,7 +11,8 @@ import { bobStatus, isQuestionTool } from './sessionStatus';
 // the Python supervisor consumes. Keep these field names (camelCase) in sync with
 // supervisor/transcript.py.
 
-export const EXPORT_SCHEMA_VERSION = '1.0';
+// Re-exported for the existing importers; defined once, in `supervisor/transcript.ts`.
+export { EXPORT_SCHEMA_VERSION };
 
 export interface ExportToolCall {
   id: string;
@@ -300,11 +302,15 @@ export function buildClaudeTranscript(
   session: ClaudeSessionMeta, lines: string[], livePending?: PendingApproval,
 ): FullTranscript {
   const turns: ExportTurn[] = [];
+  let linesSeen = 0;
+  let parsed = 0;
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) { continue; }
+    linesSeen++;
     let rec: ClaudeJsonlRecord;
     try { rec = JSON.parse(trimmed) as ClaudeJsonlRecord; } catch { continue; }
+    parsed++;
     if (rec.type !== 'user' && rec.type !== 'assistant') { continue; }
 
     const content = rec.message?.content;
@@ -336,6 +342,29 @@ export function buildClaudeTranscript(
       if (toolCalls.length) { turn.toolCalls = toolCalls; }
     }
     turns.push(turn);
+  }
+
+  // Yield assertion. Skipping ONE bad line is right — a torn write or a record type we do not
+  // model is normal. Skipping EVERY line is a parse failure wearing a success: this schema is
+  // vendor-disclaimed as internal and unstable, so a rename in a Claude Code release is the
+  // expected way this breaks, and the caller writes whatever we return.
+  //
+  // The rule is zero turns from non-empty input, not a fraction of records. A fixed threshold
+  // cannot be set honestly: a healthy transcript is mostly records we deliberately skip
+  // (`summary`, `system`, snapshots), so any nonzero floor either fires on good input or is so
+  // low it never fires at all. Zero is the one yield that has no legitimate reading — an export
+  // with no turns is useless whether the schema moved or not, and an error a maintainer can act
+  // on beats an empty document a user cannot tell from a real one. An empty file stays empty:
+  // `linesSeen === 0` is a legitimately empty session and must not throw.
+  if (linesSeen > 0 && turns.length === 0) {
+    throw new TranscriptError(
+      `Claude transcript for session ${session.sessionId} produced no turns: `
+      + `${linesSeen} non-empty line(s), ${parsed} record(s) parsed, ${turns.length} turn(s). `
+      + (parsed === 0
+        ? 'No line parsed as JSON — the transcript envelope changed.'
+        : "No record carried type 'user' or 'assistant' — the record type values changed.")
+      + " Claude Code's transcript JSONL schema is internal and unstable.",
+    );
   }
 
   const pendingAction = livePending ? pendingFromApproval(livePending, 'Claude') : derivePendingAction(turns);
