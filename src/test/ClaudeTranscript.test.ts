@@ -59,3 +59,27 @@ describe('buildClaudeTranscript', () => {
     expect(t.turns[0].text).toBe('kept');
   });
 });
+
+// ── Yield assertion: a parse failure must not look like an empty transcript ──────
+describe('buildClaudeTranscript yield assertion', () => {
+  it('throws when every record has an unrecognised type, naming the counts', () => {
+    const call = () => buildClaudeTranscript(session, lines(
+      { type: 'human', message: { role: 'user', content: 'hello' } },
+      { type: 'model', message: { role: 'assistant', content: 'hi' } },
+    ));
+    expect(call).toThrow(/produced no turns/);
+    expect(call).toThrow(/2 non-empty line\(s\), 2 record\(s\) parsed, 0 turn\(s\)/);
+    expect(call).toThrow(/record type values changed/);
+  });
+
+  it('throws when no line parses as JSON, and blames the envelope', () => {
+    const call = () => buildClaudeTranscript(session, ['not json', '{oops']);
+    expect(call).toThrow(/2 non-empty line\(s\), 0 record\(s\) parsed, 0 turn\(s\)/);
+    expect(call).toThrow(/transcript envelope changed/);
+  });
+
+  it('does not throw on a genuinely empty session file', () => {
+    expect(buildClaudeTranscript(session, []).turns).toEqual([]);
+    expect(buildClaudeTranscript(session, ['', '   ', '\n']).turns).toEqual([]);
+  });
+});

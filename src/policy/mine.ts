@@ -143,6 +143,44 @@ export function segmentsOf(record: DecisionRecord): Segmented {
     : { segments: [command.trim()], confident: false };
 }
 
+/**
+ * Does this record license a green support event for its segments? Gate E3b.
+ *
+ * An `allow` is necessary and not sufficient, and the second condition is the one that is easy to
+ * miss. **A corrected call was allowed as a different command than the one recorded.** The hook
+ * stores `recordedCall(toolName, input.tool_input)` — the input *as asked* — while
+ * `decision.updatedInput` carries the rewrite that was actually approved, so a record with
+ * `rewritten: true` says `git push --force` was allowed when what ran was `--force-with-lease`.
+ * Counting it as support would mine a green clause for the dangerous form out of evidence that the
+ * lane refused it.
+ *
+ * Both correction rules that exist today (`force-push-to-lease`, `chmod-777-to-755`) happen to be on
+ * E8's never-widen list, so this closes a hole that is latent rather than live — but the correction
+ * lane exists to grow, and the third rule is not going to arrive with a matching E8 axis. Checking
+ * `rewritten` fixes it once, here, for every rule that will ever be added.
+ *
+ * **These records stay dropped, and the blocker is no longer the one the previous note named.** A
+ * learned yellow now loads and has a rung, which lit up the gap lane — and the gap lane is fed by
+ * `decision: 'none'`, not by these. §4.7 wants a `rewritten` record to become a yellow carrying a
+ * `fix`, and that lane is refused on its own merits rather than for want of a level:
+ *
+ *  - The only rewrite a learned clause may legally carry is one `applyCorrection` already performs
+ *    (F2, `learnedClauses.ts`'s `checkFix`) — and `applyCorrection` is ladder rung 2, which runs
+ *    *before any clause is consulted*. A clause restating it can never change a decision. Inert by
+ *    construction, and the argument does not weaken as the correction table grows: it is F2 that
+ *    binds, not the table's contents.
+ *  - Today E8 blocks them as well, per the paragraph above. That half does expire; the first does not.
+ *
+ * The two strings a rewrite candidate would need *are* separable here, which is worth recording
+ * because conflating them is the whole hazard: `record.call` is the call **as asked** (the matcher's
+ * input) and the rewrite is recoverable only by re-running `applyCorrection` on it (the `fix`). The
+ * record never stores the rewritten command, so the two cannot be mistaken for one another. The lane
+ * is not blocked for want of evidence — it is refused because its output would do nothing.
+ */
+export function isGreenSupport(record: DecisionRecord): boolean {
+  return record.decision === 'allow' && !record.rewritten;
+}
+
 /** Which signal a record carries. `clause !== null` means a written rule already reached it. */
 export function signalOf(record: DecisionRecord): Signal {
   if (record.clause !== null && record.clause !== undefined) { return 'repeat'; }
@@ -394,7 +432,7 @@ export function foldRecord(
     // Gate E3b, applied at fold time so the number the floor reads is already the green support
     // count: the runtime combines constituents with deny-wins, so an `allow` on a compound line
     // means every constituent was allowed. A segment inside a denied compound was never approved.
-    if (record.decision === 'allow') { stat.support += 1; }
+    if (isGreenSupport(record)) { stat.support += 1; }
     addDistinct(stat.sessions, record.sessionId);
     addDistinct(stat.days, day);
     if (record.ts < stat.firstSeen) { stat.firstSeen = record.ts; }
@@ -686,21 +724,28 @@ export interface Cluster {
 /**
  * Which records count as *support* for the lane being mined. One predicate, two lanes.
  *
- * The green lane's support is E3b: `decision === 'allow'`, sound because the runtime combines a
- * compound's constituents deny-wins, so an allow on a compound line means every constituent was
- * allowed. That argument is about *licensing a command*, and it does not transfer, which is why the
- * gap lane needs its own predicate rather than a relaxation of this one.
+ * The green lane's is {@link isGreenSupport}, unchanged and still the default — E3b's `allow`, plus
+ * the `!rewritten` half, and both of its arguments are about *licensing a command*.
  *
- * The gap lane's support is `decision === 'none'`: the calls policy never reached. Those records
+ * Neither transfers to the gap lane, which is why it gets a predicate rather than a relaxation of
+ * that one. Its support is `decision === 'none'`: the calls policy never reached. Those records
  * license nothing — the clause mined from them is a narrowing that can only withhold an allow — so
  * requiring an `allow` on them would be requiring the one thing that, by definition, never happened.
  */
 export type SupportTest = (record: DecisionRecord) => boolean;
 
-/** The green lane (E3b). */
-export const ALLOWED: SupportTest = r => r.decision === 'allow';
-
-/** The gap lane (§4.7): the hook returned no verdict, so nothing judged this call either way. */
+/**
+ * The gap lane (§4.7): the hook returned no verdict, so nothing judged this call either way.
+ *
+ * Keyed on `decision`, not on `actor`, for the same reason {@link signalOf} is: a sixth actor value
+ * (`correction`) arrived while this was being written, and a seventh will arrive after it. `decision`
+ * is the field that carries the meaning.
+ *
+ * No `!record.rewritten` here, deliberately: `rewritten` is set from `decision.updatedInput`, which
+ * is allow-only, so `decision: 'none'` with a rewrite cannot occur. And if a future observe mode did
+ * record a would-be rewrite, the clause mined from it is still a fix-less narrowing — it would carry
+ * no rewrite, only a matcher for the call as asked — so there is nothing for the guard to protect.
+ */
 export const NO_VERDICT: SupportTest = r => r.decision === 'none';
 
 /**
@@ -721,7 +766,7 @@ export const NO_VERDICT: SupportTest = r => r.decision === 'none';
  * and a `deny` reaches a green candidate only as a contradiction (E6).
  */
 export function clusterWindow(
-  records: readonly DecisionRecord[], supports: SupportTest = ALLOWED,
+  records: readonly DecisionRecord[], supports: SupportTest = isGreenSupport,
 ): Cluster[] {
   const out = new Map<string, Cluster>();
   for (const record of records) {

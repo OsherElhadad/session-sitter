@@ -12,6 +12,8 @@
  *     session-sitter digest              what your agents did last night
  *     session-sitter policy check        lint a practices file, replay decisions against it
  *     session-sitter learn               propose practices from the decision trail
+ *     session-sitter policy explain      what would happen to this call, and which clause decides
+ *     session-sitter export --html       the trail as one self-contained snapshot to send someone
  *
  * Exit codes are uniform across every command: 0 answered, 1 something it needed was missing or
  * unreadable, 2 the arguments were wrong.
@@ -21,6 +23,7 @@ import { BUILD_TIME, BUILD_VERSION } from '../buildInfo';
 import { CliError } from './args';
 import { processIo, type Io } from './render';
 import * as digest from './digest';
+import * as exportCmd from './export';
 import * as learn from './learn';
 import * as log from './log';
 import * as policy from './policy';
@@ -35,8 +38,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   status: { summary: 'every agent session, and which of them need you', run: status.run },
   log: { summary: 'query the audit trail of supervision decisions', run: log.run },
   digest: { summary: 'what your agents did last night, one page per session', run: digest.run },
-  policy: { summary: 'lint a practices file and replay decisions against it', run: policy.run },
+  policy: { summary: 'lint a practices file, or ask what it would decide', run: policy.run },
   learn: { summary: 'propose practices from the decision trail — no model, ever', run: learn.run },
+  export: {
+    summary: 'the decision trail as ndjson, or as one self-contained HTML snapshot',
+    run: exportCmd.run,
+  },
 };
 
 const USAGE = `session-sitter — agent governance in the terminal

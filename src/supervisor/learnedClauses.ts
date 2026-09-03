@@ -380,9 +380,13 @@ const KNOWN_KEYS = new Set([
 /** The two known keys that must be an inline list. Every other known key is a scalar. */
 const LIST_KEYS = new Set(['supersedes', 'displaces']);
 
-/** Typo suggestions worth making, because a typo'd field is indistinguishable from no field. */
-function didYouMean(key: string): string | null {
-  for (const known of KNOWN_KEYS) {
+/**
+ * Typo suggestions worth making, because a typo'd name is indistinguishable from no name. Takes
+ * the candidate set so a caller with its own vocabulary — `compile.ts` matching a `supersedes`
+ * against the clause ids in the corpus — reuses this instead of growing a second one.
+ */
+export function didYouMean(key: string, candidates: Iterable<string> = KNOWN_KEYS): string | null {
+  for (const known of candidates) {
     if (known === key) { continue; }
     // One transposition, substitution, insertion or deletion apart is worth suggesting.
     if (nearlyEqual(key, known)) { return known; }

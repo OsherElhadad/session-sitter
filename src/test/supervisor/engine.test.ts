@@ -73,6 +73,38 @@ describe('ClaudeCodeEngine', () => {
     expect(calls[0].env?.ANTHROPIC_AUTH_TOKEN).toBe('tok');
   });
 
+  it('keeps the usage block the envelope already carried', async () => {
+    // `extractResult` reads one field out of this envelope and drops the rest, so the four token
+    // counts prompt-cache health is judged on were being thrown away, not missing.
+    const { run } = recorder([ok(JSON.stringify({
+      type: 'result', result: green,
+      modelUsage: { 'aws/claude-opus-5': { inputTokens: 87 } },
+      usage: {
+        input_tokens: 87, cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 11089, output_tokens: 42,
+      },
+    }))]);
+    const res = await new ClaudeCodeEngine({ run }).classify('p');
+    expect(res.telemetry).toMatchObject({
+      tier: 'agent_cli',
+      model: 'aws/claude-opus-5',
+      input_tokens: 87,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 11089,
+      output_tokens: 42,
+    });
+    expect(res.telemetry?.latency_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reports null rather than zeros when the output carries no usage', async () => {
+    // This envelope is officially internal and unstable. A shape it does not have must degrade to
+    // "not recorded", never to a fabricated free call.
+    for (const stdout of [green, JSON.stringify({ type: 'result', result: green }), 'not json']) {
+      const { run } = recorder([ok(stdout)]);
+      expect((await new ClaudeCodeEngine({ run }).classify('p')).telemetry).toBeNull();
+    }
+  });
+
   it('leaves the environment alone when no gateway is configured', async () => {
     const { run, calls } = recorder([ok(green)]);
     await new ClaudeCodeEngine({ run }).classify('p');

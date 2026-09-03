@@ -164,6 +164,7 @@ class ClaudeCodeEngine {
         if (this.authToken) {
             env.ANTHROPIC_AUTH_TOKEN = this.authToken;
         }
+        const started = Date.now();
         const res = await this.run(this.cli, args, prompt, {
             cwd: this.cwd, env, timeoutMs: this.timeoutMs,
         });
@@ -177,7 +178,55 @@ class ClaudeCodeEngine {
         if (!raw) {
             throw new EngineError('claude produced no output');
         }
-        return { invocationId, raw: ClaudeCodeEngine.extractResult(raw) };
+        return {
+            invocationId,
+            raw: ClaudeCodeEngine.extractResult(raw),
+            telemetry: ClaudeCodeEngine.extractTelemetry(raw, Date.now() - started),
+        };
+    }
+    /**
+     * The `usage` block of the Claude Code envelope, as a {@link FastTelemetry}.
+     *
+     * The envelope already carries the four token counts this repository measures prompt-cache health
+     * on; `extractResult` reads one field out of it and drops the rest, so the numbers were being
+     * thrown away rather than being unavailable.
+     *
+     * Returns null whenever the shape is not there — a plain-text stdout, an older CLI, an envelope
+     * with no `usage`. The transcript JSONL and this envelope are both officially internal and
+     * unstable, so a miss must degrade to "not recorded" and never to a fabricated zero.
+     */
+    static extractTelemetry(stdout, latencyMs) {
+        let env;
+        try {
+            env = JSON.parse(stdout);
+        }
+        catch {
+            return null;
+        }
+        const last = Array.isArray(env) ? env[env.length - 1] : env;
+        if (!last || typeof last !== 'object') {
+            return null;
+        }
+        const usage = last.usage;
+        if (!usage || typeof usage !== 'object') {
+            return null;
+        }
+        const count = (key) => {
+            const v = usage[key];
+            return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+        };
+        const models = last.modelUsage;
+        const model = models && typeof models === 'object' && !Array.isArray(models)
+            ? Object.keys(models)[0] ?? '' : '';
+        return {
+            tier: 'agent_cli',
+            model,
+            latency_ms: latencyMs,
+            input_tokens: count('input_tokens'),
+            cache_creation_input_tokens: count('cache_creation_input_tokens'),
+            cache_read_input_tokens: count('cache_read_input_tokens'),
+            output_tokens: count('output_tokens'),
+        };
     }
     /** Unwrap the Claude Code JSON envelope to the assistant text, if present. */
     static extractResult(stdout) {

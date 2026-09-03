@@ -52,6 +52,8 @@ exports.lastUserMessage = lastUserMessage;
 exports.sessionFromDict = sessionFromDict;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
+/** The one definition. `SessionExporter` imports it from here — this module has no `vscode`
+ *  dependency, so it is the half of the pair both sides can reach. Two copies drift. */
 exports.EXPORT_SCHEMA_VERSION = '1.0';
 /** Raised when a transcript export is missing or malformed. Fails loud, never silent. */
 class TranscriptError extends Error {
@@ -155,6 +157,15 @@ function sessionFromDict(data) {
     const sessionId = pick(d, ['sessionId', 'session_id']);
     if (!sessionId) {
         throw new TranscriptError('transcript export missing sessionId');
+    }
+    // The version pin is load-bearing or it is decoration. An export that declares a version we
+    // do not know is refused rather than half-read: the fields we recognise may mean something
+    // else in that version. Absent stays tolerated — the Python-era exports this loader still
+    // documents support for predate the field, and every export we write carries it.
+    const declared = pick(d, ['schemaVersion', 'schema_version'], null);
+    if (declared != null && String(declared) !== exports.EXPORT_SCHEMA_VERSION) {
+        throw new TranscriptError(`unsupported transcript export schemaVersion '${String(declared)}' `
+            + `(expected '${exports.EXPORT_SCHEMA_VERSION}')`);
     }
     const turnsRaw = pick(d, ['turns'], null);
     if (!Array.isArray(turnsRaw)) {
