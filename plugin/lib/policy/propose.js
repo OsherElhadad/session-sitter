@@ -88,11 +88,15 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NEVER_WIDEN = exports.MAX_RETIREMENTS = exports.MAX_ADDITIONS = exports.EMISSION_RULE = void 0;
+exports.PATH_NEVER_WIDEN = exports.NEVER_WIDEN = exports.MAX_RETIREMENTS = exports.MAX_ADDITIONS = exports.EMISSION_RULE = void 0;
 exports.escapesCwd = escapesCwd;
 exports.neverWidenAxis = neverWidenAxis;
 exports.commonLiteral = commonLiteral;
 exports.commandMatcher = commandMatcher;
+exports.pathNeverWidenAxis = pathNeverWidenAxis;
+exports.commonPathLiteral = commonPathLiteral;
+exports.pathMatcher = pathMatcher;
+exports.symlinkEscape = symlinkEscape;
 exports.slugOf = slugOf;
 exports.candidateId = candidateId;
 exports.gate = gate;
@@ -234,6 +238,164 @@ function commonLiteral(segments) {
 function commandMatcher(literal) {
     return `/"command"\\s*:\\s*"${(0, practices_1.escapeForMatcher)(literal)}(?=[\\s"\\\\])/`;
 }
+// --------------------------------------------------------------------------- the directory lane
+/**
+ * Axes a **path** candidate is dropped on. Deliberately not {@link NEVER_WIDEN}, and deliberately
+ * short.
+ *
+ * Running the shell axes over a path would be nonsense in both directions: `egress` fires on a file
+ * called `ssh-notes.md`, `chmod` on `docs/chmod.md`, and `rm` requires the string to *start* with
+ * `rm`, which no relative directory does. A table of predicates over a different kind of string is
+ * not a table that transfers.
+ *
+ * Two entries, and both are reachable — the test constructs a real cluster for each. Three axes that
+ * would look right here are absent because nothing can trigger them, which is the unreachable-rule
+ * failure this design's own test invariants exist to catch:
+ *
+ *  - **`traversal`.** `normalisedPath` runs `path.resolve`, so a `..` is collapsed before this ever
+ *    sees it, and a `..` that leaves `cwd` has no shape at all.
+ *  - **`out-of-cwd`.** Same: `canonicalPathSegment` returns `''` for a path outside `cwd`, so such a
+ *    cluster refuses as `no-matcher-shape` before an axis is consulted.
+ *  - **A secrets axis** for `.env`, `id_rsa`, `credentials` and friends. `tiers.ts`'s `DESTRUCTIVE`
+ *    table already matches those against a haystack that contains `file_path`, so rung 1 returns RED
+ *    and the record is a `deny`. A `deny` is neither green support (E3b) nor gap support
+ *    (`decision === 'none'`), so no such record can reach a support set. `.env` is covered; an axis
+ *    for it would be a branch no test could honestly trigger.
+ */
+exports.PATH_NEVER_WIDEN = [
+    { axis: 'corpus-path', hit: d => /(^|\/)(data\/knowledge|corpus)(\/|$)/.test(d) },
+    { axis: 'dot-root', hit: d => d.startsWith('.') },
+];
+/**
+ * The first path never-widen axis this directory set touches, or null.
+ *
+ * Takes directories **relative to `cwd`**, which is what makes `dot-root` mean what it says: `.git`
+ * at the repository root is tooling, config or another agent's state and a learned blanket allow over
+ * it is not something six writes should buy, whereas `src/.generated` is inside a tree the evidence
+ * is genuinely about.
+ */
+function pathNeverWidenAxis(relativeDirs) {
+    for (const dir of relativeDirs) {
+        for (const rule of exports.PATH_NEVER_WIDEN) {
+            if (rule.hit(dir)) {
+                return rule.axis;
+            }
+        }
+    }
+    return null;
+}
+/**
+ * The longest common **segment** prefix of every supporting file's directory, at least
+ * {@link PATH_FLOOR_SEGMENTS} segments below `cwd`. Absolute, or null.
+ *
+ * The path analogue of {@link commonLiteral}, and every difference is forced:
+ *
+ *  1. **Segments, not characters.** A character-wise common prefix of `infra/production/a.tf` and
+ *     `infra/prod/b.tf` is `infra/prod`, a directory neither file is in. That is precisely how a
+ *     clause comes to govern a sibling tree, so the fold is over `split('/')`.
+ *  2. **The basename is dropped.** A file is not a directory prefix, so the common prefix is taken
+ *     over `path.dirname` — one supporting file yields its own directory, not itself.
+ *  3. **The floor refuses; it does not narrow.** Shrinking a shell prefix makes it *wider*, so E4
+ *     shrinks until every segment accepts it and then stops at two tokens. Here the prefix is
+ *     already the widest thing on offer and shrinking is the unsafe direction, so there is nothing
+ *     to shrink towards: below the floor it returns null. Same shape as E8 — dropped, not narrowed.
+ *  4. **Outside `cwd` is null, never a common ancestor.** Two records in two repos share `/w`, and
+ *     proposing `/w` is the widening this whole gate exists to refuse.
+ *  5. **No whitespace.** `escapeForMatcher` loosens a run of whitespace to `\s+` — right for a
+ *     command, where `npm  test` is the same command, and wrong for a path, where `a b` and `a  b`
+ *     are two directories. Refusing a whitespace literal makes the loosening a no-op by construction
+ *     and keeps one escaper for the whole system, which `practices.ts` asks for by name.
+ */
+function commonPathLiteral(paths, cwd) {
+    if (paths.length === 0 || cwd === null || !path.isAbsolute(cwd)) {
+        return null;
+    }
+    const root = path.resolve(cwd);
+    let common = null;
+    for (const p of paths) {
+        // No separate `isAbsolute(p)` guard: a relative path resolves against the *miner's* cwd, which is
+        // never under the session's `root`, so the `..` test below already refuses it. Proven by mutation
+        // — removing such a guard failed no test, which is why it is not here.
+        const rel = path.relative(root, path.dirname(path.resolve(p)));
+        if (rel.startsWith('..') || path.isAbsolute(rel)) {
+            return null;
+        }
+        const segments = rel === '' ? [] : rel.split(path.sep);
+        if (common === null) {
+            common = segments;
+            continue;
+        }
+        let i = 0;
+        while (i < common.length && i < segments.length && common[i] === segments[i]) {
+            i += 1;
+        }
+        common = common.slice(0, i);
+    }
+    if (common === null || common.length < mine_1.PATH_FLOOR_SEGMENTS) {
+        return null;
+    }
+    const literal = path.join(root, ...common);
+    if (/\s/.test(literal)) {
+        return null;
+    }
+    return literal;
+}
+/**
+ * The anchored matcher for a directory literal, as it is written on the `Match:` line.
+ *
+ * Two properties, and each answers a question the shell lane answered differently:
+ *
+ *  - **No left slack**, the same way {@link commandMatcher} has none: the literal begins at the first
+ *    character of the path *value*, so the anchor is `"<key>"\s*:\s*"` immediately followed by it. A
+ *    bare substring would match a vendored `.../vendor/w/api/infra/prod/db.tf` in another tree.
+ *  - **A segment boundary, which is not a word boundary.** The lookahead is exactly `/`, so
+ *    `infra/prod` cannot reach `infra/production-notes/` or `infra/prod.bak/`. `(?=[\s"\\])` — the
+ *    shell lane's boundary — says nothing at all about `/` and would have matched every one of them.
+ *    Requiring the `/` also means the directory entry itself is not a file under the directory.
+ *
+ * `key` is the tool's own path argument (`file_path`, or `notebook_path` for `NotebookEdit`), so a
+ * matcher never matches a path a different tool happens to send under a different key. And because
+ * the anchor names the key, a `Write`'s `content` — which `haystackFor` includes for a red clause —
+ * cannot satisfy it by merely mentioning the directory.
+ */
+function pathMatcher(dir, key) {
+    return `/"${key}"\\s*:\\s*"${(0, practices_1.escapeForMatcher)(dir)}(?=\\/)/`;
+}
+/**
+ * The written path, when it does not resolve to where it says it is. Null when it does.
+ *
+ * The matcher is **textual**: it matches the string in the tool input, never the file that string
+ * reaches. So a directory inside the tree that is a symlink out of it makes a learned green
+ * bypassable by construction — `Write` to `<repo>/infra/prod/x` matches, and the bytes land wherever
+ * `prod` points. There is nothing a regex over the tool input can do about that, so such a cluster is
+ * refused and no clause is written for it.
+ *
+ * The comparison is of **relative positions**, not absolute strings, and that is load-bearing rather
+ * than fussy: on macOS `/tmp` is a symlink to `/private/tmp`, so an absolute-string comparison would
+ * refuse every candidate whose session ran under a temporary directory. `realpathOf` is
+ * `learnedClauses.ts`'s own — the function `assertWritable` resolves with, including its
+ * deepest-existing-ancestor recursion for a file that does not exist yet — because two definitions of
+ * "where does this path really go" is the disagreement that makes a write boundary porous.
+ *
+ * This check runs at mining time, on the machine that owns the trail. It is **not** a filesystem
+ * guard on the emitted clause: a symlink created after the clause is accepted is not caught by it,
+ * and `assertWritable` remains the only filesystem boundary in the system.
+ */
+function symlinkEscape(absPath, cwd) {
+    let resolved;
+    let resolvedRoot;
+    try {
+        resolved = (0, learnedClauses_1.realpathOf)(path.resolve(absPath));
+        resolvedRoot = (0, learnedClauses_1.realpathOf)(path.resolve(cwd));
+    }
+    catch {
+        return absPath; // a symlink loop; `realpathOf` refuses to chase it further
+    }
+    return path.relative(path.resolve(cwd), path.resolve(absPath))
+        === path.relative(resolvedRoot, resolved)
+        ? null
+        : absPath;
+}
 /** A human-scannable slug from the canonical segment — the same string the hash is taken over. */
 function slugOf(segment, tool) {
     const base = (segment || tool).toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -282,9 +444,14 @@ function gate(cluster, support, tier, declinedTeam, opts) {
     if (cluster.unconfident) {
         return refuse('unconfident-split');
     }
-    // E2 — one tool, and a known shape. The directory lane for `file_path`-carrying tools is specified
-    // in §4.3 and is NOT built here; those clusters refuse as `no-matcher-shape` and are reported.
-    if (!mine_1.SHELL_TOOLS.has(cluster.tool) || cluster.segment === '') {
+    // E2 — one tool, and a known shape. Two lanes now have one: a shell tool shaped by
+    // `canonicalSegment`, and a path-carrying write tool shaped by `canonicalPathSegment` (§4.3). Every
+    // other tool still refuses here and is reported.
+    const isPath = generalise_1.PATH_TOOLS.has(cluster.tool);
+    if (!isPath && !mine_1.SHELL_TOOLS.has(cluster.tool)) {
+        return refuse('no-matcher-shape', cluster.tool);
+    }
+    if (cluster.segment === '') {
         return refuse('no-matcher-shape', cluster.tool);
     }
     if (tier === null) {
@@ -318,15 +485,46 @@ function gate(cluster, support, tier, declinedTeam, opts) {
         && cluster.failClosed === 0 && cluster.gaps === 0 && cluster.modelDecided === 0) {
         return refuse('no-gap');
     }
-    // E8 — never-widen axes. Dropped, not narrowed.
-    const axis = neverWidenAxis(cluster.segments, support.cwd);
-    if (axis !== null) {
-        return refuse('never-widen', axis);
+    // E8 and E4, per lane. The two lanes ask the same two questions of different kinds of string, and
+    // the answers do not transfer — see {@link PATH_NEVER_WIDEN} and {@link commonPathLiteral}.
+    let literal;
+    let matchers;
+    if (isPath) {
+        const root = support.cwd;
+        if (root === null) {
+            return refuse('no-matcher-shape', cluster.tool);
+        }
+        // Resolution before generalisation. A path that does not resolve to where it was written makes a
+        // *textual* matcher bypassable by construction, so the cluster is refused rather than narrowed.
+        for (const p of cluster.segments) {
+            if (symlinkEscape(p, root) !== null) {
+                return refuse('path-symlinked', p);
+            }
+        }
+        const axis = pathNeverWidenAxis(cluster.segments.map(p => path.relative(root, path.dirname(p))));
+        if (axis !== null) {
+            return refuse('never-widen', axis);
+        }
+        // No second check on the literal itself: it is a common prefix of every supporting path, so a
+        // symlinked literal is a symlinked *every* path and the loop above has already refused. Proven by
+        // mutation — adding such a check failed no test, which is the whole reason it is not here.
+        literal = commonPathLiteral(cluster.segments, root);
+        if (literal === null) {
+            return refuse('path-below-floor', `< ${mine_1.PATH_FLOOR_SEGMENTS} segments`);
+        }
+        matchers = [pathMatcher(literal, generalise_1.PATH_TOOLS.get(cluster.tool))];
     }
-    // E4 — the literal, and E9 by construction: no literal, no `Match:`, no candidate.
-    const literal = commonLiteral(cluster.segments);
-    if (literal === null) {
-        return refuse('prefix-too-short');
+    else {
+        const axis = neverWidenAxis(cluster.segments, support.cwd);
+        if (axis !== null) {
+            return refuse('never-widen', axis);
+        }
+        // E4 — the literal, and E9 by construction: no literal, no `Match:`, no candidate.
+        literal = commonLiteral(cluster.segments);
+        if (literal === null) {
+            return refuse('prefix-too-short');
+        }
+        matchers = [commandMatcher(literal)];
     }
     // The kind is part of the id, so a shape that clears the floor in both lanes gets two distinct,
     // dateless ids and one lane's `declined` file cannot suppress the other's candidate.
@@ -340,6 +538,7 @@ function gate(cluster, support, tier, declinedTeam, opts) {
     return {
         candidate: {
             id: candidateId(kind, slug, cluster.shape12),
+            tool: cluster.tool,
             kind,
             slug,
             shape12: cluster.shape12,
@@ -349,8 +548,8 @@ function gate(cluster, support, tier, declinedTeam, opts) {
             hasFix: false,
             tier,
             scope,
-            title: titleFor(literal, lane),
-            match: [commandMatcher(literal)],
+            title: titleFor(literal, lane, isPath),
+            match: matchers,
             literal,
             cluster: cluster.key,
             signal: cluster.signal,
@@ -376,10 +575,11 @@ function gate(cluster, support, tier, declinedTeam, opts) {
             && opts.instructionText.toLowerCase().includes(literal.toLowerCase()),
     };
 }
-function titleFor(literal, lane) {
+function titleFor(literal, lane, isPath = false) {
+    const what = isPath ? `writes under \`${literal}/\`` : `\`${literal}\``;
     return lane === 'gap'
-        ? `Ask a human about \`${literal}\` rather than letting a learned green settle it`
-        : `Allow \`${literal}\` without a classifier round-trip`;
+        ? `Ask a human about ${what} rather than letting a learned green settle it`
+        : `Allow ${what} without a classifier round-trip`;
 }
 // --------------------------------------------------------------------------- rendering
 /**
@@ -455,10 +655,28 @@ function renderClause(candidate, today) {
             + `${bar(candidate.modelLatencyMs)} of model time that a written clause makes free.`);
     }
     prose.push(`Observed variants: ${candidate.variants.map(v => `\`${v}\``).join(', ')}.`);
-    prose.push('The matcher is anchored at the start of the command value and ends on a word boundary, '
-        + `so it ${isGap ? 'covers' : 'licenses'} arguments to this command and nothing else; a compound `
-        + 'line is decomposed into its constituents before matching, so it cannot reach a second command '
-        + 'on the same line.');
+    if (generalise_1.PATH_TOOLS.has(candidate.tool)) {
+        prose.push('The matcher is anchored at the start of the '
+            + `\`${generalise_1.PATH_TOOLS.get(candidate.tool)}\` value and requires a \`/\` immediately after the `
+            + `directory, so it ${isGap ? 'covers' : 'licenses'} files under it and cannot reach a sibling `
+            + 'whose name merely starts the same way — `infra/prod` does not match '
+            + '`infra/production-notes/`. It is at least '
+            + `${mine_1.PATH_FLOOR_SEGMENTS} path segments below the working directory, because a shorter prefix `
+            + 'is a *wider* rule and a single top-level directory is the whole tree.');
+        prose.push('This is a **textual guard, not a filesystem one.** It matches the path string the '
+            + 'tool was asked to write, never the file that string resolves to. A directory inside the tree '
+            + 'that is a symlink out of it defeats it, and one created after this clause was accepted is '
+            + 'not visible to it at all. `assertWritable` in `src/supervisor/learnedClauses.ts` is the only '
+            + 'filesystem boundary in this system; this clause is not a substitute for it and must not be '
+            + 'read as one. What the miner did check is that every path in the evidence resolved to where '
+            + 'it was written at the time it was mined.');
+    }
+    else {
+        prose.push('The matcher is anchored at the start of the command value and ends on a word '
+            + `boundary, so it ${isGap ? 'covers' : 'licenses'} arguments to this command and nothing `
+            + 'else; a compound line is decomposed into its constituents before matching, so it cannot '
+            + 'reach a second command on the same line.');
+    }
     prose.push('Counts are scoped to the decision-trail window, which rotates at 4 MiB keeping one '
         + `generation${candidate.windowRotated ? ' and had rotated when this was mined' : ''}, so `
         + 'earlier occurrences may exist and are not counted here.');
