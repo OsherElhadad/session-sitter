@@ -1,0 +1,46 @@
+{
+  // ── Level 3: the AI supervisor, with no Telegram yet ──────────────────────
+  //
+  // The stub channel writes decision cards as FILES, so you can turn supervision on and watch what
+  // it would have sent before wiring a phone to it. This is the right first step: an Orange card
+  // that nobody receives times out and DENIES, which is safe but confusing if you did not expect it.
+  //
+  // Replace both paths with real ones on your machine.
+
+  // The one setting that turns the supervisor on. Holds history/, records/, outbox/, inbox/,
+  // notifications/, locks/. Created on first use.
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",
+
+  // Hand every prompt no rule handled to the supervisor, and poll for replies and timeouts.
+  // There is no daemon to start — the extension does this in-process.
+  "sessionSitter.autoSupervise": true,
+
+  // Cards to <stateDir>/notifications/, replies read from <stateDir>/inbox/. Nothing leaves the
+  // machine. Switch to "telegram" once you have read a few of these.
+  "sessionSitter.supervisor.messagingChannel": "stub",
+
+  // Which agent CLI judges an action the deterministic tier could not settle.
+  // "bob" needs a Bob API key; "claude" uses the `claude` CLI on your PATH.
+  "sessionSitter.supervisor.engine": "claude",
+
+  // Per-invocation classifier timeout, both engines. Minimum 10.
+  "sessionSitter.supervisor.classifierTimeoutSeconds": 300,
+
+  // How long an Orange card waits before it DENIES and hands the agent safe alternatives.
+  // Silence is never approval — this timeout is what that means in practice.
+  "sessionSitter.supervisor.orangeResponseTimeoutMinutes": 30,
+
+  // A Red blocks outright whatever happens here; this only decides whether it also posts an alert.
+  "sessionSitter.supervisor.redNotify": true,
+
+  // ── Knowledge: what the classifier weighs the action against ─────────────
+  //
+  // Optional. With no knowledge configured the classifier still judges the pending action, just
+  // without your team's written practices to weigh it against. The workspace is deliberately NEVER
+  // used as a fallback source: the supervised agent can write to the workspace, so defaulting to it
+  // would let an agent author the clauses that govern it.
+  "sessionSitter.dataRepoPath": "/home/you/work/team-corpus",
+  "sessionSitter.knowledge.user": "your-slug",
+  "sessionSitter.knowledge.project": "your-project",
+  "sessionSitter.knowledge.team": "your-team"
+}

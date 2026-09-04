@@ -176,6 +176,13 @@ jobs:
       - name: No leftovers of the old project names
         run: bash ci/check-naming.sh
 
+      # docs/onboarding/ is a skill an agent follows to write a real settings.json, so a stale
+      # claim in it is a wrong setting in someone's configuration — not a documentation bug. This
+      # proves every setting it names is declared, every check in its validator still fires, and
+      # every shipped example still validates.
+      - name: The onboarding skill matches this build's settings
+        run: bash ci/check-onboarding.sh
+
   plugin:
     name: Claude Code plugin
     runs-on: ubuntu-latest
