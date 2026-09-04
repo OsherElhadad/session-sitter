@@ -5,6 +5,45 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.17 — `/new` started a session you could not continue from Telegram
+
+`/new` opened a Claude panel and reported that the session's topic would appear "once it writes its
+first message". Nothing ever wrote one. **A panel nobody has spoken to writes no transcript**, and the
+worklist is built from transcripts — so the session was visible in the IDE, absent from the session
+list, had no topic, and could not be continued from the phone it was started on. The promise in the
+report was never kept because nothing was ever going to keep it.
+
+Two facts made it fixable, and neither was being used. **A fresh panel does have a session id** —
+Claude's live manager (`sessionPanels`) knows it immediately, which `getOpenClaudeSessionIds` already
+reads. And **`BusResult.sessionId` already existed** for exactly this, documented as "set by
+`newSession` once the started session is identified", with nothing setting it and nothing reading it.
+The plumbing had been designed and left unfinished.
+
+So `/new` now reads the open panels *before* opening, opens, waits briefly for exactly one new id to
+appear, **sends that session a first message** — which is what makes the CLI write a transcript and the
+session real — and hands the id back so its topic is created there and then instead of waited for.
+
+Where it cannot be sure it says so rather than guessing: two sessions appearing at once is a refusal to
+pick (a first message in the wrong conversation is worse than none), nothing registering within 8s
+leaves the panel open and unnamed, and a first message that does not land still gets a topic with the
+reason quoted. **None of those is reported as "could not start"** — the panel is open in every one of
+them, and saying otherwise sends someone looking for a window sitting in front of them. Bob is
+unchanged and still unconfirmable: `startTask` returns nothing.
+
+**And a session could open in a workspace you did not pick.** The menu paired each folder with
+*whichever window listed it first*, so a multi-root window listed early captured folders that had a
+dedicated window of their own — and tapping one opened a panel in the multi-root window, where Claude
+chose the folder itself. Nothing in Claude's API takes a folder (`primaryEditor.open` accepts a session
+id and nothing else), so the only way to be certain is to open in a window that has no other folder to
+choose from. `chooseLaunchTarget` prefers exactly that, tie-breaking on lowest pid so every window
+reaches the same answer.
+
+Where no single-folder window exists the folder is still offered — it is startable, just not guaranteed
+— with the caveat printed in the menu, naming the other folders it could land in. Said **before** the
+tap, because once the session exists in the wrong folder the only remedy is to close it and start
+again, which costs the round trip the warning would have saved. Guessing an undocumented option name
+for the command would have been worse than naming the part that is not ours to decide.
+
 ### 0.8.16 — On a machine with no VS Code, nothing owned anything
 
 Session ownership had three tiers, and the first two both resolve to a **VS Code window**: one that

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { SessionManager } from './SessionManager';
 import { SessionSitterViewProvider } from './SessionSitterViewProvider';
 import { InspectorBobSender, type AutoRespondRule } from './agents/BobSender';
@@ -433,7 +434,14 @@ export function activate(context: vscode.ExtensionContext) {
       bobSender: sender,
       claudeSender,
       launcher: new VsCodeSessionLauncher(
-        log, (sessionId, source) => provider.focusSession(sessionId, source)),
+        log,
+        (sessionId, source) => provider.focusSession(sessionId, source),
+        {
+          // The first message is what turns a freshly opened panel into a session with a transcript,
+          // which is what makes it appear in the worklist and gives its topic something to mirror.
+          sendToSession: (sessionId, text) => claudeSender.sendToSession(sessionId, text),
+          host: os.hostname().split('.')[0],
+        }),
       api: defaultApi(remoteControlConfig.botToken),
       log,
       // Supervision no longer polls for itself, so its updates are forwarded here.
