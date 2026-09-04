@@ -2,10 +2,11 @@
 
 Everything in `docs/`, and what each file is for. Start with whichever question you actually have.
 
-## Getting set up
+## Start here
 
 | Document | Read it when you want to know |
 |---|---|
+| [`TERMINAL.md`](TERMINAL.md) | the whole path for a bare `claude` in a terminal and the `session-sitter` command: install into an isolated config, confirm the hooks fire, compile the artifact, watch it decide a real session, read the trail, what rung 7 does when nobody can answer, and troubleshooting |
 | [`onboarding/`](onboarding/) | how to have an agent configure Session Sitter for you, or how to do it by hand: the six layers in the order they build on each other, seven worked configurations, and a validator that reads the settings the installed build actually declares |
 
 ## The extension

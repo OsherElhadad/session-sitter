@@ -263,8 +263,17 @@ export async function explainCall(
       : route === 'handed-back'
         ? ['ask', 7, 'timeout', 'observe mode: no verdict is returned, so Claude Code asks you '
           + 'itself. In enforce mode this would be denied at rung 7.'] as const
+        // With escalation on, rung 7 asks a human before it denies. `would` stays `deny`: escalation
+        // adds a way for someone to say yes, never a way for silence to become one — and an explain
+        // cannot know whether anyone will answer, or hold a prompt open to find out. Saying so is the
+        // point: without it this note read as a flat refusal for a call a live session would put to a
+        // person, which is the same mismatch the `--rev` branch above refuses for revisions.
         : ['deny', 7, 'timeout',
-          'nothing said this call is safe, and silence is not approval.'] as const;
+          settings.escalate
+            ? `nothing said this call is safe. Escalation is on, so a human would be asked first `
+              + `(up to ${settings.escalateWaitSeconds}s, and only while \`session-sitter daemon\` is `
+              + `running); with no answer it is denied, because silence is not approval.`
+            : 'nothing said this call is safe, and silence is not approval.'] as const;
     return {
       would, rung, rungLabel: RUNG_LABELS[rung], actor, light: null,
       clause: withheld?.yellow.citation ?? null,

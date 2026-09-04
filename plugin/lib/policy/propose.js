@@ -52,7 +52,7 @@
  * command}` and preserves it — so `^Bash \{"command":"` is not guaranteed and `"command"\s*:\s*"` is.
  *
  * Spec: `11-mine-v2.md` §4.3 (the gates), §4.5 (non-widening), §7.3 (ids and suppression), §8.2
- * (retirement writes no file).
+ * (retirement writes no file), §8.3 (merge — see the merge section below for what of it survived).
  */
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
@@ -88,7 +88,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.NEVER_WIDEN = exports.MAX_RETIREMENTS = exports.MAX_ADDITIONS = exports.EMISSION_RULE = void 0;
+exports.MERGE_NON_WIDENING = exports.MAX_MERGES = exports.NEVER_WIDEN = exports.MAX_RETIREMENTS = exports.MAX_ADDITIONS = exports.EMISSION_RULE = void 0;
 exports.escapesCwd = escapesCwd;
 exports.neverWidenAxis = neverWidenAxis;
 exports.commonLiteral = commonLiteral;
@@ -100,6 +100,9 @@ exports.renderClause = renderClause;
 exports.writeClause = writeClause;
 exports.statusOf = statusOf;
 exports.planRetirements = planRetirements;
+exports.subsumesMatcher = subsumesMatcher;
+exports.subsumesClause = subsumesClause;
+exports.findSubsumptions = findSubsumptions;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const learnedClauses_1 = require("../supervisor/learnedClauses");
@@ -640,4 +643,157 @@ function planRetirements(reports, windowRotated) {
     }
     plan.retirements = plan.retirements.slice(0, exports.MAX_RETIREMENTS);
     return plan;
+}
+/** Reviewer-fatigue cap, the same kind as {@link MAX_RETIREMENTS}. */
+exports.MAX_MERGES = 10;
+exports.MERGE_NON_WIDENING = 'The kept clause\'s matched set is a proven superset of the dropped clause\'s, at the same level '
+    + 'and in the same tier, so the pair decides exactly what the kept clause alone decides: retiring '
+    + 'the dropped clause removes no verdict. Containment is proved on the pattern text — substring '
+    + 'containment, or the token prefix of the anchored command form this pipeline emits — and never '
+    + 'by a regex prover, so a pair whose relationship cannot be proved is reported as nothing at all '
+    + 'rather than as a merge.';
+/** The literal parts of {@link commandMatcher}'s output, so this module can read back its own shape. */
+const ANCHOR_HEAD = '"command"\\s*:\\s*"';
+const ANCHOR_TAIL = '(?=[\\s"\\\\])';
+/**
+ * What a matcher is, for containment purposes — or null when nothing can be proved about it.
+ *
+ * `anywhere` is a plain substring matcher: it matches anywhere in the haystack. `command` is the
+ * anchored form this module emits, recognised by *parsing back its own literal parts* rather than by
+ * proving anything about a general regex. Any other regex is unprovable and returns null, which is
+ * the whole reason a containment prover is safe to have here at all.
+ *
+ * The comparison string is `escapeForMatcher`'s output in both cases, so one substring test serves
+ * both: it is a per-character homomorphism with whitespace runs collapsed to `\s+`, and `\s+` matches
+ * a prefix or a suffix of a longer run, so an alignment found in the escaped text is an alignment
+ * that holds in every string the pattern matches. Lower-cased because `compileMatcher` forces `i`
+ * onto every matcher it builds, substring and regex alike.
+ */
+function shapeOf(m) {
+    if (!m.isRegex) {
+        const esc = (0, practices_1.escapeForMatcher)(m.raw).toLowerCase();
+        return esc === '' ? null : { kind: 'anywhere', esc };
+    }
+    if (!m.raw.startsWith(ANCHOR_HEAD) || !m.raw.endsWith(ANCHOR_TAIL)) {
+        return null;
+    }
+    const esc = m.raw.slice(ANCHOR_HEAD.length, m.raw.length - ANCHOR_TAIL.length).toLowerCase();
+    return esc === '' ? null : { kind: 'command', esc };
+}
+/** `L(a) ⊇ L(b)`, proved, or null. */
+function subsumesMatcher(a, b) {
+    const sa = shapeOf(a);
+    const sb = shapeOf(b);
+    if (sa === null || sb === null) {
+        return null;
+    }
+    if (sa.kind === 'anywhere') {
+        // A substring found anywhere in the haystack, so it is enough that it occurs inside the other
+        // pattern's text — including inside an anchored matcher's command literal.
+        return sb.esc.includes(sa.esc) ? (sa.esc === sb.esc ? 'identical' : 'substring') : null;
+    }
+    // An anchored matcher constrains the *start* of the command value, so it cannot subsume a matcher
+    // that is free to match anywhere.
+    if (sb.kind !== 'command') {
+        return null;
+    }
+    if (sa.esc === sb.esc) {
+        return 'identical';
+    }
+    // A longer command prefix matches strictly fewer commands — but only when the extra text starts on
+    // a token boundary. `np` does not subsume `npm test`: nothing after `np` in `npm` is whitespace,
+    // so the shorter matcher's own lookahead refuses the very command the longer one accepts.
+    const rest = sb.esc.startsWith(sa.esc) ? sb.esc.slice(sa.esc.length) : '';
+    return rest.startsWith('\\s+') ? 'command-prefix' : null;
+}
+/**
+ * `L(a) ⊇ L(b)` over whole clauses: every one of `b`'s patterns is subsumed by one of `a`'s.
+ *
+ * A clause with no patterns is refused on both sides. Vacuous truth is the failure mode here — "every
+ * pattern of `b` is covered" is trivially true of a prose clause, and a prose clause matches nothing,
+ * so treating it as subsumed would propose retiring text on the strength of it having no matchers.
+ */
+function subsumesClause(a, b) {
+    if (a.patterns.length === 0 || b.patterns.length === 0) {
+        return null;
+    }
+    const proofs = [];
+    for (const pb of b.patterns) {
+        let best = null;
+        for (const pa of a.patterns) {
+            const proof = subsumesMatcher(pa, pb);
+            if (proof !== null) {
+                best = proof;
+                break;
+            }
+        }
+        if (best === null) {
+            return null;
+        }
+        proofs.push(best);
+    }
+    if (proofs.every(p => p === 'identical') && a.patterns.length === b.patterns.length) {
+        return 'identical';
+    }
+    return proofs.includes('command-prefix') ? 'command-prefix' : 'substring';
+}
+/**
+ * Every provable same-level, same-tier containment in the corpus, at most one finding per dropped
+ * clause.
+ *
+ * Two properties are what keep the findings from forming the state #60 refuses to compile:
+ *
+ *  - **At most one finding names any clause as `drop`.** Otherwise a reviewer is asked to retire the
+ *    same clause three times, once per clause that covers it.
+ *  - **Mutual containment is broken by id, keeping the lower.** Two clauses whose patterns say the
+ *    same thing each subsume the other, and emitting both directions is a two-cycle: accept both and
+ *    the rule disappears entirely, which is the annihilation `supersessionCycles` exists to refuse.
+ *    Across the *kinds* of proof mutual containment cannot arise — an anchored matcher never subsumes
+ *    a free substring — so this only ever fires on genuinely equal languages.
+ */
+function findSubsumptions(corpus) {
+    const ordered = [...corpus].sort((a, b) => a.clauseId.localeCompare(b.clauseId));
+    const out = [];
+    const dropped = new Set();
+    for (const drop of ordered) {
+        // Only a machine's clause is ever dropped. `Clause.origin` absent means `human` and that default
+        // is the safe one — everything `parsePractices` reads is a human's `bottom-line.md`.
+        if ((drop.origin ?? 'human') !== 'learned') {
+            continue;
+        }
+        if (drop.level === null) {
+            continue;
+        }
+        for (const keep of ordered) {
+            if (keep.clauseId === drop.clauseId || dropped.has(drop.clauseId)) {
+                continue;
+            }
+            // Same level is what makes containment sufficient (see the section above), same tier is what
+            // makes "both are loaded together" true.
+            if (keep.level !== drop.level || keep.tier !== drop.tier) {
+                continue;
+            }
+            const proof = subsumesClause(keep, drop);
+            if (proof === null) {
+                continue;
+            }
+            // Equal languages: keep the lower id, so the pair yields one finding rather than a two-cycle.
+            if (subsumesClause(drop, keep) !== null
+                && keep.clauseId.localeCompare(drop.clauseId) > 0) {
+                continue;
+            }
+            const proposed = !(0, ablate_1.isSafetyLevel)(drop.level);
+            out.push({
+                keep: keep.clauseId,
+                drop: drop.clauseId,
+                tier: drop.tier,
+                level: drop.level,
+                proof,
+                proposed,
+                note: proposed ? exports.MERGE_NON_WIDENING : `${exports.MERGE_NON_WIDENING} ${ablate_1.RED_NOT_PROPOSED}`,
+            });
+            dropped.add(drop.clauseId);
+        }
+    }
+    return out.slice(0, exports.MAX_MERGES);
 }

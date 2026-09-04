@@ -33,6 +33,8 @@ import {
   relaxations,
   renderedCount,
 } from '../../policy/ablate';
+import { coreClauses, renderCore } from '../../policy/compile';
+import { selectClauses } from '../../policy/select';
 
 // --------------------------------------------------------------------------- fixtures
 
@@ -282,6 +284,63 @@ describe('T36–T38 — why a zero means less for a red', () => {
     expect(ablate('bucket-drop', CORPUS, noise(50)).note).toBe(RED_NOT_PROPOSED);
   });
 
+  /**
+   * #85's fix, end to end. The `lifetimeFires` seam above is now filled by a *corpus-wide* durable
+   * count (`pipeline/citations.json`), because `ablateAll` ablates every clause against one options
+   * object and a single number cannot serve a corpus.
+   *
+   * The window here is the post-rotation window: it contains the hazard's shape (a near-miss) and not
+   * one fire, which is exactly the state that produced the misclassification — `dead-weight?` on a
+   * clause whose whole value is that it stopped something being tried.
+   */
+  const almostBucket = () => record({
+    inputSummary: 'aws s3 rb s3://staging-artifacts --force',
+    call: { tool_name: 'Bash', input: { command: 'aws s3 rb s3://staging-artifacts --force' } },
+  });
+
+  it('#85: the durable count reclassifies a post-rotation `dead-weight?` as `deterrent`', () => {
+    const records = [almostBucket(), ...noise(50)];
+    // What the trail alone can say now that the months of fires have rotated away.
+    expect(ablate('bucket-drop', CORPUS, records).evidence_class).toBe('dead-weight?');
+    // What the durable counter knows.
+    const report = ablate('bucket-drop', CORPUS, records, {
+      citations: { 'bucket-drop': 37, 'git-force': 4 },
+    });
+    expect(report.lifetime_fires).toBe(37);
+    expect(report.evidence_class).toBe('deterrent');
+    expect(report.retirement_candidate).toBe(false);
+  });
+
+  it('#85: the durable count and the record scan combine by max, so neither can lower the other', () => {
+    // A fire inside the window that the counter has not folded yet: the counter is *present* and says
+    // zero, the scan says one, and the scan is the one that is right. A `??` here instead of a `max`
+    // would take the stale zero and report a live clause as never having fired.
+    const fired = record({
+      clause: 'practices §bucket-drop',
+      inputSummary: 'aws s3 rb s3://prod-artifacts --force',
+      call: { tool_name: 'Bash', input: { command: 'aws s3 rb s3://prod-artifacts --force' } },
+    });
+    const stale = ablate('bucket-drop', CORPUS, [fired, ...noise(50)], {
+      citations: { 'bucket-drop': 0, 'git-force': 2 },
+    });
+    expect(stale.lifetime_fires).toBe(1);
+    expect(stale.evidence_class).toBe('deterrent');
+    // And a counter ahead of a rotated window wins the other way.
+    const rotated = ablate('bucket-drop', CORPUS, noise(50), { citations: { 'bucket-drop': 9 } });
+    expect(rotated.lifetime_fires).toBe(9);
+  });
+
+  it('#85: no count makes a red a retirement candidate, and none makes a green stop being one', () => {
+    // The blast radius. `retirement_candidate` is `changed === 0 && !isSafetyLevel(level)`, which does
+    // not read the count at all — so filling `lifetimeFires` differently cannot propose anything new.
+    for (const fires of [0, 1, 10_000]) {
+      expect(ablate('bucket-drop', CORPUS, noise(50), { citations: { 'bucket-drop': fires } })
+        .retirement_candidate).toBe(false);
+      expect(ablate('learned-fetch', CORPUS, noise(50), { citations: { 'learned-fetch': fires } })
+        .retirement_candidate).toBe(true);
+    }
+  });
+
   it('the classifier reads a lifetime fire ahead of everything else', () => {
     expect(classify('red', 0, 1, 99)).toBe('deterrent');
     expect(classify('red', 0, 0, 1)).toBe('dead-weight?');
@@ -472,6 +531,93 @@ describe('the ceiling (§5.3)', () => {
 
   it('is one number in config, not adaptive', () => {
     expect(CEILING_PER_TIER).toBe(25);
+  });
+});
+
+// ------------------------------------------------------- the exemption's cross-module dependency
+
+/**
+ * #81. `renderedCount` exempts every matchable clause from the per-tier ceiling, and that exemption
+ * is what makes a mining pipeline structurally unable to consume the prompt budget: every mined
+ * candidate carries an anchored matcher, so `renderedCount` is always 0 for it.
+ *
+ * The exemption is **not** a property of the schema. It holds only because `selectClauses` tests a
+ * patterned clause against the call and drops it as `evaluated-missed` rather than rendering it. That
+ * is a different module, and simplifying it into an unfiltered bundle would make the exemption false
+ * while `renderedCount` kept returning 0 — the count would simply be over the wrong population.
+ *
+ * So these assertions name the selector's *behaviour* alongside the count. Asserting `renderedCount`
+ * alone passes for the wrong reason the day the selector stops dropping.
+ */
+describe('#81 — the rendered-ceiling exemption is a selector behaviour, not a schema property', () => {
+  const mined = (id: string, pattern: string, level = 'red'): CompiledClause => ({
+    id, citation: `practices §${id}`, origin: 'learned', tier: 'user',
+    level: level as CompiledClause['level'], status: 'accepted', kind: 'intention',
+    title: id, body: `- ${id}\n`, patterns: [{ raw: pattern, is_regex: false, flags: '' }],
+    fix: null, weight: 'medium', expires: null, supersedes: [], source_file: null, deletable: null,
+  });
+
+  // A corpus of matchable mined clauses well past the ceiling, so a count over the wrong population
+  // could not be mistaken for a corpus that merely happens to fit.
+  const MINED = Array.from({ length: CEILING_PER_TIER + 10 }, (_, i) =>
+    mined(`mined-${i}`, `shape-${i} --now`, i % 2 === 0 ? 'red' : 'green'));
+
+  const select = (haystack: string) =>
+    selectClauses(MINED, { haystack, today: '2026-09-04' });
+
+  it('a corpus of matchable clauses is exempt, and the selector is why: every one is evaluated-missed',
+    () => {
+      expect(MINED.length).toBeGreaterThan(CEILING_PER_TIER);
+      expect(renderedCount(MINED, 'learned-red')).toBe(0);
+      expect(renderedCount(MINED, 'learned-green')).toBe(0);
+
+      // The load-bearing half. `renderedCount` is 0 *because* the selector evaluated each clause
+      // against this call and dropped it — not because the clauses are absent from the artifact.
+      const selection = select('git status --short');
+      expect(selection.dropped['evaluated-missed']).toBe(MINED.length);
+      expect(selection.selected).toEqual([]);
+      // Nothing reached the fill order at all, so no byte of the per-call budget was spent.
+      expect(selection.dropped.budget).toBe(0);
+    });
+
+  it('a clause that matches is rendered and the rest are still dropped — the exemption is per call',
+    () => {
+      const selection = select('shape-3 --now please');
+      expect(selection.matched).toEqual(['mined-3']);
+      expect(selection.dropped['evaluated-missed']).toBe(MINED.length - 1);
+      // And the ceiling count does not move, because a matched clause is decided deterministically
+      // at rungs 2–4: it is rendered for *this* call and costs no standing instruction.
+      expect(renderedCount(MINED, 'learned-red')).toBe(0);
+      expect(renderedCount(MINED, 'learned-green')).toBe(0);
+    });
+
+  it('the exemption is exactly the pattern test: the same clauses as prose consume the whole ceiling',
+    () => {
+      const prose = MINED.map(c => ({ ...c, patterns: [] }));
+      const reds = MINED.filter(c => c.level === 'red').length;
+      expect(renderedCount(prose, 'learned-red')).toBe(reds);
+      expect(renderedCount(prose, 'learned-green')).toBe(MINED.length - reds);
+      const selection = selectClauses(prose, { haystack: 'git status', today: '2026-09-04' });
+      expect(selection.dropped['evaluated-missed']).toBe(0);
+      expect(selection.selected.length).toBeGreaterThan(0);
+    });
+
+  /**
+   * The second module the exemption leans on, which #81 does not name. `renderedCount` counts
+   * patternless clauses, and there are *two* channels a patternless clause can reach the prompt
+   * through: `prompt_core` (`coreClauses`, reds and oranges, inside the cache breakpoint) and the
+   * per-call block (`selectClauses`'s `fill`). `coreClauses` filters on `patterns.length === 0` for
+   * the same reason, so relaxing *it* would push every mined red into the cached core — the standing
+   * instruction budget, and a revision-hash change on every running session's prefix. Strictly worse
+   * than the per-call case, and equally silent.
+   */
+  it('the core channel exempts them too: no matchable clause reaches prompt_core', () => {
+    expect(coreClauses(MINED)).toEqual([]);
+    expect(renderCore(MINED)).toBe('');
+    // The same reds as prose do reach it, so the emptiness above is the pattern test and not the
+    // fixture failing to be a red at all.
+    const prose = MINED.filter(c => c.level === 'red').map(c => ({ ...c, patterns: [] }));
+    expect(coreClauses(prose)).toHaveLength(prose.length);
   });
 });
 

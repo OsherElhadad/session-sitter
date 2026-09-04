@@ -64,6 +64,9 @@ const log_1 = require("./log");
 Object.defineProperty(exports, "clauseOf", { enumerable: true, get: function () { return log_1.clauseOf; } });
 const render_1 = require("./render");
 const explain_1 = require("../policy/explain");
+// The write path and the ablation report live in the policy module's own CLI. They are forwarded
+// rather than reimplemented, for the same reason `explain` is — see the dispatcher below.
+const cli_1 = require("../policy/cli");
 /** Where the parser is expected to live, relative to this module in `out/`. */
 const POLICY_MODULE = '../policy';
 /**
@@ -104,11 +107,14 @@ function findPracticesFile(cwd, exists = fs.existsSync) {
     return undefined;
 }
 // ── The command ─────────────────────────────────────────────────────────────
-exports.HELP = `session-sitter policy — lint a practices file, or ask what it would decide
+exports.HELP = `session-sitter policy — lint, compile, and ask what a practices file decides
 
 Usage:
   session-sitter policy check [PATH] [options]
   session-sitter policy explain <tool> [--command CMD | --input JSON] [--rev REV] [--json]
+  session-sitter policy compile [--corpus DIR] [--user U] [--project P] [--team T]
+                                [--registry FILE] [--data-dir DIR] [--dry-run]
+  session-sitter policy ablate [--data-dir DIR] [--decisions N] [--days N]
 
 Arguments:
   PATH              the practices file. Defaults to the first of
@@ -120,6 +126,11 @@ Options:
   --state-dir PATH  read this state dir for --replay instead of searching for one
   --json            machine-readable output (see docs/CLI.md for the contract)
   -h, --help        show this help
+
+compile publishes the versioned artifact the runtime loads, and is what puts a revision on every
+decision record: without it rev is null and "explain --rev" has nothing to resolve. ablate
+re-decides the recorded window with each clause removed, so a clause that changes nothing is a
+retirement candidate with evidence. Both take their own flags — run them with --help.
 
 Exit codes: 0 the file parsed · 1 it did not parse, or the parser is not installed · 2 bad arguments
 `;
@@ -205,8 +216,19 @@ async function run(argv, io, deps = {}) {
     if (subcommand === 'explain') {
         return (0, explain_1.runExplain)(rest, { out: io.out, err: io.err });
     }
+    // Same contract, and for the same reason: `compile` is the write path's last gate and `ablate`
+    // re-runs the enforcement evaluator, so both must be the one implementation. They were reachable
+    // only as `node .../lib/policy/cli.js compile` — while that file's own usage text says
+    // "session-sitter policy", naming an entry point that rejected the subcommand.
+    if (subcommand === 'compile') {
+        return (deps.compile ?? cli_1.compile)([...rest]);
+    }
+    if (subcommand === 'ablate') {
+        return (deps.ablate ?? cli_1.ablateCommand)([...rest]);
+    }
     if (subcommand !== 'check') {
-        throw new args_1.CliError(`unknown policy subcommand "${subcommand}" — the two are "check" and "explain"`);
+        throw new args_1.CliError(`unknown policy subcommand "${subcommand}" — the four are "check", "explain", "compile" `
+            + 'and "ablate"');
     }
     const args = (0, args_1.parseFlags)(rest, SPEC);
     if ((0, args_1.flagBool)(args, '--help') || (0, args_1.flagBool)(args, '-h')) {

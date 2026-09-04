@@ -83,6 +83,7 @@ const permissionRequest_1 = require("../hooks/permissionRequest");
 const paths_1 = require("../hooks/paths");
 const store_1 = require("../supervisor/store");
 const aggregates_1 = require("./aggregates");
+const citations_1 = require("./citations");
 const mine_1 = require("./mine");
 const propose_1 = require("./propose");
 const ablate_1 = require("./ablate");
@@ -245,6 +246,11 @@ function accumulate(trigger = 'session-end', env, now = new Date()) {
         // Written whenever the fold ran, not only when it counted something: the offset may have moved
         // past a rotation with no new records behind it, and losing that would re-read the file forever.
         (0, mine_1.writeShapes)(result.shapes, env);
+        // The durable citation counter, folded in the same pass and under the same lock. Its own file and
+        // its own offsets, because `shapes.json` is rebuildable derived data and a lifetime count is not
+        // — see `citations.ts`. Written whenever the fold ran, for the same reason `shapes.json` is.
+        const cited = (0, citations_1.foldCitations)(env, now);
+        (0, citations_1.writeCitations)(cited.citations, env);
         line.exitReason = result.folded === 0 ? 'no-new-records' : 'ok';
         line.durationMs = Date.now() - started;
         const nudged = (0, mine_1.nudge)(result.crossedFloor);
@@ -359,6 +365,14 @@ function propose(opts) {
                 tier, rendered: 0, ceiling: ablate_1.CEILING_PER_TIER, outcome: 'admit',
             });
         }
+        // §8.3 — static, over the corpus rather than the window, so it holds on a corpus that has never
+        // been exercised and is not weakened by the trail rotating. It writes no file and no
+        // `supersedes`: see the merge section of `propose.ts` for why the consolidation is expressed as a
+        // retirement of the subsumed clause rather than as a new clause declaring what it replaces.
+        if (opts.retire !== false) {
+            line.proposals.merges = (0, propose_1.findSubsumptions)(opts.corpus);
+            line.candidates.merged = line.proposals.merges.filter(m => m.proposed).length;
+        }
         if (opts.ablations && opts.ablations.length > 0) {
             const plan = (0, propose_1.planRetirements)(opts.ablations, line.window.rotated);
             line.proposals.retirements = plan.retirements;
@@ -394,8 +408,11 @@ function finish(line, written, reason, started, release, env, headline) {
 function headlineFor(line) {
     const added = line.candidates.proposed + line.candidates.overwritten;
     const retired = line.candidates.retired;
-    return `clauses: +${added} −${retired} merge ${line.candidates.merged} `
-        + `= net ${added - retired}  (${line.proposals.clauses.length} proposal(s), `
+    const merged = line.candidates.merged;
+    // Merge is the only case where the pipeline proposes a net reduction, so it is the only one whose
+    // arithmetic has to be stated: each finding retires one subsumed clause and adds nothing.
+    return `clauses: +${added} −${retired} merge ${merged} `
+        + `= net ${added - retired - merged}  (${line.proposals.clauses.length} proposal(s), `
         + `${line.clusters.belowFloor} shape(s) below the floor)`;
 }
 /**
@@ -406,10 +423,13 @@ function headlineFor(line) {
  * reports `proposed: 0, overwritten: 1` while calling the reason `no-shape-cleared-floor` — which is
  * false, since a shape plainly did clear it. Resolved in the honest direction: an overwrite and a
  * retirement are both output, so the invariant asserted here and in the tests is that
- * **`proposed + overwritten + retired === 0` implies a non-`ok` reason.**
+ * **`proposed + overwritten + retired + merged === 0` implies a non-`ok` reason.** A run whose only
+ * output is a merge finding has something a reviewer can act on, and reporting that as
+ * `no-shape-cleared-floor` would be the same silence-reads-as-success bug in the other direction.
  */
 function exitReasonFor(line, capped, admitted) {
-    const output = line.candidates.proposed + line.candidates.overwritten + line.candidates.retired;
+    const output = line.candidates.proposed + line.candidates.overwritten + line.candidates.retired
+        + line.candidates.merged;
     if (output > 0) {
         return admitted > capped ? 'caps-hit' : 'ok';
     }
