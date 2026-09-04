@@ -1,0 +1,68 @@
+# Session Sitter tier 2 — Grafana over VictoriaLogs.
+#
+#   docker compose up -d
+#   # ship, from any machine that has a trail. The Content-Type is NOT optional: see below.
+#   session-sitter export --jsonline --since 30d \
+#     | curl -s -X POST -H 'Content-Type: application/x-ndjson' --data-binary @- \
+#       '127.0.0.1:9428/insert/jsonline?_time_field=ts&_msg_field=note,inputSummary,headline&_stream_fields=kind,machine'
+#   open http://127.0.0.1:3000
+#
+# Tearing it down is `docker compose down -v`, and it loses nothing: the JSONL on each machine is the
+# store of record and never moves. Every tier here is disposable; the file is not.
+#
+# ## Local-only by construction
+#
+# Every port is published on 127.0.0.1 and none on 0.0.0.0. This is the single most likely way the
+# design leaks, so it is written explicitly in three places rather than left to a default:
+# VictoriaLogs' own default is `-httpListenAddr=:9428`, which binds EVERY interface — on a café
+# network that publishes your team's redacted-but-real command lines to every device on it.
+#
+# `GF_AUTH_ANONYMOUS_ENABLED` below is only defensible *because* of that binding. If you ever publish
+# either port beyond loopback, turn anonymous auth off in the same edit.
+
+services:
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.52.0
+    command:
+      # Container-internal, published on loopback by `ports` below.
+      - -httpListenAddr=:9428
+      - -storageDataPath=/vlogs
+      # Set explicitly, never defaulted. A team instance is a new system of record with its own
+      # retention, not a mirror of anybody's laptop.
+      - -retentionPeriod=90d
+    volumes:
+      - vlogs:/vlogs
+    ports:
+      - "127.0.0.1:9428:9428"
+    restart: unless-stopped
+    # No healthcheck: the image is distroless and has no shell, no wget and no curl, so every
+    # container-side probe fails and takes anything gated on it down with it. Grafana resolves the
+    # datasource per query, so it does not need to wait — it just shows an error until this is up.
+
+  grafana:
+    image: grafana/grafana-oss:11.6.0
+    environment:
+      # One plugin fetch from grafana.com, on FIRST start only. Grafana ships the *Loki* datasource in
+      # core but not this one, which is the whole reason Grafana+Loki is the named runner-up. If a
+      # network fetch is unacceptable, see "Airgapped" in README.md.
+      GF_INSTALL_PLUGINS: victoriametrics-logs-datasource
+      # Defensible only because both ports are on loopback. See the note above.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: system
+      # These dashboards are committed files. Editing one in the UI and never committing it is a
+      # dashboard nobody else has, so the UI copy is read-only and the repo is the way to change one.
+      GF_DASHBOARDS_MIN_REFRESH_INTERVAL: 30s
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: [victorialogs]
+    restart: unless-stopped
+
+volumes:
+  vlogs: {}
+  grafana: {}

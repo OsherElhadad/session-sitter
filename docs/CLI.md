@@ -646,11 +646,11 @@ curl -sL https://github.com/VictoriaMetrics/VictoriaLogs/releases/download/v1.52
 
 # -httpListenAddr is NOT optional. The default binds every interface, which on a café
 # network publishes your audit trail to every device on it.
-./victoria-logs -storageDataPath=./vlogs -httpListenAddr=127.0.0.1:9428 -retentionPeriod=90d
+./victoria-logs-prod -storageDataPath=./vlogs -httpListenAddr=127.0.0.1:9428 -retentionPeriod=90d
 
 session-sitter export --jsonline --since 7d \
-  | curl -s -X POST --data-binary @- \
-    '127.0.0.1:9428/insert/jsonline?_time_field=ts&_msg_field=note,inputSummary&_stream_fields=tool,actor'
+  | curl -s -X POST -H 'Content-Type: application/x-ndjson' --data-binary @- \
+    '127.0.0.1:9428/insert/jsonline?_time_field=ts&_msg_field=note,inputSummary,headline&_stream_fields=kind,machine'
 
 open http://127.0.0.1:9428/select/vmui
 ```
@@ -658,11 +658,77 @@ open http://127.0.0.1:9428/select/vmui
 Nothing ships automatically. There is no `SessionEnd` egress: this is a command you run, or a cron
 you wrote.
 
+**`-H 'Content-Type: application/x-ndjson'` is not decoration.** Without it the command above
+**silently ships nothing.** `curl --data-binary` defaults to
+`Content-Type: application/x-www-form-urlencoded`, and VictoriaLogs v1.52.0 discards the body of a
+form-urlencoded POST to `/insert/jsonline` while still answering **HTTP 200** — no error,
+`vl_http_errors_total` unmoved, `vl_rows_ingested_total` flat at zero. The shell tells you nothing and
+the only symptom is an empty UI. If that is what you are looking at:
+
+```bash
+curl -s 127.0.0.1:9428/metrics | grep '^vl_rows_ingested_total'
+```
+
+### Two kinds of line, one pipe
+
+`--jsonline` emits the **online and the offline** story together, tagged so a store holding both can
+tell them apart without guessing from which keys happen to be present:
+
+| `kind` | One line per | Source |
+|---|---|---|
+| `decision` | governance decision | `decisions.jsonl` |
+| `pipeline_run` | `session-sitter learn` invocation | `pipeline.jsonl` |
+
+A `pipeline_run` line is flattened to counts and closed enums — the corpus root, the scanned filenames,
+the error string and the cluster each refusal names are dropped **in both scopes**, because nothing
+downstream needs a filesystem path to draw a funnel. `learn --status` prints them on the machine.
+
+It carries `producedNothing`, which is the row that exists nowhere else: a run that read the trail,
+applied every gate and correctly proposed nothing writes **no clause file and no commit**, so a funnel
+built from surviving artefacts cannot tell it apart from a scheduler that stopped firing. It is true
+only for a `propose` run — an `accumulate` run never proposes, so the outcome does not apply to it.
+
+Every line also carries `machine`: the real hostname at `--scope=local`, a per-machine HMAC at
+`--scope=team`. That field is what lets several laptops POST into one instance and still be told apart,
+which is the one capability a single HTML file structurally cannot have. It is deliberately not called
+`host` — a raw hostname names a person's laptop and never leaves.
+
+**`_stream_fields=kind,machine`, and nothing else.** A stream field partitions the store; it is not
+"the columns I group by", and every field is queryable either way. `kind` is two values and `machine` is
+however many machines you own, so the product is bounded by hardware. Adding `clause` would multiply it
+by the rendered-clause ceiling and adding `sessionId` or `rev` would make it unbounded — one new stream
+per session, forever, in a file that never stops being appended to. See
+[`observability/README.md`](../observability/README.md#label-cardinality) for what that costs and when
+you would notice.
+
 ### `--html` is a report, not a live view
 
 One file, opened over `file://`, mailed, or committed to a private repo. No CDN, no chart library, no
-web fonts, no remote images — offline `file://` and the webview CSP both forbid remote fetches, so the
-only chart is an inline `<svg>` and the bars are CSS gradients in ordinary tables.
+web fonts, no remote images — offline `file://` and the webview CSP both forbid remote fetches, so
+every chart is an inline `<svg>` and the bars are CSS gradients in ordinary tables.
+
+What is in it, in the order it reads:
+
+| Section | Answers |
+|---|---|
+| **what is in force** | the resolved config, the pinned `rev`, and **the exact terminal command that changes each setting** |
+| **the outcome mix** | a stacked column per UTC day — is the *shape* changing? |
+| **the ladder** | which rung decided, with p50/p95 split per rung, because only rung 6 may be slow |
+| **which clauses fired** | hits and last-fired per clause |
+| **what the model rung cost** | **prefix rewrites by revision, first** — then the token shares, over the model-tier rows only |
+| **denials and rewrites** | the newest 100, as a list, because nobody debugs a policy from a bar chart |
+| **the offline side** | the pipeline funnel, what each run refused and why, and **every run including the ones that produced nothing** |
+
+The config table is **read-only, and local scope only.** Read-only because a page that can change the
+mode is a write path into a fail-closed governance tool; local-only because the values name a corpus, a
+practices file and a routing triple, which are the repo, team and path names the team projection drops
+everywhere else. A team snapshot says the table was withheld and why.
+
+Cache figures print their denominator and nothing else. Rungs 1–5 call no model, so they have no cache
+to hit and a null there is not a miss — **a cache hit rate across all decisions does not exist and is
+never printed.** The figure the report leads with is the count of decisions that rewrote the cached
+prefix, grouped by revision: one per revision is correct, several inside one revision is the 6.8× cost
+regression, and a percentage would average that spike away.
 
 A stale page that looks live is worse than no page, so it says what it is in seven places: the title
 and heading end in **"— snapshot"** and never say the other word; a header band carries the generation
@@ -705,6 +771,13 @@ and eventually is.
 
 A team log store is a **new system of record with its own retention**, not a mirror. Set
 `-retentionPeriod` explicitly and bind it to `127.0.0.1`.
+
+### Going further, and coming back
+
+[`observability/README.md`](../observability/README.md) has the three tiers end to end: tier 0 in one
+command, tier 1 as one binary, tier 2 as `docker compose up -d` with two committed Grafana dashboards
+and the alert rules worth wiring first — plus how to move back down, which is `docker compose down -v`
+and loses nothing.
 
 ---
 
