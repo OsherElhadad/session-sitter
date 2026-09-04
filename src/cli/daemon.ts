@@ -53,12 +53,17 @@
 
 import * as os from 'os';
 import * as fs from 'fs';
-import * as path from 'path';
 import { readLiveWindows, type WindowEntry } from '../WindowRegistry';
+import {
+  DEFAULT_INTERVAL_SECONDS, health, heartbeatPath, readHeartbeat, writeHeartbeat,
+  type DaemonHealth, type Heartbeat,
+} from '../daemonHeartbeat';
 import { leasePath } from '../telegram/bus';
 import { ReaderLease } from '../telegram/lease';
-import { dataDir } from '../hooks/paths';
-import { loadConfig, outboxDir, type SupervisorConfig } from '../supervisor/config';
+import { loadConfig, outboxDir, recordsDir, type SupervisorConfig } from '../supervisor/config';
+import { StateStore } from '../supervisor/store';
+import { sweepAsks } from '../hooks/escalate';
+import { harvestVerdicts, postNewAsks } from './serveAsks';
 import { buildChannel, buildOrchestrator } from '../supervisor/factory';
 import type { Orchestrator } from '../supervisor/orchestrator';
 import type { MessagingChannel } from '../supervisor/messaging';
@@ -102,89 +107,18 @@ const SPEC: FlagSpec = {
   '-h': 'boolean',
 };
 
-/** Default seconds between passes. A reply arriving is not urgent; a timeout is minutes-scale. */
-export const DEFAULT_INTERVAL_SECONDS = 5;
-
-// ── The heartbeat ───────────────────────────────────────────────────────────
-
-/**
- * What a running daemon writes after every pass, so `--status` can answer honestly.
- *
- * A pid alone cannot: pids are recycled, and a daemon that has wedged mid-pass is still a live pid.
- * `lastPassAt` is what distinguishes "running" from "the process exists" — the question anyone
- * actually has when they ask whether their timeouts are being applied.
- */
-export interface Heartbeat {
-  pid: number;
-  host: string;
-  startedAt: string;
-  lastPassAt: string;
-  passes: number;
-  /** Records the loop has transitioned, cumulative. */
-  processed: number;
-  /** Whether this daemon currently holds the Telegram reader lease. */
-  reading: boolean;
-  stateDir: string;
-  /**
-   * `loop` for a resident daemon, `once` for a single pass.
-   *
-   * Without this, `--status` after a `--once` run reports `dead` and "nothing is applying timeouts",
-   * which is wrong for the cron setup `--once` exists to serve: the pid being gone is the *expected*
-   * end of a single pass, not a failure. A status line that cries wolf at a working configuration is
-   * how people learn to stop reading it.
-   */
-  mode: 'loop' | 'once';
-}
-
-export function heartbeatPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(dataDir(env), 'daemon.json');
-}
-
-export async function writeHeartbeat(beat: Heartbeat, file: string): Promise<void> {
-  await fs.promises.mkdir(path.dirname(file), { recursive: true });
-  // Atomic: `--status` in another process must never read half a record and call it stale.
-  const tmp = `${file}.tmp-${process.pid}`;
-  await fs.promises.writeFile(tmp, `${JSON.stringify(beat, null, 2)}\n`, 'utf8');
-  await fs.promises.rename(tmp, file);
-}
-
-export async function readHeartbeat(file: string): Promise<Heartbeat | null> {
-  try {
-    const raw = await fs.promises.readFile(file, 'utf8');
-    const beat = JSON.parse(raw) as Heartbeat;
-    return typeof beat.pid === 'number' && typeof beat.lastPassAt === 'string' ? beat : null;
-  } catch {
-    return null;
-  }
-}
+// Re-exported so `session-sitter daemon`'s own surface stays the place to look for it, while the
+// value itself lives beside `health()`, which needs it as a default.
+export { DEFAULT_INTERVAL_SECONDS, type DaemonHealth, type Heartbeat };
 
 /**
- * How a heartbeat reads right now.
+ * How long an expired ask and its verdict are kept before being swept.
  *
- * `stale` is the case worth having a word for: the process is alive but has not completed a pass in
- * far longer than its interval, which is a wedged daemon. Reporting that as "running" is how someone
- * comes to believe their timeouts are being applied when they are not.
+ * Not deleted the moment the deadline passes: a human answering a second late should still find the
+ * question they were answering, and someone inspecting what just happened should be able to see it.
+ * Housekeeping only — the decision itself is in the audit trail, which is never pruned here.
  */
-export type DaemonHealth = 'running' | 'stale' | 'dead' | 'none' | 'oneshot';
-
-/** A pass is late once it is this many times the interval overdue. */
-const STALE_FACTOR = 6;
-
-export function health(
-  beat: Heartbeat | null,
-  now: number,
-  isAlive: (pid: number) => boolean,
-  intervalSeconds: number = DEFAULT_INTERVAL_SECONDS,
-): DaemonHealth {
-  if (beat === null) { return 'none'; }
-  // A finished single pass is not a dead daemon. Check this before liveness, because the pid being
-  // gone is exactly what `--once` is supposed to leave behind.
-  if (beat.mode === 'once') { return 'oneshot'; }
-  if (!isAlive(beat.pid)) { return 'dead'; }
-  const last = Date.parse(beat.lastPassAt);
-  if (Number.isNaN(last)) { return 'stale'; }
-  return now - last > intervalSeconds * STALE_FACTOR * 1000 ? 'stale' : 'running';
-}
+export const ASK_SWEEP_GRACE_MS = 10 * 60_000;
 
 // ── Standing down for an IDE ────────────────────────────────────────────────
 
@@ -272,6 +206,15 @@ export interface DaemonDeps {
    * it the lease would be decoration and both readers would consume the stream.
    */
   onLease?: (held: boolean) => void;
+  /**
+   * Post asks written by `PermissionRequest` escalation, before the pass reads replies.
+   *
+   * Optional so the loop can be tested without the ask machinery, and injected rather than built
+   * here so the daemon's own wiring decides whether escalation is served at all.
+   */
+  serveAsks?: () => Promise<unknown>;
+  /** Translate resolved asks into verdict files, after the pass has read replies. */
+  harvestAsks?: () => Promise<unknown>;
   config: SupervisorConfig;
   heartbeatFile: string;
   intervalSeconds: number;
@@ -327,8 +270,16 @@ export async function runLoop(deps: DaemonDeps): Promise<DaemonResult> {
 
     let records: SupervisionRecord[] = [];
     try {
+      // Order matters, and it is the order of one round trip. Post new asks *first*, so a question
+      // written by a hook a moment ago is on its card before `poll()` looks for replies; `poll()`
+      // then does the single read that correlates every kind of pending record, asks included;
+      // `harvest` translates whatever it resolved back into verdict files the waiting hooks can see.
+      // Any other order costs an ask a whole pass, which for a hook holding a prompt open is most of
+      // its deadline.
+      await deps.serveAsks?.();
       records = await deps.orchestrator.poll();
       await deps.orchestrator.refreshTimers();
+      await deps.harvestAsks?.();
     } catch (err) {
       // A failed pass must not end the daemon. The whole point is to still be running in an hour,
       // and a transient network error inside a Telegram read is the most likely thing to go wrong.
@@ -497,9 +448,21 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   process.on('SIGINT', () => stop('SIGINT'));
   process.on('SIGTERM', () => stop('SIGTERM'));
 
+  // The ask service shares the orchestrator's store and channel, which is the point: one store so
+  // an ask is a record like any other, and one channel so there is still exactly one reader.
+  const askDeps = {
+    store: new StateStore(recordsDir(config)),
+    channel: orchestrator.channel,
+    now: () => io.now(),
+    log,
+  };
+  await sweepAsks(io.now(), ASK_SWEEP_GRACE_MS);
+
   const once = flagBool(args, '--once');
   const result = await runLoop({
     orchestrator,
+    serveAsks: () => postNewAsks(askDeps),
+    harvestAsks: () => harvestVerdicts(askDeps),
     lease: leased ? lease : null,
     // Kept in step with the loop's own view, so the channel gate and the log agree about which
     // passes read Telegram.

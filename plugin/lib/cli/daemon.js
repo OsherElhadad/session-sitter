@@ -88,11 +88,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_INTERVAL_SECONDS = exports.HELP = void 0;
-exports.heartbeatPath = heartbeatPath;
-exports.writeHeartbeat = writeHeartbeat;
-exports.readHeartbeat = readHeartbeat;
-exports.health = health;
+exports.ASK_SWEEP_GRACE_MS = exports.DEFAULT_INTERVAL_SECONDS = exports.HELP = void 0;
 exports.liveIdeWindows = liveIdeWindows;
 exports.ideRefusal = ideRefusal;
 exports.gatedChannel = gatedChannel;
@@ -102,12 +98,15 @@ exports.runStatus = runStatus;
 exports.run = run;
 const os = __importStar(require("os"));
 const fs = __importStar(require("fs"));
-const path = __importStar(require("path"));
 const WindowRegistry_1 = require("../WindowRegistry");
+const daemonHeartbeat_1 = require("../daemonHeartbeat");
+Object.defineProperty(exports, "DEFAULT_INTERVAL_SECONDS", { enumerable: true, get: function () { return daemonHeartbeat_1.DEFAULT_INTERVAL_SECONDS; } });
 const bus_1 = require("../telegram/bus");
 const lease_1 = require("../telegram/lease");
-const paths_1 = require("../hooks/paths");
 const config_1 = require("../supervisor/config");
+const store_1 = require("../supervisor/store");
+const escalate_1 = require("../hooks/escalate");
+const serveAsks_1 = require("./serveAsks");
 const factory_1 = require("../supervisor/factory");
 const args_1 = require("./args");
 const render_1 = require("./render");
@@ -145,48 +144,14 @@ const SPEC = {
     '--help': 'boolean',
     '-h': 'boolean',
 };
-/** Default seconds between passes. A reply arriving is not urgent; a timeout is minutes-scale. */
-exports.DEFAULT_INTERVAL_SECONDS = 5;
-function heartbeatPath(env = process.env) {
-    return path.join((0, paths_1.dataDir)(env), 'daemon.json');
-}
-async function writeHeartbeat(beat, file) {
-    await fs.promises.mkdir(path.dirname(file), { recursive: true });
-    // Atomic: `--status` in another process must never read half a record and call it stale.
-    const tmp = `${file}.tmp-${process.pid}`;
-    await fs.promises.writeFile(tmp, `${JSON.stringify(beat, null, 2)}\n`, 'utf8');
-    await fs.promises.rename(tmp, file);
-}
-async function readHeartbeat(file) {
-    try {
-        const raw = await fs.promises.readFile(file, 'utf8');
-        const beat = JSON.parse(raw);
-        return typeof beat.pid === 'number' && typeof beat.lastPassAt === 'string' ? beat : null;
-    }
-    catch {
-        return null;
-    }
-}
-/** A pass is late once it is this many times the interval overdue. */
-const STALE_FACTOR = 6;
-function health(beat, now, isAlive, intervalSeconds = exports.DEFAULT_INTERVAL_SECONDS) {
-    if (beat === null) {
-        return 'none';
-    }
-    // A finished single pass is not a dead daemon. Check this before liveness, because the pid being
-    // gone is exactly what `--once` is supposed to leave behind.
-    if (beat.mode === 'once') {
-        return 'oneshot';
-    }
-    if (!isAlive(beat.pid)) {
-        return 'dead';
-    }
-    const last = Date.parse(beat.lastPassAt);
-    if (Number.isNaN(last)) {
-        return 'stale';
-    }
-    return now - last > intervalSeconds * STALE_FACTOR * 1000 ? 'stale' : 'running';
-}
+/**
+ * How long an expired ask and its verdict are kept before being swept.
+ *
+ * Not deleted the moment the deadline passes: a human answering a second late should still find the
+ * question they were answering, and someone inspecting what just happened should be able to see it.
+ * Housekeeping only — the decision itself is in the audit trail, which is never pruned here.
+ */
+exports.ASK_SWEEP_GRACE_MS = 10 * 60000;
 // ── Standing down for an IDE ────────────────────────────────────────────────
 /**
  * Live extension hosts on this machine, which are the reason a daemon may have to refuse.
@@ -288,8 +253,16 @@ async function runLoop(deps) {
         }
         let records = [];
         try {
+            // Order matters, and it is the order of one round trip. Post new asks *first*, so a question
+            // written by a hook a moment ago is on its card before `poll()` looks for replies; `poll()`
+            // then does the single read that correlates every kind of pending record, asks included;
+            // `harvest` translates whatever it resolved back into verdict files the waiting hooks can see.
+            // Any other order costs an ask a whole pass, which for a hook holding a prompt open is most of
+            // its deadline.
+            await deps.serveAsks?.();
             records = await deps.orchestrator.poll();
             await deps.orchestrator.refreshTimers();
+            await deps.harvestAsks?.();
         }
         catch (err) {
             // A failed pass must not end the daemon. The whole point is to still be running in an hour,
@@ -309,7 +282,7 @@ async function runLoop(deps) {
             }
             lastBacklog = waiting;
         }
-        await writeHeartbeat({
+        await (0, daemonHeartbeat_1.writeHeartbeat)({
             pid: process.pid,
             host: os.hostname().split('.')[0],
             startedAt,
@@ -334,7 +307,7 @@ async function runLoop(deps) {
 function parseInterval(args) {
     const raw = (0, args_1.flagString)(args, '--interval');
     if (raw === undefined) {
-        return exports.DEFAULT_INTERVAL_SECONDS;
+        return daemonHeartbeat_1.DEFAULT_INTERVAL_SECONDS;
     }
     const n = Number(raw);
     if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
@@ -344,9 +317,9 @@ function parseInterval(args) {
 }
 /** `--status`: is a daemon running here, and is it actually completing passes? */
 async function runStatus(io, json, env = process.env) {
-    const file = heartbeatPath(env);
-    const beat = await readHeartbeat(file);
-    const state = health(beat, io.now().getTime(), pid => {
+    const file = (0, daemonHeartbeat_1.heartbeatPath)(env);
+    const beat = await (0, daemonHeartbeat_1.readHeartbeat)(file);
+    const state = (0, daemonHeartbeat_1.health)(beat, io.now().getTime(), pid => {
         try {
             process.kill(pid, 0);
             return true;
@@ -456,15 +429,26 @@ async function run(argv, io) {
     };
     process.on('SIGINT', () => stop('SIGINT'));
     process.on('SIGTERM', () => stop('SIGTERM'));
+    // The ask service shares the orchestrator's store and channel, which is the point: one store so
+    // an ask is a record like any other, and one channel so there is still exactly one reader.
+    const askDeps = {
+        store: new store_1.StateStore((0, config_1.recordsDir)(config)),
+        channel: orchestrator.channel,
+        now: () => io.now(),
+        log,
+    };
+    await (0, escalate_1.sweepAsks)(io.now(), exports.ASK_SWEEP_GRACE_MS);
     const once = (0, args_1.flagBool)(args, '--once');
     const result = await runLoop({
         orchestrator,
+        serveAsks: () => (0, serveAsks_1.postNewAsks)(askDeps),
+        harvestAsks: () => (0, serveAsks_1.harvestVerdicts)(askDeps),
         lease: leased ? lease : null,
         // Kept in step with the loop's own view, so the channel gate and the log agree about which
         // passes read Telegram.
         onLease: held => { holdsLease = held; },
         config,
-        heartbeatFile: heartbeatPath(),
+        heartbeatFile: (0, daemonHeartbeat_1.heartbeatPath)(),
         intervalSeconds: interval,
         once,
         now: () => io.now(),

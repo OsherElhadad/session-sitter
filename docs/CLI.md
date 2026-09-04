@@ -223,7 +223,17 @@ session-sitter daemon --once             # one pass — for cron
 
 ### What one pass does, and why it matters
 
-Two things: **correlate replies** to escalated decisions, and **expire the ones nobody answered.**
+Three things: **post new questions** from hook escalations, **correlate replies** to escalated
+decisions, and **expire the ones nobody answered.**
+
+The order is the order of one round trip, and it matters. A question written by a hook a moment ago is
+posted *before* the pass looks for replies, so it does not lose a whole pass waiting — and for a hook
+holding a prompt open, a pass is most of its deadline.
+
+That first job is what makes [`SESSION_SITTER_ESCALATE`](PLUGIN.md#escalation-answering-a-prompt-from-somewhere-else)
+work: the hook writes an ask and waits on a *file*, and this daemon is the only process that touches
+the messaging channel. A hook runs once per prompt, so a hook that polled Telegram itself would be an
+unbounded number of readers of a stream that only one process may read.
 
 The second is the reason this command exists. Expiring a card is the mechanism behind *silence is
 never approval* — and with nothing running, an escalated call never reaches its deadline. It sits in

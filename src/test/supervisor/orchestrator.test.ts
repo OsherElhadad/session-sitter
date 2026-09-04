@@ -48,6 +48,50 @@ const ambiguous = (overrides: Parameters<typeof makeExport>[0] = {}) => makeExpo
   ...overrides,
 });
 
+/**
+ * What counts as approval — the single definition, used both for Bob approvals and for the
+ * `PermissionRequest` escalation the hook waits on.
+ */
+describe('replyApproves', () => {
+  it('approves a plain yes, in the forms a human actually types', () => {
+    for (const reply of ['yes', 'Yes!', 'ok', 'okay', 'approve', 'approved', 'go', 'proceed',
+      'yes please', 'ok go ahead', 'approve this']) {
+      expect(Orchestrator.replyApproves(reply), reply).toBe(true);
+    }
+  });
+
+  /**
+   * The defect this hardening fixes. The rule was "contains an approval word", so a refusal that
+   * happened to contain one approved the call. Harmless-looking while it only resolved Bob approvals;
+   * not harmless once a permission decision rides on it.
+   */
+  it('denies a refusal that happens to contain an approval word', () => {
+    for (const reply of [
+      'no, do not allow that',
+      "don't allow it",
+      'no',
+      'never approve that',
+      'cancel — do not proceed',
+      'stop, do not go ahead',
+      'reject',
+      'wait, do not approve yet',
+    ]) {
+      expect(Orchestrator.replyApproves(reply), reply).toBe(false);
+    }
+  });
+
+  it('denies a redirect, which is not permission for the call that was asked about', () => {
+    expect(Orchestrator.replyApproves('just commit instead')).toBe(false);
+    expect(Orchestrator.replyApproves('create a PR')).toBe(false);
+  });
+
+  it('denies silence and noise', () => {
+    expect(Orchestrator.replyApproves('')).toBe(false);
+    expect(Orchestrator.replyApproves('   ')).toBe(false);
+    expect(Orchestrator.replyApproves('what?')).toBe(false);
+  });
+});
+
 describe('the recorded call', () => {
   it('records the tool call the decision judged', async () => {
     const rig = buildTestOrchestrator(tmp, new FakeEngine([json('green')]), {

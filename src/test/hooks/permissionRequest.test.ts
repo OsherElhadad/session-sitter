@@ -93,7 +93,20 @@ beforeEach(() => {
   delete process.env.SESSION_SITTER_PERSIST_RULES;
   delete process.env.SESSION_SITTER_PRACTICES;
   delete process.env.SESSION_SITTER_USER;
+  delete process.env.SESSION_SITTER_ESCALATE;
+  delete process.env.SESSION_SITTER_ESCALATE_WAIT;
 });
+
+/** Write a heartbeat that `health()` reads as a live, working daemon. */
+function liveDaemon(): void {
+  fs.writeFileSync(path.join(dir, 'daemon.json'), JSON.stringify({
+    pid: process.pid,
+    host: 'test',
+    startedAt: new Date().toISOString(),
+    lastPassAt: new Date().toISOString(),
+    passes: 1, processed: 0, reading: true, stateDir: dir, mode: 'loop',
+  }), 'utf8');
+}
 
 afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
@@ -424,6 +437,163 @@ describe('handle — a compound that cannot be split', () => {
 });
 
 // --------------------------------------------------------------------------- the wire contract
+
+/**
+ * Rung 7 asking a human before it fails closed.
+ *
+ * Still rung 7 rather than a new rung 8: this is the last resort, and asking a human *is* the last
+ * resort. `actor` separates the outcomes — `human` answered, `timeout` did not.
+ */
+describe('handle — rung 7 escalation', () => {
+  const ambiguous = () => req('Write', { file_path: '/tmp/a.ts', content: 'x' });
+
+  it('changes nothing when it is off, which is the default', async () => {
+    const decision = decisionOf(await handle(ambiguous()));
+    expect(decision.behavior).toBe('deny');
+    expect(decision.message).toContain('silence is not approval');
+    expect(decision.message).not.toContain('escalation');
+    // And no ask is written, so nothing is left for a daemon to find.
+    expect(fs.existsSync(path.join(dir, 'asks'))).toBe(false);
+  });
+
+  /**
+   * The property that keeps escalation from being a latency trap. An ask is served by the daemon; with
+   * none running, waiting out the deadline would hold the agent still for nothing. It denies at once
+   * and names the command that fixes it.
+   */
+  it('denies immediately, naming the fix, when no daemon can answer', async () => {
+    process.env.SESSION_SITTER_ESCALATE = 'on';
+    const started = Date.now();
+    const decision = decisionOf(await handle(ambiguous()));
+    expect(decision.behavior).toBe('deny');
+    expect(decision.message).toContain('no daemon has run here');
+    expect(decision.message).toContain('session-sitter daemon');
+    // "Immediately" is the claim, so it is the thing asserted: nowhere near the 45s deadline.
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(fs.existsSync(path.join(dir, 'asks'))).toBe(false);
+  });
+
+  it('treats a wedged daemon as no daemon, because it cannot deliver the ask either', async () => {
+    process.env.SESSION_SITTER_ESCALATE = 'on';
+    fs.writeFileSync(path.join(dir, 'daemon.json'), JSON.stringify({
+      pid: process.pid, // alive
+      host: 'x',
+      startedAt: new Date(Date.now() - 7200_000).toISOString(),
+      lastPassAt: new Date(Date.now() - 3600_000).toISOString(), // an hour ago
+      passes: 1, processed: 0, reading: true, stateDir: dir, mode: 'loop',
+    }), 'utf8');
+    const decision = decisionOf(await handle(ambiguous()));
+    expect(decision.behavior).toBe('deny');
+    expect(decision.message).toContain('stopped completing passes');
+  });
+
+  it('records the denial with the reason, so the trail says escalation was unavailable', async () => {
+    process.env.SESSION_SITTER_ESCALATE = 'on';
+    await handle(ambiguous());
+    const records = readJsonl<DecisionRecord>(path.join(dir, 'decisions.jsonl'));
+    expect(records).toHaveLength(1);
+    expect(records[0].decision).toBe('deny');
+    expect(records[0].note).toContain('escalation unavailable');
+  });
+
+  it('asks, and allows when a human says yes', async () => {
+    process.env.SESSION_SITTER_ESCALATE = 'on';
+    process.env.SESSION_SITTER_ESCALATE_WAIT = '5';
+    liveDaemon();
+
+    // Stand in for the daemon: answer the ask as soon as it appears.
+    const answerer = setInterval(() => {
+      const asks = fs.existsSync(path.join(dir, 'asks'))
+        ? fs.readdirSync(path.join(dir, 'asks'))
+          .filter(f => f.endsWith('.json') && !f.endsWith('.verdict.json'))
+        : [];
+      for (const file of asks) {
+        const askId = file.replace(/\.json$/, '');
+        fs.writeFileSync(path.join(dir, 'asks', `${askId}.verdict.json`), JSON.stringify({
+          askId, decision: 'allow', by: 'eranra', text: 'yes', at: new Date().toISOString(),
+        }), 'utf8');
+      }
+    }, 50);
+    try {
+      const decision = decisionOf(await handle(ambiguous()));
+      expect(decision.behavior).toBe('allow');
+      // The original input is echoed back untouched: a human said yes to *this* call.
+      expect(decision.updatedInput).toEqual({ file_path: '/tmp/a.ts', content: 'x' });
+    } finally {
+      clearInterval(answerer);
+    }
+
+    const records = readJsonl<DecisionRecord>(path.join(dir, 'decisions.jsonl'));
+    expect(records[0].actor).toBe('human');
+    expect(records[0].note).toContain('allowed by eranra');
+  });
+
+  it('denies when a human says no, quoting them', async () => {
+    process.env.SESSION_SITTER_ESCALATE = 'on';
+    process.env.SESSION_SITTER_ESCALATE_WAIT = '5';
+    liveDaemon();
+    const answerer = setInterval(() => {
+      const askDir = path.join(dir, 'asks');
+      if (!fs.existsSync(askDir)) { return; }
+      for (const file of fs.readdirSync(askDir)
+        .filter(f => f.endsWith('.json') && !f.endsWith('.verdict.json'))) {
+        const askId = file.replace(/\.json$/, '');
+        fs.writeFileSync(path.join(askDir, `${askId}.verdict.json`), JSON.stringify({
+          askId, decision: 'deny', by: 'eranra', text: 'not on main', at: new Date().toISOString(),
+        }), 'utf8');
+      }
+    }, 50);
+    try {
+      const decision = decisionOf(await handle(ambiguous()));
+      expect(decision.behavior).toBe('deny');
+      expect(decision.message).toContain('eranra declined it');
+      expect(decision.message).toContain('not on main');
+    } finally {
+      clearInterval(answerer);
+    }
+  });
+
+  /** Silence is never approval — a deadline reached with no answer is a denial, and says so. */
+  it('denies when nobody answers before the deadline', async () => {
+    process.env.SESSION_SITTER_ESCALATE = 'on';
+    process.env.SESSION_SITTER_ESCALATE_WAIT = '1';
+    liveDaemon();
+    const decision = decisionOf(await handle(ambiguous()));
+    expect(decision.behavior).toBe('deny');
+    expect(decision.message).toContain('did not answer within 1s');
+    expect(decision.message).toContain('silence is not approval');
+
+    const records = readJsonl<DecisionRecord>(path.join(dir, 'decisions.jsonl'));
+    expect(records[0].actor).toBe('timeout');
+    expect(records[0].note).toContain('asked a human, no answer');
+  });
+
+  it('never derives a standing permission rule from one human saying yes once', async () => {
+    process.env.SESSION_SITTER_ESCALATE = 'on';
+    process.env.SESSION_SITTER_ESCALATE_WAIT = '5';
+    process.env.SESSION_SITTER_PERSIST_RULES = 'on';
+    liveDaemon();
+    const answerer = setInterval(() => {
+      const askDir = path.join(dir, 'asks');
+      if (!fs.existsSync(askDir)) { return; }
+      for (const file of fs.readdirSync(askDir)
+        .filter(f => f.endsWith('.json') && !f.endsWith('.verdict.json'))) {
+        const askId = file.replace(/\.json$/, '');
+        fs.writeFileSync(path.join(askDir, `${askId}.verdict.json`), JSON.stringify({
+          askId, decision: 'allow', by: 'eranra', text: 'yes', at: new Date().toISOString(),
+        }), 'utf8');
+      }
+    }, 50);
+    try {
+      const decision = decisionOf(await handle(ambiguous()));
+      expect(decision.behavior).toBe('allow');
+      // One answer is not policy. Writing a rule from it would turn it into policy nobody wrote.
+      expect(decision.updatedPermissions).toBeUndefined();
+    } finally {
+      clearInterval(answerer);
+    }
+  });
+});
 
 describe('handle — output contract', () => {
   it('emits hookEventName and a decision object', async () => {

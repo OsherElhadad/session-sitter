@@ -137,7 +137,15 @@ prompted you; `PreToolUse` applies rungs 3 and 5 to the rest (see above). Rungs 
 5. **The built-in destructive-action table.** Deny. This is the fallback for a team that has written
    nothing.
 6. **The classifier**, with your practices as context — only when `SESSION_SITTER_CLASSIFIER=on`.
-7. **Fail closed.** Deny, saying plainly that the supervisor could not reach a verdict.
+7. **Ask a human, then fail closed.** With `SESSION_SITTER_ESCALATE=on`, the call is put to a human
+   on your messaging channel and the prompt is held open for up to 45 seconds. An approval allows it,
+   anything else denies it, and **no answer denies it** — silence is never approval. With escalation
+   off (the default), this rung denies at once, saying plainly that the supervisor could not reach a
+   verdict.
+
+   Still rung 7 rather than a new rung 8: this *is* the last resort, and asking a human is the last
+   thing to try before refusing. `actor` in the trail separates the outcomes — `human` answered,
+   `timeout` did not.
 
 Two ordering decisions worth knowing, because both are deliberate:
 
@@ -444,6 +452,8 @@ user, narrowest winning — via `SESSION_SITTER_USER` / `_PROJECT` / `_TEAM` plu
 | `SESSION_SITTER_MODE` | `enforce` | `enforce` applies the whole ladder, fail-closed included. `observe` records every decision but returns no verdict for the ambiguous case, handing it back to Claude Code and to Auto mode. |
 | `SESSION_SITTER_CLASSIFIER` | `off` | Whether an ambiguous call may spawn the classifier CLI. Off by default: paying for a subprocess and a model round trip in front of a live prompt is the operator's call. |
 | `SESSION_SITTER_PRETOOL` | `on` | Whether the `PreToolUse` hook enforces red clauses on calls Claude Code never prompts about. On by default: without it a written clause governs only the calls that would have raised a prompt anyway. Safe as a default because its only two outcomes are a denial citing a matched red clause — the same verdict `PermissionRequest` would give the same call — and no decision at all. |
+| `SESSION_SITTER_ESCALATE` | `off` | Whether rung 7 asks a human before it fails closed. Off by default, and not out of timidity: it holds the agent still for up to `SESSION_SITTER_ESCALATE_WAIT` seconds, and it only works when a `session-sitter daemon` is running to deliver the question. Turning it on says both of those are true. |
+| `SESSION_SITTER_ESCALATE_WAIT` | `45` | Seconds rung 7 waits for that answer. Capped at 55, below the event's own 60s budget — a hook killed mid-wait returns no JSON at all, which Claude Code reports as a hook error rather than as a decision. |
 | `SESSION_SITTER_PERSIST_RULES` | `off` | Whether an allow made by a written green clause may return a **generalised** standing permission rule derived from that clause. Off by default — a plugin that silently edits your permission rules is a bad citizen. The dialog's literal `permission_suggestions` are never echoed. |
 | `SESSION_SITTER_RULE_DESTINATION` | `session` | Where such a rule is written: `session` (in memory), `localSettings`, `projectSettings`, `userSettings`. An unrecognised value falls back to `session`. |
 | `SESSION_SITTER_USER` / `_PROJECT` / `_TEAM` | — | Knowledge-routing triple for the three-tier layout |
@@ -542,6 +552,79 @@ A statusline showing the session's traffic light and decision count is at `plugi
                   "command": "node ~/.claude/plugins/cache/session-sitter/session-sitter/<version>/statusline.js",
                   "refreshInterval": 5 } }
 ```
+
+---
+
+## Escalation: answering a prompt from somewhere else
+
+`SESSION_SITTER_ESCALATE=on` lets rung 7 put the call to a human instead of refusing it outright. It
+is how a terminal session — over SSH, in a tmux pane, in CI — gets a decision from a person who is not
+at that terminal.
+
+```
+Session Sitter needs a decision — Bash
+
+terraform apply
+
+why    no classifier configured and no written clause applied
+where  buildbox:/srv/infra
+session 3d6b8d33-d0e4-45f6-86e3-027526f32203
+
+Reply "allow" to let it run, anything else denies it.
+No answer within 45s denies it — silence is never approval.
+```
+
+### Why the prompt is held open rather than typed into
+
+The obvious way to answer a terminal session from a phone is to **write into it** — find the process,
+inject the keystrokes. This project has that machinery for the IDE (`ClaudeSender` reaches into the
+`anthropic.claude-code` extension host over the V8 inspector) and it cannot work for a bare `claude`
+in a terminal, which has no extension host to reach into.
+
+Inverting it is better, not merely possible. `PermissionRequest` is **already** the synchronous
+decision point and it is allowed 60 seconds — so nothing needs to write into the session at all. The
+hook holds the prompt open, asks, and answers it itself. What comes back is a real permission decision
+that can cite a clause, rather than simulated typing, and it works the same way in a tmux pane, over
+SSH, or in an IDE.
+
+### The hook never reads the messaging channel
+
+A Telegram bot token has one update stream and `getUpdates` consumes it **destructively**. A hook runs
+*once per prompt*, so a hook that polled Telegram would be an unbounded number of competing readers —
+far worse than the two-window case the reader lease already exists to prevent.
+
+So the hook does no network at all:
+
+1. the hook writes an **ask** to `<dataDir>/asks/<id>.json` and polls for a verdict file beside it;
+2. **the daemon** — the single reader — posts it, correlates the reply, and writes the **verdict**;
+3. the hook reads the verdict and returns it as its decision.
+
+Two processes, one directory, no shared cursor to corrupt. The ask is promoted into an ordinary
+supervision record for step 2, which is what keeps it inside the *same* `pollResponses` call as every
+other pending decision — a second call would consume updates meant for the first.
+
+### It refuses to wait for something nobody will answer
+
+Escalation is only meaningful with a daemon running to serve it. With none, the hook **denies at once**
+and names the fix rather than holding the agent still for 45 seconds first:
+
+```
+(escalation: no daemon has run here. Start one with `session-sitter daemon`, or turn escalation off
+with SESSION_SITTER_ESCALATE=off.)
+```
+
+A **wedged** daemon counts as none — it cannot deliver an ask either, and "the pid exists" is not the
+question. That is what the daemon's heartbeat is for.
+
+### What it will not do
+
+- **It never turns one answer into policy.** An escalated allow is not `settled`, so no standing
+  permission rule is derived from it even with `SESSION_SITTER_PERSIST_RULES=on`. One person saying yes
+  once is not a rule somebody wrote.
+- **It never reads silence as consent.** The deadline passing is a denial, recorded with
+  `actor: 'timeout'` and a note saying a human was asked and did not answer.
+- **It does not answer a question meant for you.** `AskUserQuestion` and `ExitPlanMode` are still
+  exempt before any of this runs.
 
 ---
 
