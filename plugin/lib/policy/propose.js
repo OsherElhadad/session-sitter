@@ -332,7 +332,9 @@ function gate(cluster, support, tier, declinedTeam, opts) {
     // dateless ids and one lane's `declined` file cannot suppress the other's candidate.
     const kind = lane === 'gap' ? 'gap-ask' : 'green-repeat';
     const slug = slugOf(cluster.segment, cluster.tool);
-    const scope = tier === 'project' ? (opts.projectSlug ?? '') : opts.userSlug;
+    const scope = tier === 'team'
+        ? (opts.teamSlug ?? '')
+        : tier === 'project' ? (opts.projectSlug ?? '') : opts.userSlug;
     if (!scope) {
         return refuse('below-floor', 'no slug configured for the chosen tier');
     }
@@ -365,6 +367,9 @@ function gate(cluster, support, tier, declinedTeam, opts) {
             lastSeen: times[times.length - 1] ?? '',
             contradictions: 0,
             windowRotated: opts.windowRotated,
+            // Only meaningful at team tier, and named at every tier so a reader of a user-tier clause can
+            // see that the answer is "none" rather than "not recorded".
+            witnessHosts: tier === 'team' ? [...(opts.witnessHosts ?? [])] : [],
         },
         refusal: null,
         declinedTeam,
@@ -455,6 +460,20 @@ function renderClause(candidate, today) {
             + `${bar(candidate.modelLatencyMs)} of model time that a written clause makes free.`);
     }
     prose.push(`Observed variants: ${candidate.variants.map(v => `\`${v}\``).join(', ')}.`);
+    // A team clause binds people who did not write it, so the one thing a reviewer cannot be left to
+    // guess is where the second developer's evidence came from. The counts above are this host's; the
+    // witnesses are named by their published label, and what each of them published is a hash of this
+    // clause's shape and three counts — no command line from any other machine is quoted here or
+    // anywhere else, because none crossed the boundary.
+    if (candidate.tier === 'team') {
+        prose.push(`Witnessed independently on ${candidate.witnessHosts.length} other host(s) `
+            + `(${candidate.witnessHosts.join(', ')}), each of which cleared the whole user row on its own `
+            + `counts for shape \`${candidate.shape12}\`. Per-host counts are never summed: this host's `
+            + `${candidate.support.occurrences} occurrences clear the team row by themselves, and the `
+            + 'witnesses answer a different question — whether anyone else does this too. Recompute '
+            + '`sha256("<tool>\\0<segment>")[0..12]` over the shape above to check a witness row refers to '
+            + 'this clause.');
+    }
     prose.push('The matcher is anchored at the start of the command value and ends on a word boundary, '
         + `so it ${isGap ? 'covers' : 'licenses'} arguments to this command and nothing else; a compound `
         + 'line is decomposed into its constituents before matching, so it cannot reach a second command '
