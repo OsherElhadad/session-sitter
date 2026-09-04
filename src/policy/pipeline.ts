@@ -35,6 +35,7 @@ import { dataDir, decisionsPath } from '../hooks/paths';
 import { PluginSettings } from '../hooks/settings';
 import { STALE_LOCK_MS } from '../supervisor/store';
 import { AblationReport } from './ablate';
+import { foldCitations, writeCitations } from './citations';
 import {
   BarDistance, Cluster, FoldResult, Lane, Signal, clusterWindow, fold, nudge, pipelineDir,
   supportOf, tierFor, writeShapes,
@@ -287,6 +288,11 @@ export function accumulate(
     // Written whenever the fold ran, not only when it counted something: the offset may have moved
     // past a rotation with no new records behind it, and losing that would re-read the file forever.
     writeShapes(result.shapes, env);
+    // The durable citation counter, folded in the same pass and under the same lock. Its own file and
+    // its own offsets, because `shapes.json` is rebuildable derived data and a lifetime count is not
+    // — see `citations.ts`. Written whenever the fold ran, for the same reason `shapes.json` is.
+    const cited = foldCitations(env, now);
+    writeCitations(cited.citations, env);
     line.exitReason = result.folded === 0 ? 'no-new-records' : 'ok';
     line.durationMs = Date.now() - started;
     const nudged = nudge(result.crossedFloor);

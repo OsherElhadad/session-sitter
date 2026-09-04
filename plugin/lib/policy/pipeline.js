@@ -82,6 +82,7 @@ const trail_1 = require("../audit/trail");
 const permissionRequest_1 = require("../hooks/permissionRequest");
 const paths_1 = require("../hooks/paths");
 const store_1 = require("../supervisor/store");
+const citations_1 = require("./citations");
 const mine_1 = require("./mine");
 const propose_1 = require("./propose");
 const ablate_1 = require("./ablate");
@@ -243,6 +244,11 @@ function accumulate(trigger = 'session-end', env, now = new Date()) {
         // Written whenever the fold ran, not only when it counted something: the offset may have moved
         // past a rotation with no new records behind it, and losing that would re-read the file forever.
         (0, mine_1.writeShapes)(result.shapes, env);
+        // The durable citation counter, folded in the same pass and under the same lock. Its own file and
+        // its own offsets, because `shapes.json` is rebuildable derived data and a lifetime count is not
+        // — see `citations.ts`. Written whenever the fold ran, for the same reason `shapes.json` is.
+        const cited = (0, citations_1.foldCitations)(env, now);
+        (0, citations_1.writeCitations)(cited.citations, env);
         line.exitReason = result.folded === 0 ? 'no-new-records' : 'ok';
         line.durationMs = Date.now() - started;
         const nudged = (0, mine_1.nudge)(result.crossedFloor);

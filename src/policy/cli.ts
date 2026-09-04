@@ -49,6 +49,7 @@ import {
 import { runExplain } from './explain';
 import { replayWindow } from './replay';
 import { AblationReport, ablateAll } from './ablate';
+import { lifetimeCitations } from './citations';
 
 const USAGE = `session-sitter policy — lint a practices file, or compile the corpus
 
@@ -247,9 +248,13 @@ export async function ablateCommand(argv: string[]): Promise<number> {
     return 40;
   }
 
+  // The durable count as it stands. `policy ablate` reports; it does not fold, so a counter that has
+  // never been folded simply leaves the record scan in charge — the pre-existing behaviour.
+  const citations = lifetimeCitations();
   const reports = ablateAll(corpus, records, {
     decisions: Number.parseInt(flag(argv, 'decisions') ?? '', 10) || undefined,
     days: Number.parseInt(flag(argv, 'days') ?? '', 10) || undefined,
+    citations,
   });
   process.stdout.write(`ablating ${corpus.length} accepted clause(s) against `
     + `${records.length} recorded decision(s)\n\n`);

@@ -223,7 +223,7 @@ export interface ShapeStat {
 /** How many distinct sessions or days one shape tracks. See {@link ShapeStat}. */
 export const DISTINCT_CAP = 32;
 
-interface SourceState {
+export interface SourceState {
   size: number;
   mtimeMs: number;
   /** sha256 of the {@link TAIL_BYTES} ending at `offset`. Catches an offset that outlived its file. */
@@ -310,7 +310,7 @@ export function writeShapes(shapes: ShapesFile, env?: NodeJS.ProcessEnv): void {
 // --------------------------------------------------------------------------- reading new bytes
 
 /** The tail hash for an offset, or `''` when there is nothing behind it yet. */
-function tailShaAt(file: string, offset: number): string {
+export function tailShaAt(file: string, offset: number): string {
   if (offset <= 0) { return ''; }
   const from = Math.max(0, offset - TAIL_BYTES);
   const length = offset - from;

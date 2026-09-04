@@ -296,7 +296,8 @@ function ablate(clauseId, corpus, records, opts = {}) {
     // loosened rewrite of a substring pattern and relax the wrong string.
     const rawPatterns = target.patterns.map(p => (p.isRegex ? `/${p.raw}/` : p.raw));
     const misses = nearMisses({ clauseId, patterns: rawPatterns }, windowRecords);
-    const lifetimeFires = opts.lifetimeFires ?? firesFor(clauseId, records);
+    const lifetimeFires = opts.lifetimeFires
+        ?? Math.max(opts.citations?.[clauseId] ?? 0, firesFor(clauseId, records));
     const windowFires = firesFor(clauseId, windowRecords);
     const evidenceClass = classify(target.level, diff.changed, lifetimeFires, misses, shadow.matches);
     // Never for a red or an orange, in any window, for any evidence class (T36).

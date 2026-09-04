@@ -96,6 +96,7 @@ exports.shapesPath = shapesPath;
 exports.emptyShapes = emptyShapes;
 exports.readShapes = readShapes;
 exports.writeShapes = writeShapes;
+exports.tailShaAt = tailShaAt;
 exports.readNewBytes = readNewBytes;
 exports.foldRecord = foldRecord;
 exports.fold = fold;
