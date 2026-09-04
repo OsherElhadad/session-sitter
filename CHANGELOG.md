@@ -5,6 +5,58 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.13 — Nothing was expiring an escalation on a machine with no IDE
+
+*Silence is never approval* is this project's founding rule, and the mechanism behind it is a card
+expiring at its deadline. That mechanism ran in exactly two places: inside a VS Code window, or as
+`supervise poll --loop` typed by hand. On a terminal-only machine, neither. An escalated call did not
+fail closed at its deadline — it sat in `orange_awaiting_user` for as long as the state dir survived,
+which is the one outcome the rule says will not happen.
+
+`session-sitter daemon` is that loop as something you can leave on: correlate replies to escalations,
+and expire the ones nobody answered. `--once` for cron, `--status` for whether it is actually working,
+and a user systemd unit at `plugin/systemd/session-sitter-daemon.service`.
+
+**It is deliberately not "the extension's services, headless."** Most of that loop could not be lifted
+out, because on a terminal-only machine *its input does not exist*: `SupervisionService`,
+`AutoResponder` and `PendingWatcher` are all driven by IBM Bob's pending-approval queue, read through
+the VS Code extension host, and Bob is an IDE. A daemon that constructed them would be watching an
+empty room. Two jobs were genuinely homeless, and those are the two it does.
+
+**It does not apply decisions, and says so.** Reaching a paused agent means resolving a prompt through
+that agent's approval emitter, inside another VS Code extension's process — a terminal cannot get
+there. So the daemon counts the outbox backlog and reports that a window is needed, leaving every
+delivery where it is. The outbox moves a delivery to `done/` only on a confirmed apply, so a window
+opening later drains it; a daemon that discarded what it could not deliver would be worse than one
+that never ran.
+
+**One reader per machine, enforced rather than documented.** A bot token has one update stream and
+`getUpdates` consumes it destructively — two pollers split the replies at random and both look like
+they are working. The daemon takes the same `ReaderLease` the Telegram remote control uses and reads
+only while it holds it. Not holding it is not an error: a window is the reader, and it is already
+doing this work. What still runs in that state is **timeouts** — suppressing reads must never suppress
+expiry, or standing down would leave escalations pending past their deadline. Getting this right
+needed a channel wrapper, because `Orchestrator.poll()` reads replies and applies timeouts in one call
+and holds its channel privately: taking the lease without gating the read would have consumed the
+stream either way, and the lease would have been decoration.
+
+It also refuses to start when a live extension host is registered here, naming the pids. The lease
+alone cannot cover that case — with the remote interface off, `SupervisionService` polls Telegram
+*without* taking it, so nothing would arbitrate. `--allow-with-ide` is the override.
+
+**`--status` answers a question `systemctl status` cannot.** A pid does not say whether timeouts are
+being applied: pids are recycled, and a daemon wedged mid-pass is still a live pid and still
+`active (running)` to systemd. So every pass writes a heartbeat, and the status reads `running`,
+`stale` — *the process is up and the work has stopped*, in as many words — `dead`, or `single pass` for
+a finished `--once` run. That last one exists because reporting a working cron setup as `dead` with
+"nothing is applying timeouts" is a status line crying wolf, and those are the ones people stop
+reading. Staleness scales with `--interval`, so a ten-minute daemon is not called wedged for being
+nine minutes idle.
+
+A failed pass is logged and the loop continues — the point is to still be running in an hour, and a
+transient error inside a Telegram read is the likeliest thing to go wrong. `SIGINT`/`SIGTERM` finish
+the pass in flight, release the lease and exit 0.
+
 ### 0.8.12 — The plugin was the one way in that did not get the CLI
 
 `docs/CLI.md` describes `session-sitter` as the front end for "people who never open the IDE", and the
