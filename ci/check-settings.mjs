@@ -136,6 +136,81 @@ for (const key of declared) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 4. Every setting says how a terminal sets it.
+// ---------------------------------------------------------------------------
+//
+// The supervisor group has layered settings over the environment for a long time, so a headless run
+// could configure 19 of the 38 settings and there was no way to notice the other 19. A setting the
+// extension reads and a terminal cannot is invisible until someone on a build box asks why their
+// configuration does nothing — which is how the four `telegram.*` settings came to have no headless
+// equivalent at all while the daemon needed them.
+//
+// `src/settingsBridge.ts` names the answer for each setting, as an environment variable, a CLI flag,
+// or an explicit "IDE surface only, and here is why". This compares the two lists in both directions,
+// so declaring a setting without deciding how a terminal sets it fails here rather than shipping.
+//
+// It reads the compiled module: `make guards` and the CI job both compile first, and importing the
+// real table is what keeps this from being a second copy of it that can disagree.
+const bridgePath = new URL('../out/settingsBridge.js', import.meta.url);
+let bridge = null;
+try {
+  bridge = await import(bridgePath.href);
+} catch (err) {
+  problems.push(
+    `could not import out/settingsBridge.js (${err.message}); run \`make compile\` first`);
+}
+
+if (bridge !== null) {
+  const table = bridge.HEADLESS_EQUIVALENT ?? {};
+  const classified = Object.keys(table);
+
+  for (const key of declared) {
+    if (!(key in table)) {
+      problems.push(
+        `package.json declares '${key}' but src/settingsBridge.ts does not say how a terminal sets `
+        + 'it — add an env name, a CLI flag, or an `ide` entry with its reason');
+    }
+  }
+  for (const key of classified) {
+    if (!declared.includes(key)) {
+      problems.push(
+        `src/settingsBridge.ts classifies '${key}' but package.json no longer declares it`);
+    }
+  }
+
+  // An environment variable that nothing reads is worse than none: it is documented, so someone sets
+  // it and watches it do nothing. Three of these were wrong when the table was first written —
+  // BOB_CLI for BOB_CLI_PATH, CLAUDE_CLI for CLAUDE_CLI_PATH, and a CLASSIFIER_TIMEOUT_SECONDS that
+  // has always been CLAUDE_TIMEOUT_SECONDS — so the names are checked against the source, not trusted.
+  //
+  // `src/settingsBridge.ts` is deliberately NOT in this list. It reads variables *through* the table,
+  // so its own source contains every name the table holds — including a wrong one. Including it made
+  // this check validate the table against itself and pass a deliberately bogus name, which is how it
+  // was found. Evidence has to come from somewhere the table did not write.
+  const readers = [
+    'src/supervisor/config.ts',
+    'src/hooks/settings.ts',
+    'docs/CONFIGURATION.md',
+  ].map(f => readFileSync(f, 'utf8')).join('\n');
+  for (const [key, how] of Object.entries(table)) {
+    if (how?.kind !== 'env') { continue; }
+    if (!readers.includes(how.name)) {
+      problems.push(
+        `src/settingsBridge.ts maps '${key}' to $${how.name}, but nothing reads that name and `
+        + 'docs/CONFIGURATION.md does not document it — a variable nobody reads is worse than none, '
+        + 'because someone will set it and watch it do nothing');
+    }
+  }
+
+  const kinds = Object.values(table).reduce((acc, how) => {
+    acc[how?.kind ?? 'unknown'] = (acc[how?.kind ?? 'unknown'] ?? 0) + 1;
+    return acc;
+  }, {});
+  console.log(`headless equivalents: ${Object.entries(kinds)
+    .map(([k, n]) => `${n} ${k}`).sort().join(', ')}`);
+}
+
 for (const p of problems) { console.error(`::error::${p}`); }
 console.log(
   `${declared.length} declared setting(s), namespace '${[...namespaces].join(', ')}'; `
