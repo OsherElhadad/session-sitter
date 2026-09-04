@@ -19,6 +19,7 @@ import {
   scanChatSessions,
   scanClaudeSessions,
   scanCodexSessions,
+  defaultStorePaths,
   vscodeUserDir,
   type ClaudeSession,
   type MessageExchange,
@@ -176,7 +177,7 @@ export class SessionManager implements vscode.Disposable {
   private _remoteTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(context: vscode.ExtensionContext) {
-    this._projectsDir = path.join(os.homedir(), '.claude', 'projects');
+    this._projectsDir = defaultStorePaths().projectsDir;
     this._bobDbPath = path.join(os.homedir(), '.bob', 'db', 'bob.db');
     this._codexSessionsDir = path.join(os.homedir(), '.codex', 'sessions');
     this._codexIndexPath = path.join(os.homedir(), '.codex', 'session_index.jsonl');

@@ -67,6 +67,7 @@ import { recordedCall } from '../supervisor/models';
 import { decisionsPath } from './paths';
 import { HookInput, runHook } from './io';
 import { PluginSettings, loadSettings } from './settings';
+import { isDeepStrictEqual } from 'util';
 import { askHuman, buildAsk } from './escalate';
 import { health, heartbeatPath, readHeartbeat } from '../daemonHeartbeat';
 import {
@@ -968,7 +969,16 @@ export async function handle(
     clause: verdict.clause,
     actor: verdict.actor,
     latencyMs: Date.now() - started,
-    rewritten: verdict.decision.updatedInput !== undefined,
+    // Whether the input CHANGED, not merely whether the verdict carried one. Rung 7's
+    // human-allow returns the original input as `updatedInput`, so the old test — "is updatedInput
+    // present" — recorded a plain human "allow" as `rewritten: true`, and `log` rendered it as a
+    // correction. `session-sitter learn` mines this field, so that asserted the correction lane had
+    // produced a safer form of a call it never touched.
+    //
+    // Compared here, once, rather than by stripping `updatedInput` from that one caller: the wrong
+    // question would otherwise still be asked of every future verdict that echoes its input back.
+    rewritten: verdict.decision.updatedInput !== undefined
+      && !isDeepStrictEqual(verdict.decision.updatedInput, input.tool_input ?? {}),
     // Null on every rung that called no model, which is what makes a cache figure computable: a
     // reader filters to non-null and prints that count as its denominator.
     telemetry: verdict.telemetry ?? null,

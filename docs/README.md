@@ -2,6 +2,12 @@
 
 Everything in `docs/`, and what each file is for. Start with whichever question you actually have.
 
+## Start here, with no IDE
+
+| Document | Read it when you want to know |
+|---|---|
+| [`TERMINAL.md`](TERMINAL.md) | the whole path for a bare `claude` in a terminal and the `session-sitter` command: install into an isolated config, confirm the hooks fire, compile the artifact, watch it decide a real session, read the trail, what rung 7 does when nobody can answer, and troubleshooting |
+
 ## The extension
 
 | Document | Read it when you want to know |

@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { queryBobDb } from '../BobDatabase';
+import { claudeDir } from '../hooks/paths';
 import * as mask from './mask';
 
 export const TARGET_BRANCH = 'main';
@@ -44,7 +45,7 @@ export function bobDbPath(homedir = os.homedir()): string {
   return path.join(homedir, '.bob', 'db', 'bob.db');
 }
 export function claudeProjectsDir(homedir = os.homedir()): string {
-  return path.join(homedir, '.claude', 'projects');
+  return path.join(claudeDir(process.env, homedir), 'projects');
 }
 
 export type Logger = (msg: string) => void;
