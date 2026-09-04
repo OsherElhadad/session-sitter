@@ -28,7 +28,8 @@ import { SessionExporter } from './SessionExporter';
 import { SupervisorOutbox } from './SupervisorOutbox';
 import { SupervisionService } from './SupervisionService';
 import { resolveStateDir, resolveWorkspaceRoot } from './supervisionPaths';
-import { supervisorConfigFromSettings } from './supervisorSettings';
+import { supervisorConfigFromSettings, userValue } from './supervisorSettings';
+import { layeredSettingsReader } from './settingsBridge';
 import { ensureDirs, recordsDir, type SupervisorConfig } from './supervisor/config';
 import { buildChannel } from './supervisor/factory';
 import type { MessagingChannel } from './supervisor/messaging';
@@ -287,23 +288,36 @@ export function activate(context: vscode.ExtensionContext) {
   // The adapter spells each setting name out in a direct read rather than forwarding the caller's
   // string. That is the form `ci/check-settings.mjs` recognises, so these keys count as read
   // and cannot silently drift from their `package.json` declarations.
-  const remoteControlSettings: SettingsReader = {
-    getBoolean: (key, fallback) => {
+  //
+  // Layered over the environment, the same precedence `applySupervisorSettings` applies: a setting the
+  // user actually set wins, otherwise the variable, otherwise the declared default. That is what lets
+  // one machine be configured once and read the same way by a window and by `session-sitter daemon`.
+  //
+  // `inspect()` rather than `get()` is load-bearing here. `get()` returns the manifest default for an
+  // unset setting, so an env layer beneath it would be unreachable for every setting that has a
+  // default — which is all four of these.
+  // Each key stays a *literal* in a `userValue` call. That is the form `ci/check-settings.mjs`
+  // recognises, so these four still count as read and cannot silently drift from their `package.json`
+  // declarations — passing `key` straight through would have been shorter and would have made all four
+  // look unread, which is the drift the guard exists to catch.
+  const explicitTelegram = {
+    getBoolean: (key: string): boolean | undefined => {
       if (key === 'telegram.remoteControl') {
-        return cfg.get<boolean>('telegram.remoteControl', fallback);
+        return userValue<boolean>(cfg, 'telegram.remoteControl');
       }
       if (key === 'telegram.fullMessages') {
-        return cfg.get<boolean>('telegram.fullMessages', fallback);
+        return userValue<boolean>(cfg, 'telegram.fullMessages');
       }
-      return fallback;
+      return undefined;
     },
-    getStringArray: (key, fallback) => (key === 'telegram.allowedUserIds'
-      ? cfg.get<string[]>('telegram.allowedUserIds', fallback)
-      : fallback),
-    getNumber: (key, fallback) => (key === 'telegram.maxMessageParts'
-      ? cfg.get<number>('telegram.maxMessageParts', fallback)
-      : fallback),
+    getStringArray: (key: string): string[] | undefined => (key === 'telegram.allowedUserIds'
+      ? userValue<string[]>(cfg, 'telegram.allowedUserIds')
+      : undefined),
+    getNumber: (key: string): number | undefined => (key === 'telegram.maxMessageParts'
+      ? userValue<number>(cfg, 'telegram.maxMessageParts')
+      : undefined),
   };
+  const remoteControlSettings: SettingsReader = layeredSettingsReader(explicitTelegram);
   const remoteControlConfig = remoteControlConfigFrom(remoteControlSettings, supervisorConfig);
   const remoteControlActive = remoteControlConfig.enabled && !!remoteControlConfig.botToken
     && !!remoteControlConfig.chatId && remoteControlConfig.allowedUserIds.length > 0;

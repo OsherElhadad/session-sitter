@@ -5,6 +5,55 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.15 — Half the settings could not be set without VS Code, and nothing said so
+
+The `supervisor.*` group has layered settings over the environment for a long time, so a headless run
+could configure 19 of the 38 settings. The other 19 had no headless story at all — and, worse, no way
+to notice. A setting the extension reads and a terminal cannot is invisible until someone on a build
+box asks why their configuration does nothing.
+
+`src/settingsBridge.ts` now names the answer for **every** setting, and `ci/check-settings.mjs`
+compares that table against `package.json` in both directions. Declaring a setting without deciding how
+a headless run configures it now fails CI rather than shipping.
+
+**Three kinds of answer, because there are genuinely three.** The honest question is not "does every
+setting have an environment variable" — it is "can a person with no IDE configure this":
+
+- **`env`** — a variable, read from the environment or a `.env`. The four `telegram.*` settings had
+  none, which is the concrete gap this closes: the daemon can hold the reader lease and mirror
+  sessions, and until now there was no way to tell it to.
+- **`flag`** — where the setting is *consent* to something with a side effect. `--peers` opens SSH
+  connections, and a flag typed at the moment of use is a clearer consent than a variable inherited
+  from a shell profile. `session-sitter daemon` also gains `--workspace-root`, which is what makes
+  `supervisorRepoPath` genuinely reachable — for a service the working directory comes from a unit
+  file, not a shell.
+- **`ide`** — it configures the IDE surface and there is nothing headless to change. Each of the seven
+  carries its reason, because "no equivalent needed" is a claim, and an unexplained one is how a real
+  gap gets filed under this heading and forgotten. A `workspaceColors` variable would be a knob wired
+  to nothing, which is worse than its absence: it implies the terminal has a panel to colour.
+
+Precedence is unchanged and now uniform: an explicitly-set setting wins, otherwise the environment,
+otherwise the declared default. On the VS Code side that needs `inspect()` rather than `get()` —
+`get()` returns the manifest default for an unset setting, so an environment layer beneath it would be
+unreachable for every setting that has one, which is all four of the new ones.
+
+**Two bugs found by writing the guard, which is the argument for having it.**
+
+Three of the environment names in the first draft of the table were wrong: `BOB_CLI` for
+`BOB_CLI_PATH`, `CLAUDE_CLI` for `CLAUDE_CLI_PATH`, and a `CLASSIFIER_TIMEOUT_SECONDS` that has always
+been `CLAUDE_TIMEOUT_SECONDS`. So the guard checks each name against the source and the documentation
+rather than trusting the table: **a variable nobody reads is worse than none, because someone sets it
+and watches it do nothing.**
+
+And the first version of that name check was **vacuous.** It included `src/settingsBridge.ts` among the
+files searched — but the bridge reads variables *through* the table, so its own source contains every
+name the table holds, including a wrong one. Verified by planting a deliberately bogus name and
+watching the guard pass; evidence now has to come from somewhere the table did not write.
+
+One more thing the existing guard caught, exactly as designed: the first refactor passed the setting
+key through as a variable instead of a literal, which made all four `telegram.*` settings look unread
+and failed check 3. The literals are back, with a comment saying why they have to stay.
+
 ### 0.8.14 — Rung 7 can ask a human now, and the hook holds the prompt open to do it
 
 Rung 7 had one answer: deny. Correct, and for a terminal session over SSH it was the *only* answer —

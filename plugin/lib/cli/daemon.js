@@ -127,6 +127,7 @@ Options:
   --interval SECONDS seconds between passes (default 5, minimum 1)
   --status           is a daemon running here? then exit
   --state-dir PATH   read this state dir instead of searching for one
+  --workspace-root PATH  the repo this supervises (default: the working directory)
   --allow-with-ide   run even though a VS Code extension host is live here
   --json             machine-readable output
   -h, --help         show this help
@@ -139,6 +140,7 @@ const SPEC = {
     '--interval': 'string',
     '--status': 'boolean',
     '--state-dir': 'string',
+    '--workspace-root': 'string',
     '--allow-with-ide': 'boolean',
     '--json': 'boolean',
     '--help': 'boolean',
@@ -385,8 +387,11 @@ async function run(argv, io) {
     }
     const interval = parseInterval(args);
     const stateDir = (0, args_1.flagString)(args, '--state-dir');
+    // The working directory decides the state dir and where a `.env` is read from, and for a service it
+    // is set by a unit file rather than by a shell — so it is worth being able to say it outright.
+    const workspaceRoot = (0, args_1.flagString)(args, '--workspace-root') ?? process.cwd();
     const config = (0, config_1.loadConfig)({
-        workspaceRoot: process.cwd(),
+        workspaceRoot,
         ...(stateDir !== undefined ? { stateDir } : {}),
     });
     const windows = await liveIdeWindows();
