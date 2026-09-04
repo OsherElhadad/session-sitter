@@ -10,7 +10,7 @@
  */
 
 import {
-  filterDecisions, isCorrection, isDenial, readDecisions, resolveState,
+  filterDecisions, isCorrection, isDenial, readDecisions, readFrom, resolveState,
   type Decision, type DecisionFilter,
 } from './audit';
 import { CliError, flagBool, flagNumber, flagString, parseFlags, type FlagSpec } from './args';
@@ -182,7 +182,15 @@ export interface LogJson {
   generatedAt: string;
   /** The state dir that was read, so a surprising result is traceable to a directory. */
   stateDir: string;
-  /** True when that directory holds either writer's output. */
+  /**
+   * The plugin's `decisions.jsonl`, when it was read — null when it does not exist, or when an
+   * explicit `--state-dir` confined the read to one directory.
+   *
+   * Additive: `stateDir` keeps its meaning, so a consumer written against version 1 before this
+   * field existed still reads the same value out of the same key.
+   */
+  hookTrail: string | null;
+  /** True when either store actually holds something a reader can use. */
   populated: boolean;
   count: number;
   decisions: Array<{
@@ -229,7 +237,7 @@ export function decisionJson(d: Decision): LogJson['decisions'][number] {
 // ── Entry point ─────────────────────────────────────────────────────────────
 
 /** Injected so tests read a fixture directory rather than a real state dir. */
-export type ReadDecisions = (stateDir: string) => Promise<Decision[]>;
+export type ReadDecisions = (stateDir: string, hookTrail?: string | null) => Promise<Decision[]>;
 
 /** The most recent `limit` decisions, still in chronological order. */
 export function applyLimit(decisions: readonly Decision[], limit: number): Decision[] {
@@ -245,13 +253,14 @@ export async function run(
   const options = parse(argv, io);
   const state = resolveState(options.stateDir);
   const decisions = applyLimit(
-    filterDecisions(await read(state.dir), options.filter), options.limit);
+    filterDecisions(await read(state.dir, state.hookTrail), options.filter), options.limit);
 
   if (options.json) {
     const payload: LogJson = {
       version: 1,
       generatedAt: io.now().toISOString(),
       stateDir: state.dir,
+      hookTrail: state.hookTrail,
       populated: state.populated,
       count: decisions.length,
       decisions: decisions.map(decisionJson),
@@ -267,7 +276,7 @@ export async function run(
     // "nothing" without saying "nothing, here" sends people looking for a bug that is a path.
     const paint = painter(colorEnabled(io));
     io.out(state.populated
-      ? `${paint(`No decisions match, in ${state.dir}.`, 'dim')}\n`
+      ? `${paint(`No decisions match, in ${readFrom(state)}.`, 'dim')}\n`
       : `${paint(`No supervision state found. Looked in:\n  ${state.searched.join('\n  ')}\n`
         + 'Point --state-dir at it, or set STATE_DIR.', 'dim')}\n`);
     return 0;
@@ -278,7 +287,7 @@ export async function run(
   const denied = decisions.filter(isDenial).length;
   const corrected = decisions.filter(isCorrection).length;
   io.out(paint(
-    `\n${decisions.length} decisions · ${denied} denied · ${corrected} corrected · ${state.dir}\n`,
+    `\n${decisions.length} decisions · ${denied} denied · ${corrected} corrected · ${readFrom(state)}\n`,
     'dim'));
   return 0;
 }

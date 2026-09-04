@@ -479,6 +479,19 @@ message.
 around `plugin/lib/audit/cli.js` and `plugin/lib/policy/cli.js`, so there is one implementation of
 "what happened".
 
+The `session-sitter` command reads the same trail. It resolves the data directory exactly as the
+hooks do — `$SESSION_SITTER_DATA_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.claude/session-sitter` —
+and reads `decisions.jsonl` alongside any supervision state dir it finds, so the plugin's decisions
+show up whether or not this machine has ever opened an IDE:
+
+```bash
+session-sitter log --since 24h --denied
+session-sitter digest
+```
+
+Pass `--state-dir` only when you mean one directory and nothing else: it is honoured outright, and it
+excludes the hook trail. See [the CLI reference](CLI.md#where-state-is-read-from).
+
 A statusline showing the session's traffic light and decision count is at `plugin/statusline.js`:
 
 ```json
