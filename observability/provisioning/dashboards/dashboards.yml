@@ -1,0 +1,15 @@
+apiVersion: 1
+providers:
+  - name: session-sitter
+    orgId: 1
+    folder: Session Sitter
+    type: file
+    # The repo is the way to change a dashboard. An edit made in the UI is not committed, so nobody
+    # else has it and the next `docker compose up` reverts it — which is the intended behaviour, not
+    # a limitation.
+    allowUiUpdates: false
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

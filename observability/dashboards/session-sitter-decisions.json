@@ -1,0 +1,1095 @@
+{
+  "tags": [
+    "session-sitter"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "refresh": "",
+  "schemaVersion": 39,
+  "version": 1,
+  "graphTooltip": 1,
+  "uid": "ss-decisions",
+  "title": "Session Sitter — decisions",
+  "description": "The online path: what the ladder decided, on which rung, citing which clause, and what the model rung cost. Every panel reads kind:decision. Read-only over an append-only file.",
+  "templating": {
+    "list": [
+      {
+        "name": "machine",
+        "label": "machine",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "options": [],
+        "description": "A regexp over the machine field. `.*` is all of them; type a machine name to scope to one. A team-scope export carries a per-machine pseudonym here, so machines stay distinguishable from each other without being identifiable."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "The shape of it",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 2,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "timeseries",
+      "title": "Outcome mix over time",
+      "description": "The question is not how many — three other panels have the count — it is whether the SHAPE is changing. A deny band that steps up on one day is a practices edit. Read it against \"Revisions seen\" below: if the step and a new rev landed together, that is your answer.",
+      "gridPos": {
+        "h": 9,
+        "w": 15,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" | stats by (decision) count() decisions",
+          "queryType": "statsRange"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "showPoints": "never",
+            "pointSize": 4,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "axisSoftMin": 0
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "allow"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "deny"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "none"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "text"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "timeseries",
+      "title": "Fail closed — the alarm series",
+      "description": "Rung 7: nothing answered, so the call was denied. The one series whose RISE is unambiguously bad news — a broken artifact, an unreachable classifier, a loader that threw — which is why it is kept out of the denial count rather than folded into the denials it technically belongs to.\n\nAn EMPTY panel here is the system working, and \"not recorded\" is the right thing for it to say. A flat line at zero would be a claim that the classifier answered every time, which is a different statement.",
+      "gridPos": {
+        "h": 9,
+        "w": 9,
+        "x": 15,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" actor:timeout | stats count() fail_closed",
+          "queryType": "statsRange"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "showPoints": "never",
+            "pointSize": 4,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "axisSoftMin": 0
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "fail_closed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "row",
+      "title": "The ladder",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 10
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 5,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Which rung decided, and what it cost",
+      "description": "The rung is DERIVED from (actor, decision) and never stored — a stored rung drifts out of step with the ladder it describes. deterministic+allow is rung 1; correction+allow is 2; correction+deny is 2' (\"we tried to make it safe and the safe form was ALSO forbidden\", the correction lane's most interesting outcome); policy+deny is 3; policy+allow is 4; deterministic+deny is 5; model is 6; timeout is 7.\n\nThe latency split is the point. The deterministic rungs must be sub-millisecond and only the model rung is allowed to be slow, so a MERGED p95 hides exactly the regression worth catching.",
+      "gridPos": {
+        "h": 10,
+        "w": 14,
+        "x": 0,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" | stats by (actor, decision) count() decisions, quantile(0.5, latencyMs) p50_ms, quantile(0.95, latencyMs) p95_ms | sort by (decisions desc)",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "decisions",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "p50_ms",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "p95_ms",
+                "destinationType": "number"
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "actor": 0,
+              "decision": 1,
+              "decisions": 2,
+              "p50_ms": 3,
+              "p95_ms": 4
+            },
+            "excludeByName": {},
+            "renameByName": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50_ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95_ms"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "decisions",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "barchart",
+      "title": "Decisions by tool",
+      "description": "Which tools the ladder is actually asked about. Context for the rest, not a health metric.",
+      "gridPos": {
+        "h": 10,
+        "w": 10,
+        "x": 14,
+        "y": 11
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" | stats by (tool) count() decisions | sort by (decisions desc)",
+          "queryType": "instant",
+          "maxLines": 200
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "decisions",
+                "destinationType": "number"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "xField": "tool",
+        "colorByField": "tool"
+      }
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Clauses",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Which clauses fired, and when each last did",
+      "description": "HITS ONLY, and that is a real limitation worth stating rather than hiding: a clause that is in the artifact and never fires has NO ROW here, because the artifact supplies the row set and a log store does not have the artifact.\n\nSo the three questions this panel cannot answer — which clauses are dead, which are shadowed by an earlier rung, which were never even selected — are joins against the artifact, and all three are already CLI commands: `session-sitter policy check` and `session-sitter explain <decisionId>`, which replay the selector against `policy/<rev>.json` itself. Use both.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" clause:* | stats by (clause) count() fired, max(_time) last_fired | sort by (fired desc)",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "fired",
+                "destinationType": "number"
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "clause": 0,
+              "fired": 1,
+              "last_fired": 2
+            },
+            "excludeByName": {},
+            "renameByName": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "fired",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "type": "row",
+      "title": "What governing costs",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "stat",
+      "title": "Prefix rewrites",
+      "description": "THE number on this dashboard. A decision that paid to WRITE the cached prompt prefix instead of reading it.\n\nOne per revision is correct — the first call after an artifact change pays for the write. SEVERAL inside a single revision means something is mutating the prompt under the runtime, which is the 6.8x cost regression the whole pinning design exists to prevent.\n\nIt is a COUNT and not a rate on purpose: a hit-rate percentage averages the spike away, and the spike is the entire signal. Break it down by revision in the table to the right.",
+      "gridPos": {
+        "h": 6,
+        "w": 4,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" telemetry.cache_creation_input_tokens:>0 | stats count() rewrites",
+          "queryType": "stats"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 11,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Prefix rewrites by revision — where a spike is visible",
+      "description": "Grouped by rev, because that is what makes the count actionable. A revision whose tokens_written is a multiple of the others is the regression, on that row, by name.",
+      "gridPos": {
+        "h": 6,
+        "w": 9,
+        "x": 4,
+        "y": 32
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" telemetry.tier:* | stats by (rev) count() model_decisions, sum(telemetry.cache_creation_input_tokens) tokens_written | sort by (tokens_written desc)",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "model_decisions",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "tokens_written",
+                "destinationType": "number"
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "rev": 0,
+              "tokens_written": 1,
+              "model_decisions": 2
+            },
+            "excludeByName": {},
+            "renameByName": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "tokens_written",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "stat",
+      "title": "Model-tier decisions — the denominator",
+      "description": "How many decisions called a model at all. EVERY cache figure on this dashboard is over this number and never over the window, because rungs 1-5 call no model: they have no cache to hit, and a null there is not a miss.\n\nAn avg() across all decisions silently counts every deterministic decision as a total miss and reports a figure nobody can interpret. A cache hit rate across ALL decisions does not exist and is deliberately not shown anywhere here.",
+      "gridPos": {
+        "h": 6,
+        "w": 5,
+        "x": 13,
+        "y": 32
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" telemetry.tier:* | stats count() model_decisions",
+          "queryType": "stats"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 13,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Prompt tokens, over the model-tier decisions only",
+      "description": "A PARTIAL hit is the normal case, not a fault: the judging instruction rides a trailing user turn after the cached prefix by design, so `uncached` is nonzero on a perfectly healthy request. There is deliberately no hit/miss boolean anywhere in this system.",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 32
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" telemetry.tier:* | stats sum(telemetry.cache_read_input_tokens) read, sum(telemetry.cache_creation_input_tokens) written, sum(telemetry.input_tokens) uncached",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "read",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "written",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "uncached",
+                "destinationType": "number"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      }
+    },
+    {
+      "id": 14,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "timeseries",
+      "title": "Model-rung latency",
+      "description": "Rung 6 only. Merging it with the deterministic rungs buries a classifier regression under a thousand sub-millisecond reads.",
+      "gridPos": {
+        "h": 8,
+        "w": 13,
+        "x": 0,
+        "y": 38
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" actor:model | stats quantile(0.5, latencyMs) p50, quantile(0.95, latencyMs) p95",
+          "queryType": "statsRange"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "showPoints": "never",
+            "pointSize": 4,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "axisSoftMin": 0
+          },
+          "unit": "ms",
+          "noValue": "not recorded"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Revisions seen in this window",
+      "description": "Two or more revisions live AT THE SAME TIME across machines is the prompt-cache alarm: each distinct prefix is paid for separately.\n\nA row with an empty rev is a record written before revision stamping and is kept in its own bucket rather than folded into a real revision — folding it would fabricate provenance, and it is why the pipeline may not mine unstamped records for before/after comparisons.",
+      "gridPos": {
+        "h": 8,
+        "w": 11,
+        "x": 13,
+        "y": 38
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" | stats by (rev, policySource) count() decisions, max(_time) last_seen | sort by (decisions desc)",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "decisions",
+                "destinationType": "number"
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "rev": 0,
+              "policySource": 1,
+              "decisions": 2,
+              "last_seen": 3
+            },
+            "excludeByName": {},
+            "renameByName": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "decisions",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "type": "row",
+      "title": "What got blocked",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 17,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "logs",
+      "title": "Denials and rewrites, newest first",
+      "description": "Nobody debugs a policy from a bar chart; they read the thing that got blocked.\n\nLOCAL SCOPE ONLY has anything readable here. A team-scope export drops `note` and `inputSummary` and ships a tool shape instead, so on a shared instance this panel is deliberately thin — that is the privacy projection working, not a broken panel. Take a decisionId to `session-sitter explain <id>` for the whole ranked considered-set with include and exclude reasons.",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:decision machine:~\"$machine\" (decision:deny OR rewritten:true) | sort by (_time desc)",
+          "queryType": "instant",
+          "maxLines": 200
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "prettifyLogMessage": false
+      }
+    },
+    {
+      "id": 18,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "text",
+      "title": "What this dashboard cannot answer, and what does",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 59
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "A log store has the trail. It does not have the **artifact**, so the questions that are joins against the artifact are not answerable here — and all of them are already CLI commands:\n\n| Question | Ask |\n|---|---|\n| Which clauses are in the artifact and never fire? | `session-sitter policy check` |\n| Why did *this* call get that verdict, clause by clause? | `session-sitter explain <decisionId>` |\n| What would a practices edit change, over real decisions? | `session-sitter policy diff <revA> <revB> --replay N` |\n| What is in force right now, and how do I change it? | `session-sitter export --html > report.html` |\n| What did the offline pipeline do? | the **offline pipeline** dashboard, next to this one |\n\n**Nothing here writes.** This is a read-only view of an append-only file. The policy that governs an agent is changed in a terminal or in a pull request, never in a browser — that asymmetry is the product, not a missing feature.\n\n**This store is disposable.** `docker compose down -v` loses nothing: `decisions.jsonl` on each machine is the record and never moves."
+      }
+    }
+  ]
+}

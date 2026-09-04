@@ -111,6 +111,24 @@ export async function runMain(argv: readonly string[], io: Io = processIo()): Pr
 }
 
 // Only run when invoked directly, so tests can import the module.
+//
+// `process.exit(code)` here would truncate piped output, and did. Writes to a **pipe** are
+// asynchronous — unlike writes to a file, which are synchronous on POSIX — so `process.exit`
+// discards whatever has not drained. Anything over the pipe buffer (64 KiB on macOS) was cut
+// mid-object, silently and with exit code 0: `export --jsonline > file` was whole while
+// `export --jsonline | curl` lost everything past the first 64 KiB, and so did any `--json` piped
+// into `jq`.
+//
+// `write('', cb)` queues an empty write behind everything already queued, and its callback runs once
+// all of it has reached the OS. Exiting from there keeps the forced exit — no command can hang the
+// process by leaving a handle open — and flushes first. The `catch` is for a closed downstream
+// (`| head`), where the flush cannot complete and there is nothing left to flush it to.
 if (require.main === module) {
-  void runMain(process.argv.slice(2)).then(code => process.exit(code));
+  void runMain(process.argv.slice(2)).then(code => {
+    try {
+      process.stdout.write('', () => process.exit(code));
+    } catch {
+      process.exit(code);
+    }
+  });
 }

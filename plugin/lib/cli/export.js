@@ -87,8 +87,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.HELP = exports.NEVER_SHIPPED = exports.TEAM_FIELDS = exports.SHIP_COMMAND = exports.EXPORT_SPEC = exports.DEFAULT_LIMIT = void 0;
 exports.toolShape = toolShape;
 exports.projectTeam = projectTeam;
+exports.projectRun = projectRun;
 exports.hmacKey = hmacKey;
+exports.resolvedConfig = resolvedConfig;
 exports.rungOf = rungOf;
+exports.outcomeOf = outcomeOf;
 exports.renderHtml = renderHtml;
 exports.run = run;
 const fs = __importStar(require("fs"));
@@ -98,6 +101,9 @@ const crypto_1 = require("crypto");
 const buildInfo_1 = require("../buildInfo");
 const trail_1 = require("../audit/trail");
 const paths_1 = require("../hooks/paths");
+const pipeline_1 = require("../policy/pipeline");
+const settings_1 = require("../hooks/settings");
+const permissionRequest_1 = require("../hooks/permissionRequest");
 const args_1 = require("./args");
 const time_1 = require("./time");
 /** Rows past this are summarised rather than listed. Doc 14's measured number. */
@@ -123,18 +129,63 @@ exports.EXPORT_SPEC = {
  *
  * `-httpListenAddr=127.0.0.1:9428` is not cosmetic. VictoriaLogs' default binds **every** interface,
  * which on a café network publishes the audit trail to every device on it.
+ *
+ * ## `-H 'Content-Type: application/x-ndjson'` is not cosmetic either
+ *
+ * **Without it this command silently ships nothing.** `curl --data-binary` defaults to
+ * `Content-Type: application/x-www-form-urlencoded`, and VictoriaLogs v1.52.0 discards the body of a
+ * form-urlencoded POST to `/insert/jsonline` while still answering **HTTP 200** — no error, no
+ * warning, `vl_http_errors_total` unmoved, `vl_rows_ingested_total` and `vl_bytes_ingested_total`
+ * both flat at zero. So the failure is invisible from the shell: the command succeeds, prints
+ * nothing, and the store stays empty, and the only symptom is an empty UI with nothing anywhere to
+ * explain it.
+ *
+ * Measured against a real v1.52.0 on 2026-09-04, not inferred: with the header present, and with
+ * `application/json` or `text/plain`, one line in is one row queryable back out; with curl's default
+ * it is zero rows every time.
+ *
+ * ## `_stream_fields=kind,machine`, and nothing else
+ *
+ * A stream field partitions the store; it is not "the columns I want to group by". Every field in
+ * the line is queryable either way, so a field named here buys nothing and costs a stream per
+ * distinct combination — with its own index entry and its own write buffer.
+ *
+ * `kind` is two values and `machine` is however many machines one person owns, so the product is
+ * bounded by hardware. Naming `tool` and `actor` as well, which this command used to, multiplies
+ * that by ~120 for no query benefit; naming `clause` would multiply it by the rendered-clause
+ * ceiling; naming `sessionId` or `rev` would make it unbounded by construction, one new stream per
+ * session or per artifact revision, forever.
+ *
+ * The failure that buys is not a slow query. A laptop with 20 000 decisions and a few hundred
+ * streams is fast, so wrong wiring looks correct and ships — and then arrives weeks later as
+ * ingestion latency, then RSS, then rejected writes. In a governance tool the moment the trail
+ * stops being written is the moment you most need it.
  */
 exports.SHIP_COMMAND = 'session-sitter export --jsonline --since 7d \\\n'
-    + '  | curl -s -X POST --data-binary @- \\\n'
+    + "  | curl -s -X POST -H 'Content-Type: application/x-ndjson' --data-binary @- \\\n"
     + "    '127.0.0.1:9428/insert/jsonline"
-    + "?_time_field=ts&_msg_field=note,inputSummary&_stream_fields=tool,actor'";
+    + "?_time_field=ts&_msg_field=note,inputSummary,headline"
+    + "&_stream_fields=kind,machine'";
 /**
  * The keys a team payload carries. An allow-list, so a field added to `DecisionRecord` later is
  * dropped by default rather than shipped by default — the direction that fails safe.
+ *
+ * `kind` and `machine` are on it because they are *added* by the export rather than read from the
+ * record: `kind` so a store holding both shapes can tell a decision from a pipeline run without
+ * guessing from which keys happen to be present, and `machine` because tier 1's one genuine
+ * advantage over tier 0 is a view across several machines, which is impossible if no line says
+ * which machine it came from.
+ *
+ * It is called `machine` and not `host` on purpose. `host` stays in {@link NEVER_SHIPPED}, because a
+ * raw hostname names a person's laptop and there is no scope in which that should leave. `machine`
+ * is the per-machine HMAC the other pseudonyms use — correlatable *between* machines and useless for
+ * identifying one — so the field's own name states what it holds, and the guarantee "no key called
+ * `host` ever leaves" stays literal and testable rather than becoming a judgement about values.
  */
 exports.TEAM_FIELDS = [
     'ts', 'latencyMs', 'tool', 'decision', 'light', 'actor', 'rewritten', 'clause', 'rev',
     'policySource', 'telemetry', 'sessionId', 'cwd', 'toolShape', 'inputFingerprint',
+    'kind', 'machine',
 ];
 /**
  * What never leaves the machine, named so the guarantee is testable rather than aspirational.
@@ -208,6 +259,11 @@ function toolShape(record) {
 function projectTeam(record, key) {
     const pseudonym = (value) => (0, crypto_1.createHmac)('sha256', key).update(value, 'utf8').digest('hex').slice(0, 16);
     return {
+        // Emitted here rather than added by the caller, so this stays the one function that decides
+        // which keys exist — which is what makes {@link TEAM_FIELDS} an assertable list rather than a
+        // comment about one.
+        kind: 'decision',
+        machine: pseudonym(os.hostname()),
         ts: record.ts,
         latencyMs: record.latencyMs,
         tool: record.tool,
@@ -229,6 +285,84 @@ function projectTeam(record, key) {
     };
 }
 /**
+ * One offline pipeline run, flattened, and the same shape in both scopes.
+ *
+ * ## Why the offline side is here at all
+ *
+ * `learn` writes a run line per invocation whether or not it produced anything, and that is the
+ * whole point of the file: a fail-closed run that correctly proposed nothing leaves **no clause
+ * file and no commit**, so surviving artefacts cannot distinguish it from a pipeline that never ran.
+ * A funnel derived from `proposals/*.md` shows only the runs that produced something, which is
+ * exactly the wrong half. So the run line ships, and a produced-nothing run is a row.
+ *
+ * ## Why one shape for both scopes
+ *
+ * A `RunLine` is large and several of its fields are local by nature: `corpusRoot` and
+ * `window.files` are filesystem paths, `error` is an exception string that routinely carries one,
+ * `headline` is prose, and a `Refusal`'s `cluster` is a command shape lifted from real work. Rather
+ * than a second allow-list, the projection keeps the **counts and the closed enums** and drops
+ * everything else in both scopes — nothing downstream needs a corpus path to draw a funnel, and one
+ * shape means there is no scope-aware branch here to get wrong either.
+ *
+ * `refusals` keeps only the {@link RefusalReason} codes, which are a closed enum of eleven values
+ * and therefore safe by construction. The cluster each refusal names is a real command and stays on
+ * the machine, where `session-sitter learn --status` prints it.
+ *
+ * Flat, not nested, because every consumer of this — LogsQL, a Grafana transform, the snapshot's own
+ * table — reads flat fields and would otherwise each need their own nested-path handling.
+ */
+function projectRun(line, machine) {
+    const w = line.window;
+    const c = line.candidates;
+    return {
+        kind: 'pipeline_run',
+        ts: line.ts,
+        machine,
+        runId: line.runId,
+        stage: line.stage,
+        trigger: line.trigger,
+        rev: line.rev,
+        exitReason: line.exitReason,
+        // True when the run ended in an error, so a broken pipeline is a filter and not a reading of
+        // prose. `learn` keeps the message itself local.
+        failed: line.exitReason === 'error',
+        // A run that ran every gate and correctly proposed nothing. The row that only exists here.
+        //
+        // Only a `propose` run can be it. An `accumulate` run folds new records and never proposes, so
+        // "produced nothing" is not an outcome for it — and a field that is true on every accumulate row
+        // is a query anyone would trust and nobody could use. Guarded here rather than by each reader,
+        // because the reader who forgets is the one whose panel is quietly wrong.
+        producedNothing: line.stage === 'propose'
+            && c.proposed === 0 && c.retired === 0 && line.exitReason !== 'error',
+        scanned: w.scanned,
+        fresh: w.new,
+        spanDays: w.spanDays,
+        rotated: w.rotated,
+        unstamped: w.unstamped,
+        noCall: w.noCall,
+        shapes: line.shapes.total,
+        shapesCrossedFloor: line.shapes.crossedFloor,
+        clusters: line.clusters.total,
+        clustersBelowFloor: line.clusters.belowFloor,
+        clustersContradicted: line.clusters.contradicted,
+        considered: c.considered,
+        proposed: c.proposed,
+        merged: c.merged,
+        retired: c.retired,
+        held: c.held,
+        refusals: line.refusals.map(r => r.why),
+        refusalCount: line.refusals.length,
+        replayN: line.replay.n,
+        replayChanged: line.replay.changed,
+        replayReversals: line.replay.reversals,
+        replayCalibrated: line.replay.calibrated,
+        durationMs: line.durationMs,
+        // Asserted zero on this path. Shipped so a nonzero one is visible in the store rather than only
+        // in a test — the pipeline calling a model would be a change of kind, not of degree.
+        modelCalls: line.model.calls,
+    };
+}
+/**
  * The per-machine HMAC key, generated once.
  *
  * Per-machine and never shared: that is what makes a pseudonym correlatable *within* one machine's
@@ -244,6 +378,43 @@ function hmacKey(env = process.env) {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         fs.writeFileSync(file, key.toString('hex'), { mode: 0o600 });
         return key;
+    }
+}
+/**
+ * The resolved configuration and the pinned artifact revision, from the loaders the ladder itself
+ * uses — {@link loadSettings} and {@link loadPolicyInputs}, not a second parse of anything.
+ *
+ * That rule is the whole value of the panel. A config view that re-reads the environment, or
+ * re-parses the corpus, is a view that can disagree with the code it claims to describe; it will,
+ * eventually, and precisely when somebody is trusting it to explain a denial.
+ *
+ * A corpus that will not load is reported as `unreadable` with the error, and never as "no policy".
+ * Those are different states with opposite meanings — one is a configuration choice, the other is
+ * the condition under which the ladder fails closed on everything — and collapsing them would make
+ * the snapshot lie in the one situation where somebody is reading it to find out why.
+ */
+async function resolvedConfig() {
+    const settings = (0, settings_1.loadSettings)();
+    try {
+        const policy = await (0, permissionRequest_1.loadPolicyInputs)(settings);
+        return {
+            settings: (0, settings_1.settingRows)(settings),
+            policySource: policy.source,
+            rev: policy.rev,
+            reason: policy.reason,
+            clauseCount: policy.clauses.length,
+            error: null,
+        };
+    }
+    catch (err) {
+        return {
+            settings: (0, settings_1.settingRows)(settings),
+            policySource: 'unreadable',
+            rev: null,
+            reason: null,
+            clauseCount: null,
+            error: err instanceof Error ? err.message : String(err),
+        };
     }
 }
 // ── Aggregation ─────────────────────────────────────────────────────────────
@@ -311,23 +482,102 @@ function barCell(count, max) {
     const pct = max > 0 ? Math.round((count / max) * 100) : 0;
     return `<td class="bar" style="--pct:${pct}%">${count}</td>`;
 }
-/** Per-day decision counts as one inline `<svg>` — the only chart, and it ships in the file. */
-function sparkline(byDay) {
-    const days = [...byDay.keys()].sort();
-    if (days.length < 2) {
-        return `<p class="none">not recorded — one day of records or fewer</p>`;
+const OUTCOMES = [
+    { key: 'allow', label: 'allowed', light: '#2f7d68', dark: '#5fbfa4' },
+    { key: 'correct', label: 'corrected — rewritten and allowed', light: '#3a6ea8', dark: '#7aa9dd' },
+    { key: 'deny', label: 'denied by a clause or the built-in table', light: '#a33b32', dark: '#e58a80' },
+    { key: 'closed', label: 'fail closed — nothing answered', light: '#6b3f8f', dark: '#b98ede' },
+    { key: 'none', label: 'no verdict — exempt tool, or observe mode', light: '#8a8a90', dark: '#8a8a90' },
+];
+/** Which of the five a record is. Total over the union, so no record is silently uncounted. */
+function outcomeOf(r) {
+    if (r.decision === 'none') {
+        return 'none';
     }
-    const max = Math.max(...byDay.values());
-    const w = 8;
+    if (r.rewritten) {
+        return 'correct';
+    }
+    if (r.actor === 'timeout') {
+        return 'closed';
+    }
+    return r.decision === 'allow' ? 'allow' : 'deny';
+}
+/**
+ * The outcome mix over time, as one stacked-bar `<svg>`.
+ *
+ * The question this answers is not "how many" — the count is in three other places — it is **"is the
+ * shape changing"**. A deny rate that steps up on a Tuesday is a practices edit, and a fail-closed
+ * band appearing at all is a broken artifact or loader. Both are visible as a change in
+ * proportion and neither is visible in a total.
+ *
+ * Buckets are whole days in the viewer-independent sense: the `YYYY-MM-DD` prefix of the stored
+ * instant, which is UTC, stated as such in the caption rather than silently rendered in whatever
+ * zone the reader is in. A snapshot that re-buckets itself per reader is a snapshot two people
+ * disagree about.
+ */
+function outcomeChart(byDay) {
+    const days = [...byDay.keys()].sort();
+    if (days.length === 0) {
+        return `<p class="none">not recorded — no decision in this window</p>`;
+    }
+    const totalFor = (day) => [...(byDay.get(day) ?? new Map()).values()].reduce((a, b) => a + b, 0);
+    const max = Math.max(1, ...days.map(totalFor));
+    const H = 130;
+    const w = days.length > 60 ? 4 : days.length > 24 ? 8 : 16;
+    const gap = w > 4 ? 3 : 1;
+    const width = days.length * (w + gap);
     const bars = days.map((day, i) => {
-        const h = Math.max(1, Math.round((byDay.get(day) / max) * 60));
-        return `<rect x="${i * (w + 2)}" y="${60 - h}" width="${w}" height="${h}">`
-            + `<title>${escapeHtml(day)}: ${byDay.get(day)}</title></rect>`;
+        const counts = byDay.get(day) ?? new Map();
+        const total = totalFor(day);
+        let y = H;
+        const parts = OUTCOMES.map(o => {
+            const n = counts.get(o.key) ?? 0;
+            if (n === 0) {
+                return '';
+            }
+            // At least one pixel: a single denial in a thousand allows is the row somebody is looking for,
+            // and rounding it to nothing is the chart lying by omission.
+            const h = Math.max(1, Math.round((n / max) * H));
+            y -= h;
+            return `<rect class="o-${o.key}" x="${i * (w + gap)}" y="${y}" width="${w}" height="${h}"></rect>`;
+        }).join('');
+        const detail = OUTCOMES.filter(o => (counts.get(o.key) ?? 0) > 0)
+            .map(o => `${counts.get(o.key)} ${o.label}`).join(', ');
+        // One title per column rather than per segment: the reader wants the day's whole mix, and a
+        // 4px-wide segment is not a hover target.
+        return `<g><title>${escapeHtml(day)} — ${total} decision(s): ${escapeHtml(detail)}</title>`
+            + `<rect class="hit" x="${i * (w + gap)}" y="0" width="${w}" height="${H}"></rect>${parts}</g>`;
     }).join('');
-    return `<svg class="spark" viewBox="0 0 ${days.length * (w + 2)} 60" height="60" `
-        + `role="img" aria-label="decisions per day">${bars}</svg>`
+    const legend = OUTCOMES.map(o => `<span class="key"><i class="o-${o.key}"></i>${escapeHtml(o.label)}</span>`).join('');
+    return `<svg class="stack" viewBox="0 0 ${width} ${H}" height="${H}" preserveAspectRatio="none"`
+        + ` role="img" aria-label="decisions per UTC day, stacked by outcome">${bars}</svg>`
         + `<p class="axis">${escapeHtml(days[0])} → ${escapeHtml(days[days.length - 1])}`
-        + ` · tallest bar ${max}</p>`;
+        + ` · whole UTC days · tallest day ${max} decision(s)</p>`
+        + `<p class="legend">${legend}</p>`;
+}
+/**
+ * The offline pipeline funnel, as five labelled horizontal bars.
+ *
+ * Not a Sankey. A five-stage Sankey is a picture that looks like insight and conveys a table, and
+ * this one has to be readable next to the run rows that explain it.
+ *
+ * Every stage prints its absolute count *and* its retention against the stage above, because the
+ * interesting fact about this funnel is always where it narrows — a floor nothing clears and a
+ * replay nothing survives are the two designed outcomes, and both look like "no output" from the
+ * end of the pipe.
+ */
+function funnel(stages) {
+    const max = Math.max(1, ...stages.map(s => s.n));
+    return `<table class="funnel">
+<thead><tr><th>stage</th><th>count</th><th>of the stage above</th><th>what it means</th></tr></thead>
+<tbody>${stages.map((st, i) => {
+        const above = i === 0 ? null : stages[i - 1].n;
+        const share = above === null ? '' : above === 0 ? NOT_RECORDED
+            : `${Math.round((st.n / above) * 100)}%`;
+        return `<tr><td>${escapeHtml(st.label)}</td>${barCell(st.n, max)}`
+            + `<td>${share}</td><td class="dim">${escapeHtml(st.note)}</td></tr>`;
+    }).join('')}</tbody>
+</table>`;
 }
 const STYLE = `
 :root { color-scheme: light dark; --fg: #1c1c1e; --bg: #fbfbfd; --dim: #6b6b70;
@@ -354,11 +604,30 @@ td.bar { z-index: 0; } td.bar::before { z-index: -1; }
 .band dd { margin: 0; }
 pre { background: rgba(127,127,127,.12); padding: .6rem .8rem; border-radius: 4px;
   overflow-x: auto; margin: .6rem 0 0; user-select: all; }
+/* The same block inside a table cell, where a row of them would otherwise be a wall of grey. */
+pre.inline { margin: 0; padding: .15rem .4rem; display: inline-block; }
 code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 #stale { display: none; background: var(--warnbg); color: var(--warn); border-radius: 6px;
   padding: .7rem 1rem; margin: 0 0 1rem; font-weight: 600; }
-.spark rect { fill: var(--bar); }
 p.axis { color: var(--dim); margin: .2rem 0 0; font-size: .85rem; }
+td.dim, .dim { color: var(--dim); }
+svg.stack { width: 100%; display: block; margin: .5rem 0 0; }
+svg.stack rect.hit { fill: transparent; }
+p.legend { margin: .5rem 0 0; display: flex; flex-wrap: wrap; gap: .3rem 1.1rem;
+  color: var(--dim); font-size: .85rem; }
+p.legend .key { display: inline-flex; align-items: center; gap: .35rem; }
+p.legend i { width: .7rem; height: .7rem; border-radius: 2px; display: inline-block; }
+${OUTCOMES.map(o => `.o-${o.key} { fill: ${o.light}; background: ${o.light}; }`).join('\n')}
+@media (prefers-color-scheme: dark) {
+${OUTCOMES.map(o => `  .o-${o.key} { fill: ${o.dark}; background: ${o.dark}; }`).join('\n')}
+}
+table.funnel td.bar { width: 8rem; }
+/* The rows that exist for no other reason. The outcome column already names them, so this is a
+   cue and not a second copy of the text. */
+tr.nothing td { border-left: 2px solid var(--bar); }
+tr.nothing td:first-child { border-left-width: 4px; }
+.warnband { background: var(--warnbg); color: var(--warn); border-radius: 6px;
+  padding: .6rem .9rem; margin: .6rem 0; }
 `.trim();
 /**
  * The age check, and the only script in the file.
@@ -377,14 +646,157 @@ if (age > ${STALE_AFTER_HOURS}) {
   band.style.display = 'block';
 }
 `.trim();
+/**
+ * The resolved config, and the command that changes each setting.
+ *
+ * **Read here; written in a terminal.** That asymmetry is deliberate and it is the one design
+ * decision in this file worth arguing rather than just documenting. Session Sitter's central claim is
+ * that the supervised agent cannot change the policy that governs it. A page that can change the
+ * mode is a write path into a fail-closed governance tool, reachable by whatever can reach the page
+ * — and on the tier-2 path that is a Grafana running with anonymous admin on purpose, because it is
+ * bound to loopback. The value of being able to flip a switch in a browser does not come close to
+ * the cost of the policy having a second, weaker door. So every row states what is in force and the
+ * one line that changes it, and nothing rendered here changes anything.
+ *
+ * **Local scope only.** The values name a corpus, a practices file and a routing triple — a repo
+ * name, a team name and a filesystem path — none of which the team projection would let through if
+ * they were on a decision record. A snapshot meant to be forwarded says the table was withheld and
+ * why, which is a smaller loss than the alternative, since the person who needs the config is
+ * already on the machine that has it.
+ */
+function renderConfig(config, scope) {
+    if (scope === 'team') {
+        return `<p class="none">withheld from a team snapshot on purpose — the resolved config names a
+    corpus, a practices file and a routing triple, which are the repo, team and path names the team
+    projection drops everywhere else. Read it on the machine itself:
+    <span class="mono">session-sitter export --html &gt; report.html</span>.</p>`;
+    }
+    const source = config.policySource === 'unreadable'
+        ? `<div class="warnband">The compiled policy could not be read, so rungs 2&ndash;4 never ran and
+       every ambiguous call fails closed. This is not "no policy configured" — it is the condition
+       under which everything is denied. Error: <span class="mono">${cell(config.error)}</span></div>`
+        : '';
+    const rows = config.settings.map(row => `<tr><td class="mono">${escapeHtml(row.key)}</td><td class="mono">${cell(row.value)}</td>`
+        + `<td><pre class="inline">${escapeHtml(row.command)}</pre></td></tr>`).join('');
+    return `${source}<table>
+<thead><tr><th>what is in force</th><th>value</th><th>the command that changes it</th></tr></thead>
+<tbody>
+<tr><td class="mono">policySource</td><td class="mono">${cell(config.policySource)}</td>
+<td class="dim">${config.reason === null ? 'the compiled artifact is in use'
+        : escapeHtml(config.reason)}</td></tr>
+<tr><td class="mono">rev</td><td class="mono">${cell(config.rev)}</td>
+<td class="dim">the pinned artifact revision every decision below was evaluated against</td></tr>
+<tr><td class="mono">clauses in force</td><td class="mono">${cell(config.clauseCount)}</td>
+<td class="dim">accepted only &mdash; a proposed clause cannot decide, match, or reach the prompt</td></tr>
+${rows}
+</tbody>
+</table>
+<p class="note">Every value above comes from the loaders the ladder itself uses, never from a second
+read of the environment or a re-parse of the corpus: a config view that reads its own inputs twice is
+a view that can disagree with the code it describes, and it will, exactly when someone is using it to
+find out why a call was denied. There is deliberately no control on this page that changes any of
+them &mdash; a browser that can rewrite the policy is a second and weaker door into the thing whose
+whole purpose is that the supervised agent cannot open it.</p>`;
+}
+/**
+ * The offline pipeline: the funnel, and one row per run including the runs that changed nothing.
+ *
+ * The produced-nothing row is the reason this section exists rather than being derived from
+ * `proposals/*.md` and the corpus git log. A run that read the trail, ran every gate and correctly
+ * proposed nothing writes **no file and makes no commit**, so surviving artefacts cannot tell it
+ * apart from a pipeline that never ran at all — and those two have opposite meanings. One is the
+ * fail-closed design working; the other is a broken scheduler nobody has noticed.
+ */
+function renderPipeline(runs) {
+    if (runs.length === 0) {
+        return `<p class="none">not recorded &mdash; <span class="mono">session-sitter learn</span> has
+    never run on this machine, so there is no <span class="mono">pipeline.jsonl</span>. This is not
+    the same as a run that proposed nothing: that would be a row below.</p>`;
+    }
+    const sum = (pick) => runs.reduce((a, r) => a + pick(r), 0);
+    const proposeRuns = runs.filter(r => r.stage === 'propose');
+    const nothing = proposeRuns.filter(r => r.producedNothing).length;
+    const failed = runs.filter(r => r.failed).length;
+    const rotated = runs.filter(r => r.rotated).length;
+    const stages = [
+        { label: 'records read', n: sum(r => r.fresh),
+            note: 'new decisions folded in since the last run' },
+        { label: 'shapes', n: sum(r => r.shapes), note: 'distinct command shapes seen' },
+        { label: 'clusters', n: sum(r => r.clusters),
+            note: 'shapes grouped into a candidate rule' },
+        { label: 'candidates considered', n: sum(r => r.considered),
+            note: 'clusters that cleared the support floor and reached the gate' },
+        { label: 'proposed', n: sum(r => r.proposed),
+            note: 'clause files written at status: proposed — inert until a human accepts one' },
+        { label: 'retirements proposed', n: sum(r => r.retired),
+            note: 'clauses ablation showed were carrying nothing' },
+    ];
+    const refusals = new Map();
+    for (const r of runs) {
+        for (const why of r.refusals) {
+            refusals.set(why, (refusals.get(why) ?? 0) + 1);
+        }
+    }
+    const maxRefusal = Math.max(1, ...refusals.values());
+    const refusalRows = refusals.size === 0
+        ? `<tr><td colspan="2">${NOT_RECORDED} — no candidate was refused in this window</td></tr>`
+        : [...refusals.entries()].sort((a, b) => b[1] - a[1])
+            .map(([why, n]) => `<tr><td class="mono">${escapeHtml(why)}</td>`
+            + `${barCell(n, maxRefusal)}</tr>`).join('');
+    const runRows = [...runs].reverse().map(r => {
+        // An `accumulate` run folds new records and never proposes, so "0 proposed" would read as a
+        // failure to propose rather than as a stage with nothing to propose from.
+        const outcome = r.failed ? 'error'
+            : r.stage === 'accumulate' ? `folded ${r.fresh} record(s)`
+                : r.producedNothing ? 'produced nothing'
+                    : `${r.proposed} proposed`;
+        return `<tr${r.producedNothing ? ' class="nothing"' : ''}>`
+            + `<td class="mono">${cell(r.ts)}</td><td class="mono">${cell(r.stage)}</td>`
+            + `<td class="mono">${cell(r.trigger)}</td><td class="mono">${cell(r.exitReason)}</td>`
+            + `<td>${escapeHtml(outcome)}</td><td class="mono">${cell(r.fresh)}</td>`
+            + `<td class="mono">${r.refusalCount === 0 ? '0' : escapeHtml(r.refusals.join(', '))}</td>`
+            + `<td class="mono">${cell(r.durationMs)} ms</td></tr>`;
+    }).join('');
+    const modelCalls = sum(r => r.modelCalls);
+    return `<p class="note">${runs.length} run(s), of which ${proposeRuns.length} reached the propose
+stage. <strong>${nothing}</strong> ran every gate and correctly produced nothing &mdash; those rows
+are the reason this section reads the run line rather than the surviving clause files, because a run
+that proposes nothing leaves no file and no commit and is otherwise indistinguishable from a
+scheduler that stopped firing. ${failed} ended in an error.
+${rotated === 0 ? '' : `${rotated} run(s) saw a rotated trail, so their window is short by however
+much rotation dropped.`}
+The pipeline calls no model: <span class="mono">modelCalls</span> summed over every run above is
+${modelCalls}, and a nonzero there would be a change of kind rather than of degree.</p>
+
+${funnel(stages)}
+
+<h3>What was refused, and why</h3>
+<p class="note">A refusal is the pipeline declining to propose. Every code below is a designed
+outcome, not a fault &mdash; <span class="mono">below-floor</span> means a shape has not earned a
+rule yet, <span class="mono">contradicted</span> means a written practice already says otherwise.
+Counted per run, so a cluster refused on five runs is five.</p>
+<table>
+<thead><tr><th>refusal</th><th>times</th></tr></thead>
+<tbody>${refusalRows}</tbody>
+</table>
+
+<h3>Every run</h3>
+<table>
+<thead><tr><th>when</th><th>stage</th><th>trigger</th><th>exit</th><th>outcome</th>
+<th>new records</th><th>refusals</th><th>took</th></tr></thead>
+<tbody>${runRows}</tbody>
+</table>`;
+}
 function renderHtml(records, meta) {
     const instants = records.map(r => r.ts).filter(Boolean).sort();
     const revs = [...new Set(records.map(r => r.rev ?? null))];
     const truncated = meta.total > records.length;
     const byRung = new Map();
-    const byDay = new Map();
+    const outcomeByDay = new Map();
     const byClause = new Map();
     const latencyByRung = new Map();
+    /** Per revision: model-tier decisions, and how many of them rewrote the cached prefix. */
+    const byRev = new Map();
     let cacheRead = 0;
     let cacheCreation = 0;
     let uncached = 0;
@@ -393,7 +805,11 @@ function renderHtml(records, meta) {
     for (const r of records) {
         const rung = rungOf(r);
         byRung.set(rung, (byRung.get(rung) ?? 0) + 1);
-        byDay.set(r.ts.slice(0, 10), (byDay.get(r.ts.slice(0, 10)) ?? 0) + 1);
+        const day = r.ts.slice(0, 10);
+        const mix = outcomeByDay.get(day) ?? new Map();
+        const outcome = outcomeOf(r);
+        mix.set(outcome, (mix.get(outcome) ?? 0) + 1);
+        outcomeByDay.set(day, mix);
         if (typeof r.latencyMs === 'number') {
             const bucket = latencyByRung.get(rung) ?? [];
             bucket.push(r.latencyMs);
@@ -414,9 +830,21 @@ function renderHtml(records, meta) {
             cacheRead += r.telemetry.cache_read_input_tokens;
             cacheCreation += r.telemetry.cache_creation_input_tokens;
             uncached += r.telemetry.input_tokens;
-            if (r.telemetry.cache_creation_input_tokens > 0) {
+            const rewrote = r.telemetry.cache_creation_input_tokens > 0;
+            if (rewrote) {
                 prefixRewrites++;
             }
+            // Grouped by revision, because that is what makes the count actionable. A prefix rewrite is
+            // expected once per revision — the first call after an artifact change pays for the write —
+            // and a *pile* of them inside one revision is the cache regression, which no ratio shows.
+            const rev = r.rev ?? 'unstamped';
+            const bucket = byRev.get(rev) ?? { model: 0, rewrites: 0, created: 0 };
+            bucket.model++;
+            if (rewrote) {
+                bucket.rewrites++;
+            }
+            bucket.created += r.telemetry.cache_creation_input_tokens;
+            byRev.set(rev, bucket);
         }
     }
     const maxRung = Math.max(1, ...byRung.values());
@@ -447,6 +875,17 @@ function renderHtml(records, meta) {
             return `<tr><td class="mono">${cell(r.ts)}</td><td class="mono">${cell(rungOf(r))}</td>`
                 + `<td class="mono">${cell(asked)}</td><td>${cell(r.clause)}</td></tr>`;
         }).join('');
+    // Leads the cost section, not the ratio. A prefix rewrite is expected once per revision; a pile of
+    // them inside one revision is the 6.8x regression, and averaging it into a hit-rate percentage is
+    // exactly how that spike disappears.
+    const maxRewrites = Math.max(1, ...[...byRev.values()].map(b => b.rewrites));
+    const revRows = byRev.size === 0
+        ? `<tr><td colspan="4">${NOT_RECORDED} — no decision in this window called a model</td></tr>`
+        : [...byRev.entries()].sort((a, b) => b[1].rewrites - a[1].rewrites)
+            .map(([rev, b]) => `<tr><td class="mono">${rev === 'unstamped'
+            ? '<span class="none">unstamped</span>' : escapeHtml(rev)}</td>`
+            + `${barCell(b.rewrites, maxRewrites)}<td class="mono">${b.model}</td>`
+            + `<td class="mono">${b.created}</td></tr>`).join('');
     const promptTokens = cacheRead + cacheCreation + uncached;
     const cacheShare = modelRows > 0 && promptTokens > 0
         ? `cache read ${((cacheRead / promptTokens) * 100).toFixed(1)}% of prompt tokens`
@@ -480,6 +919,17 @@ function renderHtml(records, meta) {
   <pre>${escapeHtml(meta.regenerateCommand)}</pre>
 </div>
 
+<h2>What is in force</h2>
+${renderConfig(meta.config, meta.scope)}
+
+<h2>The outcome mix, and whether its shape is changing</h2>
+<p class="note">The count is elsewhere; this is about proportion. A deny band that steps up on one day
+is a practices edit. A <span class="mono">fail closed</span> band appearing at all is a broken
+artifact or loader, and it is the one series whose rise is unambiguously bad news — which is why it is
+not merged into the denials it technically belongs to. Every column carries its exact counts, and the
+tables below carry all of them as text, so no fact here depends on telling two colours apart.</p>
+${outcomeChart(outcomeByDay)}
+
 <h2>The ladder, and what each rung cost</h2>
 <p class="note">The rung is derived from <span class="mono">(actor, decision)</span>, never stored.
 Rung 1 deciding most calls is the system working; rung 7 climbing means a broken artifact or loader;
@@ -499,26 +949,39 @@ needs the artifact, and <span class="mono">session-sitter policy</span> is where
 <tbody>${clauseRows}</tbody>
 </table>
 
-<h2>Decisions per day</h2>
-${sparkline(byDay)}
-
 <h2>What the model rung cost</h2>
 <p class="note">Every figure below is over the ${modelRows} decision(s) that called a model, of
 ${records.length} in the window. Rungs 1&ndash;5 call none, so they have no cache to hit and are not
 a miss; a rate across all decisions does not exist and is not printed.</p>
+
+<h3>Prefix rewrites, by revision &mdash; the number to read first</h3>
+<p class="note">A rewrite is a decision whose
+<span class="mono">cache_creation_input_tokens</span> was above zero: it paid to write the cached
+prefix instead of reading it. <strong>One per revision is correct</strong> &mdash; the first call
+after an artifact change pays for the write. Several inside a single revision means something is
+mutating the prompt under the runtime, which is the 6.8&times; cost regression the whole pinning
+design exists to prevent. It is a count and not a rate on purpose: a hit-rate percentage averages
+that spike away, and the spike is the entire signal.</p>
+<table>
+<thead><tr><th>revision</th><th>prefix rewrites</th><th>model-tier decisions</th>
+<th>tokens written</th></tr></thead>
+<tbody>${revRows}</tbody>
+</table>
+
+<h3>The rest of it</h3>
 <table>
 <thead><tr><th>figure</th><th>value</th></tr></thead>
 <tbody>
 <tr><td>model-tier decisions</td><td>${modelRows === 0 ? NOT_RECORDED : modelRows}</td></tr>
-<tr><td>prefix rewrites (<span class="mono">cache_creation_input_tokens &gt; 0</span>)</td>
+<tr><td>prefix rewrites, all revisions</td>
 <td>${modelRows === 0 ? NOT_RECORDED : prefixRewrites}</td></tr>
 <tr><td>prompt tokens read from cache</td><td>${cacheShare === null ? NOT_RECORDED
         : escapeHtml(cacheShare)}</td></tr>
 </tbody>
 </table>
-<p class="note">A partial hit is the normal case — the judging instruction rides a trailing user turn
-after the cached prefix by design — so there is no hit/miss boolean. The number worth watching is the
-prefix-rewrite count inside one revision: a spike there is the cache regression.</p>
+<p class="note">A partial hit is the normal case &mdash; the judging instruction rides a trailing user
+turn after the cached prefix by design &mdash; so there is no hit/miss boolean, and the share above
+is second to the count above it.</p>
 
 <h2>The denials and rewrites, as a list</h2>
 <p class="note">The newest ${Math.min(DENIAL_ROWS, denials.length)} of ${denials.length} in the
@@ -528,6 +991,9 @@ scope this shows the shape, because the projection already dropped the command l
 <thead><tr><th>when</th><th>rung</th><th>what was asked</th><th>clause</th></tr></thead>
 <tbody>${denialRows}</tbody>
 </table>
+
+<h2>The offline side &mdash; what <span class="mono">learn</span> did</h2>
+${renderPipeline(meta.runs)}
 
 <script>${AGE_SCRIPT}</script>
 </body>
@@ -571,8 +1037,27 @@ async function run(argv, io) {
     const kept = all.slice(Math.max(0, all.length - limit));
     const key = scope === 'team' ? hmacKey() : null;
     const project = (r) => key === null ? r : projectTeam(r, key);
+    // Local is the record as written, on the machine that wrote it, so the real name. Team is the same
+    // per-machine HMAC the other pseudonyms use. One key, one code path, two values.
+    const machine = key === null
+        ? os.hostname()
+        : (0, crypto_1.createHmac)('sha256', key).update(os.hostname(), 'utf8').digest('hex').slice(0, 16);
+    // The offline side. Absent is normal and not an error: a machine that has never run `learn` has no
+    // pipeline file, which is a true statement about it rather than a failure to read one.
+    const runs = (0, trail_1.readJsonl)((0, pipeline_1.pipelinePath)())
+        .filter(r => typeof r?.ts === 'string')
+        .filter(r => since === null || new Date(r.ts).getTime() >= since.getTime())
+        .sort((a, b) => a.ts.localeCompare(b.ts));
     if (wantJsonline) {
-        io.out(kept.map(r => `${JSON.stringify(project(r))}\n`).join(''));
+        // `project` already stamps both on the team path; the local path is the record as written, so it
+        // gets them here. Spread last so neither can be shadowed by a field of the same name on a
+        // record from a future version.
+        io.out(kept.map(r => `${JSON.stringify({ ...project(r), kind: 'decision', machine })}\n`)
+            .join(''));
+        // Both kinds down one pipe, so a reader ships the online and the offline story with one command
+        // and `kind` tells them apart. Runs after decisions only so a single `curl` sees the smaller,
+        // rarer shape last; nothing depends on the order.
+        io.out(runs.map(r => `${JSON.stringify(projectRun(r, machine))}\n`).join(''));
         return 0;
     }
     const regenerate = ['session-sitter export --html', ...argv.filter(a => a !== '--html')]
@@ -586,6 +1071,8 @@ async function run(argv, io) {
         total: all.length,
         host: os.hostname(),
         regenerateCommand: regenerate,
+        runs: runs.map(r => projectRun(r, machine)),
+        config: await resolvedConfig(),
     }));
     return 0;
 }

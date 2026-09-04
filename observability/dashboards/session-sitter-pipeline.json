@@ -1,0 +1,963 @@
+{
+  "tags": [
+    "session-sitter"
+  ],
+  "timezone": "utc",
+  "editable": false,
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "refresh": "",
+  "schemaVersion": 39,
+  "version": 1,
+  "graphTooltip": 1,
+  "uid": "ss-pipeline",
+  "title": "Session Sitter — the offline pipeline",
+  "description": "The offline path: what `session-sitter learn` read, what it refused and why, and what it proposed. Reads kind:pipeline_run. A run that correctly produced nothing is a ROW here.",
+  "templating": {
+    "list": [
+      {
+        "name": "machine",
+        "label": "machine",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "text": ".*",
+          "value": ".*"
+        },
+        "options": [],
+        "description": "A regexp over the machine field. `.*` is all of them; type a machine name to scope to one. A team-scope export carries a per-machine pseudonym here, so machines stay distinguishable from each other without being identifiable."
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 19,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "text",
+      "title": "Read this first",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "### Why this reads run lines and not clause files\n\nA `learn` run that reads the trail, applies every gate and **correctly proposes nothing** writes no clause file and makes no commit. So a funnel built from surviving artefacts cannot tell that run apart from a scheduler that stopped firing three weeks ago — and those two have opposite meanings. One is the fail-closed design working exactly as designed; the other is an outage nobody has noticed.\n\n**A produced-nothing run is a success row, not a gap.** That is what the tile counts, and it is why `learn` writes a line per invocation whether or not it produced anything.\n\n`producedNothing` is true only for a `propose` run — an `accumulate` run folds new records and never proposes, so the outcome does not apply to it and the field says so rather than reading true on every one."
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Did it run, and what happened",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 21,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "stat",
+      "title": "Runs",
+      "description": "Every invocation, both stages. Zero here on a machine that is supposed to run nightly is the outage this dashboard exists to make visible.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" | stats count() runs",
+          "queryType": "stats"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 22,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "stat",
+      "title": "Propose runs",
+      "description": "The runs that could have produced a clause. The rest are `accumulate` runs, which fold new records and stop — what the SessionEnd hook triggers.",
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 4,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" stage:propose | stats count() propose_runs",
+          "queryType": "stats"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 23,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "stat",
+      "title": "Correctly produced nothing",
+      "description": "Ran every gate, proposed no clause, retired none, and did NOT error. These are the rows that exist nowhere else — no file, no commit, nothing in the corpus git log.\n\nA healthy pipeline spends most of its runs here. The support floors and the replay gate are supposed to refuse most candidates; a pipeline proposing something every night would be the thing to worry about.",
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 8,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" producedNothing:true | stats count() produced_nothing",
+          "queryType": "stats"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 24,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "stat",
+      "title": "Errored",
+      "description": "A run that threw. Distinct from \"produced nothing\" on purpose — one is the design working, the other is broken. The message itself stays on the machine, because it routinely carries a filesystem path; read it there with `session-sitter learn --status`.",
+      "gridPos": {
+        "h": 5,
+        "w": 5,
+        "x": 13,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" failed:true | stats count() errored",
+          "queryType": "stats"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 25,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "stat",
+      "title": "Model calls, summed over every run",
+      "description": "Asserted zero. The mining path calls no model at all — every number it produces is counted or measured, never judged. A nonzero here would be a change of KIND rather than of degree, which is why it is shipped to the store and not left to a unit test.",
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 18,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" | stats sum(modelCalls) model_calls",
+          "queryType": "stats"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 26,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "timeseries",
+      "title": "Runs over time, by exit reason",
+      "description": "Every exit reason is a value of a closed enum, so a zero is never unexplained. A GAP along the x axis is a night the pipeline did not run — which no artefact-derived view can show you, and which is the failure most likely to go unnoticed for weeks.",
+      "gridPos": {
+        "h": 8,
+        "w": 14,
+        "x": 0,
+        "y": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" | stats by (exitReason) count() runs",
+          "queryType": "statsRange"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "showPoints": "never",
+            "pointSize": 4,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "axisSoftMin": 0
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "error"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ok"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Why each run ended",
+      "description": "The closed enum: ok, no-new-records, no-shape-cleared-floor, all-candidates-failed-replay, calibration-failed, all-candidates-suppressed, ceiling-held, lock-held, caps-hit, no-input, error. All but the last are the pipeline refusing correctly.",
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 14,
+        "y": 14
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" | stats by (stage, exitReason) count() runs | sort by (runs desc)",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "runs",
+                "destinationType": "number"
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "stage": 0,
+              "exitReason": 1,
+              "runs": 2
+            },
+            "excludeByName": {},
+            "renameByName": {}
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": [
+          {
+            "displayName": "runs",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 28,
+      "type": "row",
+      "title": "The funnel",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 29,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Sessions in, practices out",
+      "description": "Summed over the propose runs in the window. NOT a Sankey — a five-stage Sankey is a picture that looks like insight and conveys a table.\n\nThe interesting fact about this funnel is always WHERE IT NARROWS. A floor nothing clears and a replay nothing survives are both designed outcomes, and both look identical from the end of the pipe, which is what the refusal panel beside this one separates.\n\n`proposed` counts clause files written at `status: proposed`, which is inert: a proposed clause cannot decide, cannot be matched and cannot reach the prompt until a human accepts it in a pull request.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" stage:propose | stats sum(fresh) records_read, sum(shapes) shapes, sum(clusters) clusters, sum(considered) candidates_considered, sum(proposed) proposed, sum(retired) retirements",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "records_read",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "shapes",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "clusters",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "candidates_considered",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "proposed",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "retirements",
+                "destinationType": "number"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      }
+    },
+    {
+      "id": 30,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "barchart",
+      "title": "What was refused, and why",
+      "description": "A refusal is the pipeline declining to propose, and every code is a DESIGNED outcome rather than a fault: `below-floor` means a shape has not earned a rule yet, `contradicted` means a written practice already says otherwise, `never-widen` means the candidate would have generalised across an axis that is only ever narrowed. Counted per run, so a cluster refused on five runs is five.\n\nThe cluster each refusal names is a real command line and stays on the machine — `session-sitter learn --status` prints it there.",
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" refusalCount:>0 | unroll (refusals) | stats by (refusals) count() times | sort by (times desc)",
+          "queryType": "instant",
+          "maxLines": 200
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "times",
+                "destinationType": "number"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "axisPlacement": "auto",
+            "gradientMode": "none"
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "xField": "refusals",
+        "colorByField": "refusals"
+      }
+    },
+    {
+      "id": 31,
+      "type": "row",
+      "title": "Every run",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 39
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 32,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "table",
+      "title": "Run log",
+      "description": "One row per invocation, including every one that changed nothing.\n\n`rotated` true means the run saw a rotated trail, so its window is short by however much rotation dropped — worth knowing before trusting that run's support counts. `replayChanged` is how many of the real recorded decisions a candidate would have flipped; a candidate that flips a decision a human reversed is auto-rejected and never reaches you.",
+      "gridPos": {
+        "h": 13,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "victoriametrics-logs-datasource",
+            "uid": "sessionsitter"
+          },
+          "refId": "A",
+          "expr": "kind:pipeline_run machine:~\"$machine\" | sort by (_time desc) | fields _time, machine, stage, trigger, exitReason, producedNothing, failed, fresh, shapes, clusters, considered, proposed, retired, held, refusalCount, refusals, replayN, replayChanged, rotated, durationMs",
+          "queryType": "instant",
+          "maxLines": 1000
+        }
+      ],
+      "transformations": [
+        {
+          "id": "extractFields",
+          "options": {
+            "source": "labels",
+            "replace": true
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "fresh",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "shapes",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "clusters",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "considered",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "proposed",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "retired",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "held",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "refusalCount",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "replayN",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "replayChanged",
+                "destinationType": "number"
+              },
+              {
+                "targetField": "durationMs",
+                "destinationType": "number"
+              }
+            ]
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": true,
+            "filterable": true
+          },
+          "noValue": "not recorded"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "producedNothing"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "produced nothing",
+                        "color": "blue",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "—",
+                        "color": "text",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "true": {
+                        "text": "ERROR",
+                        "color": "red",
+                        "index": 0
+                      },
+                      "false": {
+                        "text": "—",
+                        "color": "text",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "durationMs"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      }
+    },
+    {
+      "id": 33,
+      "datasource": {
+        "type": "victoriametrics-logs-datasource",
+        "uid": "sessionsitter"
+      },
+      "type": "text",
+      "title": "Where the rest of the offline story lives",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "This dashboard shows every run and its counts. Three things it deliberately does not carry, because they are local by nature and would have to leave the machine to get here:\n\n| What | Why it stays local | Read it with |\n|---|---|---|\n| the command each refusal names | it is a real command line from real work | `session-sitter learn --status` |\n| the error message of a failed run | it routinely carries a filesystem path | `session-sitter learn --status` |\n| the proposed clause itself | it is a file for a human to review in a pull request | the corpus `learned/` directories |\n\n**Nothing here writes, and nothing here accepts a clause.** A proposed clause becomes policy when a person merges it. That is the point of the whole pipeline: a machine may propose, it may not outrank a human."
+      }
+    }
+  ]
+}
