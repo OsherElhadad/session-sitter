@@ -21,6 +21,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { promisify } from 'util';
 import { queryBobDb } from './BobDatabase';
+import { claudeDir } from './hooks/paths';
 import { bobRowToSession } from './sessionRows';
 import { claudeStatusFromTail, type JsonlRecord, type SessionStatus } from './sessionStatus';
 
@@ -160,7 +161,7 @@ export async function liveSessionPids(
 // Only interactive VS Code sessions are included.
 export async function getActiveSessionIds(): Promise<Set<string>> {
   const active = new Set<string>();
-  const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
+  const sessionsDir = path.join(claudeDir(), 'sessions');
   let files: string[];
   try {
     files = (await fs.promises.readdir(sessionsDir)).filter(f => f.endsWith('.json'));
@@ -225,9 +226,14 @@ export interface SessionStorePaths {
  * The default store locations. One definition, so the panel and the CLI never disagree about where
  * a session lives.
  */
-export function defaultStorePaths(homedir: string = os.homedir()): SessionStorePaths {
+export function defaultStorePaths(
+  homedir: string = os.homedir(), env: NodeJS.ProcessEnv = process.env,
+): SessionStorePaths {
   return {
-    projectsDir: path.join(homedir, '.claude', 'projects'),
+    // Claude's own store moves with CLAUDE_CONFIG_DIR. Bob, Codex and VS Code are separate tools
+    // with separate configuration, and CLAUDE_CONFIG_DIR says nothing about where they keep theirs,
+    // so relocating them on the strength of it would be inventing a convention.
+    projectsDir: path.join(claudeDir(env, homedir), 'projects'),
     bobDbPath: path.join(homedir, '.bob', 'db', 'bob.db'),
     codexSessionsDir: path.join(homedir, '.codex', 'sessions'),
     codexIndexPath: path.join(homedir, '.codex', 'session_index.jsonl'),

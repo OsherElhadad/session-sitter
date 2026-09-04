@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { claudeDir } from './hooks/paths';
 
 export interface WindowEntry {
   pid: number;
@@ -119,7 +120,7 @@ export function isAttendedWindow(
 }
 
 export function windowsDir(homedir: string = os.homedir()): string {
-  return path.join(homedir, '.claude', 'session-sitter', 'windows');
+  return path.join(claudeDir(process.env, homedir), 'session-sitter', 'windows');
 }
 
 /**

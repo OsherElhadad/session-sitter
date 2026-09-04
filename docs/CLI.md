@@ -65,6 +65,8 @@ make compile && node out/cli/index.js status
 - [`digest`](#digest)
 - [`policy check`](#policy-check)
 - [`policy explain`](#policy-explain)
+- [`policy compile`](#policy-compile)
+- [`policy ablate`](#policy-ablate)
 - [`export`](#export)
 - [Who invokes what](#who-invokes-what)
 - [Where state is read from](#where-state-is-read-from)
@@ -611,6 +613,67 @@ Every failure degrades to an answer plus a diagnosis. Nothing throws, and nothin
 
 `policy.source` in `--json` always names which source actually answered, and `policy.degraded`
 always says why the artifact did not.
+
+---
+
+## `policy compile`
+
+Read the reviewed corpus, and publish the versioned artifact the runtime loads.
+
+```console
+$ session-sitter policy compile --corpus /path/to/knowledge --dry-run
+8 clauses from 3 file(s)
+  revision   sha256:c26682b7e327dffe74e211c0373db9b0e8498ebacd1c453023924975d8b5a058
+  corpus_ref git:d72a972
+  core       1 clause(s), 306 bytes
+  (dry run — nothing written)
+```
+
+| Flag | |
+|---|---|
+| `--corpus DIR` | the knowledge checkout to compile. Defaults to `KNOWLEDGE_LOCAL_REPO` |
+| `--user U` `--project P` `--team T` | the routing triple; each defaults to its configured value |
+| `--registry FILE` | the slug registry, when routing goes through one |
+| `--data-dir DIR` | where the artifact is published. The front door onto `SESSION_SITTER_DATA_DIR`, not a second mechanism |
+| `--dry-run` | compile and report; write nothing |
+
+**Why it matters from a terminal.** The artifact is what puts a **revision** on every decision
+record, so `policy explain --rev` can resolve a citation months later against the policy that
+actually fired. Without one, records carry `rev: null` and there is nothing to resolve. It also keeps
+the prompt cache stable: a knowledge file mutating under the runtime invalidates it.
+
+**There is no middle outcome.** A corpus with a single error writes *nothing* and exits non-zero,
+naming what is wrong, and the runtime keeps serving the last good revision. That asymmetry against
+the loader — which skips a broken file so the rest of the tier survives — is deliberate: dropping a
+tier removes reds nobody broke, while publishing a broken proposal weakens production.
+
+Exit codes: 0 published (or dry-run clean) · 1 refused, nothing written · 2 bad arguments.
+
+---
+
+## `policy ablate`
+
+Ask the question nobody can answer in production: **which of these clauses still matters?**
+
+It removes each accepted clause from a clone of the corpus, re-decides the recorded window with the
+same evaluator the hook uses, and reports what moves. Zero changes over a meaningful window is a
+retirement candidate *with evidence* — which is what makes deletion falsifiable, and why a rule
+corpus does not have to only grow. It writes nothing.
+
+```bash
+session-sitter policy ablate --decisions 500
+```
+
+| Flag | |
+|---|---|
+| `--data-dir DIR` | which state dir to read |
+| `--decisions N` | how many recorded decisions to re-decide |
+| `--days N` | bound the window by age instead |
+
+It needs a published artifact — `policy compile` first — and refuses a window below its minimum,
+which refuses the *run* rather than the corpus: a confident zero over a short window launders "I have
+no evidence" as "I have evidence of nothing". Reds and oranges are listed with their evidence class
+and never proposed for retirement, for the same reason.
 
 ---
 
