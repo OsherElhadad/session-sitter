@@ -273,7 +273,7 @@ describe('§12.22 — the zero is always explained', () => {
   });
 
   it('no output implies a non-`ok` reason, and output implies `ok`', () => {
-    const base = { candidates: { proposed: 0, overwritten: 0, retired: 0, considered: 0 },
+    const base = { candidates: { proposed: 0, overwritten: 0, retired: 0, merged: 0, considered: 0 },
       suppressed: { failedReplay: 0, statusGuard: 0, alreadyInClaudeMd: 0 } } as unknown as RunLine;
     expect(exitReasonFor(base, 0, 0)).not.toBe('ok');
     const withOutput = { ...base,
@@ -281,6 +281,11 @@ describe('§12.22 — the zero is always explained', () => {
     expect(exitReasonFor(withOutput, 1, 1)).toBe('ok');
     const capped = { ...withOutput } as RunLine;
     expect(exitReasonFor(capped, 5, 9)).toBe('caps-hit');
+    // A merge finding is output: reporting a run that produced one as `no-shape-cleared-floor` would
+    // be the silence-reads-as-success bug pointing the other way.
+    const merged = { ...base,
+      candidates: { ...base.candidates, merged: 1, considered: 0 } } as RunLine;
+    expect(exitReasonFor(merged, 0, 0)).toBe('ok');
   });
 
   it('reports the window buckets apart from each other (§3.3)', () => {
@@ -500,6 +505,40 @@ describe('the surfaces a human reads', () => {
   it('opens with the arithmetic', () => {
     const { line } = run(rig());
     expect(headlineFor(line)).toMatch(/^clauses: \+1 −0 merge 0 = net 1/);
+  });
+
+  it('reports a merge finding, writes no file for it, and states the arithmetic', () => {
+    // A corpus carrying the same rule twice: one clause's matcher is a token prefix of the other's.
+    const duplicated = parsePractices(
+      '### Intention: pnpm test is fine\n\n| Field | Value |\n|---|---|\n'
+      + '| id | a-pnpm |\n| level | green |\n\nMatch: `pnpm test`\n\nInvented fixture.\n\n'
+      + '### Intention: pnpm test --filter is fine\n\n| Field | Value |\n|---|---|\n'
+      + '| id | b-pnpm-filter |\n| level | green |\n\nMatch: `pnpm test --filter`\n\n'
+      + 'Invented fixture.\n',
+      'user', 'bottom-line.md')
+      // `parsePractices` reads a human's file, and a human clause is never dropped. Both are marked
+      // learned here, which is the state the corpus is in once two mined clauses have been accepted.
+      .map(c => ({ ...c, origin: 'learned' as const }));
+
+    const r = rig();
+    const { line, written } = run(r, { corpus: duplicated });
+    expect(line.proposals.merges.map(m => [m.keep, m.drop, m.proof, m.proposed]))
+      .toEqual([['a-pnpm', 'b-pnpm-filter', 'substring', true]]);
+    expect(line.candidates.merged).toBe(1);
+    expect(headlineFor(line)).toMatch(/merge 1 = net 0/);
+    // The consolidation writes nothing: only the mined clause this window produced is on disk, and
+    // no file anywhere carries a `supersedes`.
+    for (const file of clauseFiles(r)) {
+      expect(fs.readFileSync(path.join(r.corpus, file), 'utf8')).not.toContain('supersedes');
+    }
+    expect(written.filter(f => f.includes('a-pnpm') || f.includes('b-pnpm'))).toEqual([]);
+  });
+
+  it('`--no-retire` suppresses the static merge pass too, because a merge is a retirement', () => {
+    const r = rig();
+    const { line } = run(r, { retire: false });
+    expect(line.proposals.merges).toEqual([]);
+    expect(line.candidates.merged).toBe(0);
   });
 
   it('lists the last runs newest-first', () => {

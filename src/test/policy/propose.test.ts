@@ -27,25 +27,32 @@ import {
   GREEN_PERSISTENCE_NOTE,
   RED_NOT_PROPOSED,
   SHADOWED_NOTE,
+  ablate,
   classify,
   renderedCount,
 } from '../../policy/ablate';
 import type { AblationReport } from '../../policy/ablate';
 import { CLAUSE_STATUSES, parseLearnedClause } from '../../supervisor/learnedClauses';
+import { compilePolicy } from '../../policy/compile';
+import type { Clause } from '../../policy/practices';
 import { compileMatcher, parsePractices } from '../../policy/practices';
 import { clusterWindow, supportOf, tierFor } from '../../policy/mine';
 import {
   Candidate,
+  MERGE_NON_WIDENING,
   candidateId,
   commandMatcher,
   commonLiteral,
   escapesCwd,
+  findSubsumptions,
   gate,
   neverWidenAxis,
   planRetirements,
   renderClause,
   slugOf,
   statusOf,
+  subsumesClause,
+  subsumesMatcher,
   writeClause,
 } from '../../policy/propose';
 import { haystackFor } from '../../hooks/session';
@@ -550,5 +557,224 @@ describe('the ceiling exemption depends on the selector, and that is pinned (§1
     // eviction pressure against reds reappears with nothing else in the system complaining.
     expect(renderedCount(compiled as never, 'learned-green')).toBe(0);
     expect(CEILING_PER_TIER).toBe(25);
+  });
+});
+
+// --------------------------------------------------------------------------- §8.3 merge
+
+/**
+ * Merge — the containment that is provable, and the intersection that is not (§8.3).
+ *
+ * Every clause here is built by `parsePractices` or by wrapping `commandMatcher`'s real output in
+ * `compileMatcher`, never by hand-writing a `ClauseMatcher`: the whole claim under test is about the
+ * shapes the *pipeline itself emits*, and a hand-written literal would let the emitter and the reader
+ * of that emitter drift apart without any test noticing.
+ */
+describe('§8.3 merge — provable containment only', () => {
+  const clause = (over: Partial<Clause> & { clauseId: string; match: string[] }): Clause => ({
+    clauseId: over.clauseId,
+    citation: `practices §${over.clauseId}`,
+    kind: 'intention',
+    level: over.level ?? 'green',
+    title: over.clauseId,
+    tier: over.tier ?? 'user',
+    text: 'invented fixture',
+    tags: [],
+    patterns: over.match.map(m => compileMatcher(m)!),
+    sourceFile: null,
+    origin: over.origin ?? 'learned',
+  });
+
+  /**
+   * One `learned/<id>.md` through the real parser, so the compile assertion below is made against a
+   * clause the loader actually produced rather than a hand-built object shaped like one.
+   */
+  const learnedFile = (id: string, match: string, supersedes: readonly string[]) => {
+    const text = [
+      '---',
+      `id: ${id}`,
+      'status: accepted',
+      'level: green',
+      'evidence: EXTRACTED',
+      'support: 12',
+      'weight: medium',
+      'contradictions: 0',
+      'learned_at: 2026-08-30',
+      'adopted_at: 2026-09-01',
+      ...(supersedes.length === 0 ? [] : [`supersedes: [${supersedes.join(', ')}]`]),
+      'learned_from:',
+      '  decisions: [d-8f21e0, d-8f2244]',
+      '---',
+      '',
+      `### Intention: ${id}`,
+      '',
+      `Match: \`${match}\``,
+      '',
+      'Observed repeatedly and never contradicted by a written rule, so the classifier was answering '
+        + 'a question a clause can answer for free. Invented fixture, no real path or project.',
+    ].join('\n');
+    const rel = `data/knowledge/users/devon/learned/${id}.md`;
+    const parsed = parseLearnedClause(text, 'user', rel);
+    if (!parsed.clause) {
+      throw new Error(`fixture does not parse: ${JSON.stringify(parsed.findings)}`);
+    }
+    return parsed.clause;
+  };
+
+  /** The anchored form the miner actually emits, for a command literal. */
+  const mined = (id: string, literal: string, over: Partial<Clause> = {}): Clause =>
+    clause({ clauseId: id, match: [commandMatcher(literal)], ...over });
+
+  it('proves a command-prefix containment on the shape the miner emits', () => {
+    const found = findSubsumptions([mined('a-npm-test', 'npm test'),
+      mined('b-npm-test-watch', 'npm test --watch')]);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      keep: 'a-npm-test', drop: 'b-npm-test-watch', proof: 'command-prefix', proposed: true,
+    });
+    expect(found[0].note).toContain(MERGE_NON_WIDENING);
+  });
+
+  it('refuses a prefix that does not land on a token boundary', () => {
+    // `np` and `npm test` overlap textually and neither subsumes the other: `npm` fails `np`'s own
+    // word-boundary lookahead, so the shorter matcher does not match the command the longer one does.
+    expect(findSubsumptions([mined('a-np', 'np'), mined('b-npm-test', 'npm test')])).toEqual([]);
+  });
+
+  it('a human substring clause subsumes a mined clause on the same command', () => {
+    const human = parsePractices([
+      '### Intention: pnpm test is fine',
+      '',
+      '| Field | Value |',
+      '| --- | --- |',
+      '| id | user-test-001 |',
+      '| level | green |',
+      '',
+      'Match: `pnpm test`',
+      '',
+      'Invented fixture.',
+    ].join('\n'), 'user')[0];
+    const found = findSubsumptions([human, mined('z-pnpm-test-filter', 'pnpm test --filter core')]);
+    expect(found.map(f => [f.keep, f.drop, f.proof]))
+      .toEqual([['user-test-001', 'z-pnpm-test-filter', 'substring']]);
+  });
+
+  it('never drops a human clause, whichever way containment runs', () => {
+    const human = clause({ clauseId: 'h-narrow', match: ['pnpm test --filter core'],
+      origin: 'human' });
+    const learned = clause({ clauseId: 'l-broad', match: ['pnpm test'] });
+    // `l-broad` subsumes `h-narrow`, and only the learned clause is eligible to be dropped.
+    expect(findSubsumptions([human, learned]).map(f => f.drop)).toEqual([]);
+  });
+
+  it('says nothing about a regex it did not emit', () => {
+    const found = findSubsumptions([
+      clause({ clauseId: 'a-re', match: ['/npm\\s+(test|run)/'] }),
+      mined('b-npm-test', 'npm test'),
+    ]);
+    expect(found).toEqual([]);
+    expect(subsumesMatcher(compileMatcher('/npm\\s+(test|run)/')!,
+      compileMatcher(commandMatcher('npm test'))!)).toBeNull();
+  });
+
+  it('never proposes retiring a prose clause on the strength of it having no matchers', () => {
+    const prose = clause({ clauseId: 'p-prose', match: [] });
+    expect(findSubsumptions([mined('a-npm-test', 'npm test'), prose])).toEqual([]);
+    expect(subsumesClause(mined('a-npm-test', 'npm test'), prose)).toBeNull();
+  });
+
+  // ---- the non-widening proof, asserted by the real evaluator rather than argued
+
+  it('a merge cannot widen: the corpus decides the same calls with the dropped clause gone', () => {
+    const corpus = [mined('a-npm-test', 'npm test'), mined('b-npm-test-watch', 'npm test --watch')];
+    const found = findSubsumptions(corpus);
+    expect(found).toHaveLength(1);
+    // Fail-closed denies, because that is the traffic a green is learned from *and* the only traffic
+    // a green's ablation can move: `RECORDED` injections replay a model-allowed call's own recorded
+    // allow, so removing a green over an all-allow window reports zero whatever the clause does. That
+    // trap is why the liveness assertion below exists — the first draft of this test passed against a
+    // window in which nothing could ever change.
+    const denied = { light: null, decision: 'deny' as const, clause: null, actor: 'timeout' as const };
+    const records = [
+      bash('npm test', { sessionId: 's-w1', ...denied }),
+      bash('npm test --watch', { sessionId: 's-w2', ...denied }),
+      bash('npm test --filter core', { sessionId: 's-w3', ...denied }),
+      bash('npm run build', { sessionId: 's-w4', ...denied }),
+    ];
+    // Ablation is the runtime's own evaluator pointed backwards. Zero changes over a window that
+    // exercises both clauses *and* a command only the kept one covers is set equality, not an
+    // inequality: no allow is added and none is removed.
+    const report = ablate(found[0].drop, corpus, records);
+    expect(report.changed).toBe(0);
+    // And the window is live rather than empty: removing the *kept* clause does move decisions, so
+    // the zero above is a measurement rather than an artefact of nothing being replayed.
+    expect(ablate(found[0].keep, corpus, records).changed).toBeGreaterThan(0);
+  });
+
+  it('a broad clause and its narrower exception at a different level are never merged', () => {
+    // The case merging must never touch: the yellow exists precisely to withhold what the green
+    // grants, and a merge here deletes the exception while looking like tidying.
+    const green = mined('a-pnpm', 'pnpm test');
+    const yellow = mined('b-pnpm-e2e', 'pnpm test --e2e', { level: 'yellow' });
+    expect(findSubsumptions([green, yellow])).toEqual([]);
+    // The containment itself is real — it is the level check that refuses, not a failed proof.
+    expect(subsumesClause(green, yellow)).toBe('command-prefix');
+  });
+
+  it('never merges across tiers, because a missing tier is skipped rather than inherited', () => {
+    const team = mined('a-team', 'pnpm test', { tier: 'team' });
+    const user = mined('b-user', 'pnpm test --filter core', { tier: 'user' });
+    expect(findSubsumptions([team, user])).toEqual([]);
+  });
+
+  it('a red containment is listed, never proposed, and carries RED_NOT_PROPOSED', () => {
+    const found = findSubsumptions([
+      mined('a-force', 'git push --force', { level: 'red' }),
+      mined('b-force-origin', 'git push --force origin', { level: 'red' }),
+    ]);
+    expect(found).toHaveLength(1);
+    expect(found[0].proposed).toBe(false);
+    expect(found[0].note).toContain(RED_NOT_PROPOSED);
+  });
+
+  // ---- the cycle #60 refuses to compile
+
+  it('two clauses saying the same thing yield one finding, not a two-cycle', () => {
+    const found = findSubsumptions([mined('b-second', 'pnpm test'), mined('a-first', 'pnpm test')]);
+    expect(found.map(f => [f.keep, f.drop])).toEqual([['a-first', 'b-second']]);
+  });
+
+  it('the findings can never form a supersession cycle, and the real compiler agrees', () => {
+    // A chain and an equal pair together: the shapes that would produce a ring if the direction or
+    // the tie-break were wrong.
+    const corpus = [
+      mined('a-pnpm', 'pnpm test'),
+      mined('b-pnpm-filter', 'pnpm test --filter core'),
+      mined('c-pnpm-filter-cli', 'pnpm test --filter cli'),
+      mined('d-pnpm-dup', 'pnpm test'),
+    ];
+    const found = findSubsumptions(corpus);
+    expect(found.length).toBeGreaterThan(0);
+    for (const f of found) { expect(f.keep).not.toBe(f.drop); }
+    // No clause is dropped twice, and no pair points both ways.
+    expect(new Set(found.map(f => f.drop)).size).toBe(found.length);
+    const edges = new Set(found.map(f => `${f.keep}->${f.drop}`));
+    for (const f of found) { expect(edges.has(`${f.drop}->${f.keep}`)).toBe(false); }
+
+    // And handed to the real compiler as the `supersedes` edges §8.3 would have written: #60 refuses
+    // a cycle among accepted clauses, so a two-cycle in the findings fails here rather than in a
+    // reviewer's PR. Nothing in this lane writes a `supersedes` — this is the stronger claim, that
+    // even the shape it declined to emit would compile.
+    const supersedesOf = (id: string): string[] =>
+      found.filter(f => f.keep === id).map(f => f.drop);
+    const result = compilePolicy({
+      routing: { user: 'devon', project: '', team: '' },
+      human: [],
+      learned: corpus.map(c => learnedFile(c.clauseId, `/${c.patterns[0].raw}/`, supersedesOf(c.clauseId))),
+      today: '2026-09-04',
+      builtAt: '2026-09-04T00:00:00.000Z',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.policy).not.toBeNull();
   });
 });

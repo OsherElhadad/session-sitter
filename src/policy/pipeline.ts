@@ -41,8 +41,8 @@ import {
   supportOf, tierFor, writeShapes,
 } from './mine';
 import {
-  Candidate, EMISSION_RULE, MAX_ADDITIONS, Refusal, RefusalReason, RetirementPlan,
-  gate, planRetirements, renderClause, writeClause,
+  Candidate, EMISSION_RULE, MAX_ADDITIONS, MergeFinding, Refusal, RefusalReason, RetirementPlan,
+  findSubsumptions, gate, planRetirements, renderClause, writeClause,
 } from './propose';
 import { CEILING_PER_TIER } from './ablate';
 import {
@@ -112,7 +112,7 @@ export interface RunLine {
     clauses: {
       id: string; tier: string; scope: string; level: string; signal: string; support: number;
     }[];
-    merges: never[];
+    merges: MergeFinding[];
     retirements: RetirementPlan['retirements'];
     redundancies: RetirementPlan['redundancies'];
     listings: RetirementPlan['listings'];
@@ -325,6 +325,12 @@ export interface ProposeOptions {
   now?: Date;
   /** Ablation reports, when retirement is being proposed this run. */
   ablations?: readonly AblationReport[];
+  /**
+   * False when `--no-retire` asked for no retirement at all. It gates the *static* subsumption pass
+   * as well as ablation, because a subsumption finding is a retirement proposal — cheap to compute
+   * and still a retirement, so the flag would otherwise mean two different things.
+   */
+  retire?: boolean;
   /** `CLAUDE.md` + `.claude/rules/**`, concatenated. Absent means the dedupe cannot run. */
   instructionText?: string;
   /** Skip the writes. `learn --dry-run`. */
@@ -432,6 +438,15 @@ export function propose(opts: ProposeOptions): ProposeResult {
       });
     }
 
+    // §8.3 — static, over the corpus rather than the window, so it holds on a corpus that has never
+    // been exercised and is not weakened by the trail rotating. It writes no file and no
+    // `supersedes`: see the merge section of `propose.ts` for why the consolidation is expressed as a
+    // retirement of the subsumed clause rather than as a new clause declaring what it replaces.
+    if (opts.retire !== false) {
+      line.proposals.merges = findSubsumptions(opts.corpus);
+      line.candidates.merged = line.proposals.merges.filter(m => m.proposed).length;
+    }
+
     if (opts.ablations && opts.ablations.length > 0) {
       const plan = planRetirements(opts.ablations, line.window.rotated);
       line.proposals.retirements = plan.retirements;
@@ -474,8 +489,11 @@ function finish(
 export function headlineFor(line: RunLine): string {
   const added = line.candidates.proposed + line.candidates.overwritten;
   const retired = line.candidates.retired;
-  return `clauses: +${added} −${retired} merge ${line.candidates.merged} `
-    + `= net ${added - retired}  (${line.proposals.clauses.length} proposal(s), `
+  const merged = line.candidates.merged;
+  // Merge is the only case where the pipeline proposes a net reduction, so it is the only one whose
+  // arithmetic has to be stated: each finding retires one subsumed clause and adds nothing.
+  return `clauses: +${added} −${retired} merge ${merged} `
+    + `= net ${added - retired - merged}  (${line.proposals.clauses.length} proposal(s), `
     + `${line.clusters.belowFloor} shape(s) below the floor)`;
 }
 
@@ -487,10 +505,13 @@ export function headlineFor(line: RunLine): string {
  * reports `proposed: 0, overwritten: 1` while calling the reason `no-shape-cleared-floor` — which is
  * false, since a shape plainly did clear it. Resolved in the honest direction: an overwrite and a
  * retirement are both output, so the invariant asserted here and in the tests is that
- * **`proposed + overwritten + retired === 0` implies a non-`ok` reason.**
+ * **`proposed + overwritten + retired + merged === 0` implies a non-`ok` reason.** A run whose only
+ * output is a merge finding has something a reviewer can act on, and reporting that as
+ * `no-shape-cleared-floor` would be the same silence-reads-as-success bug in the other direction.
  */
 export function exitReasonFor(line: RunLine, capped: number, admitted: number): ExitReason {
-  const output = line.candidates.proposed + line.candidates.overwritten + line.candidates.retired;
+  const output = line.candidates.proposed + line.candidates.overwritten + line.candidates.retired
+    + line.candidates.merged;
   if (output > 0) { return admitted > capped ? 'caps-hit' : 'ok'; }
   if (line.candidates.considered === 0) { return 'no-shape-cleared-floor'; }
   if (line.suppressed.failedReplay > 0 && admitted === 0) { return 'all-candidates-failed-replay'; }

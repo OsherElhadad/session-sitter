@@ -193,6 +193,7 @@ async function run(argv, io) {
         rev: inputs.rev,
         trigger: 'cli',
         ablations,
+        retire: !(0, args_1.flagBool)(args, '--no-retire'),
         instructionText: instructionText(process.cwd()),
         dryRun: (0, args_1.flagBool)(args, '--dry-run'),
     });
@@ -234,6 +235,11 @@ function summarise(line, written, dryRun) {
     }
     for (const r of line.proposals.retirements) {
         out.push(`− ${r.target} (${r.evidence_class}) — proposed for retirement, no file written`);
+    }
+    for (const m of line.proposals.merges) {
+        out.push(`${m.proposed ? '=' : '?'} ${m.drop} — subsumed by ${m.keep} (${m.proof}), `
+            + `${m.proposed ? 'proposed for retirement, no file written'
+                : 'listed only: a safety clause is never disarmed by the pipeline'}`);
     }
     for (const r of line.proposals.redundancies) {
         out.push(`? ${r.target} — redundant with ${r.shadowed_by ?? 'another rung'}: narrow it or `

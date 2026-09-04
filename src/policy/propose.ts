@@ -48,7 +48,7 @@
  * command}` and preserves it — so `^Bash \{"command":"` is not guaranteed and `"command"\s*:\s*"` is.
  *
  * Spec: `11-mine-v2.md` §4.3 (the gates), §4.5 (non-widening), §7.3 (ids and suppression), §8.2
- * (retirement writes no file).
+ * (retirement writes no file), §8.3 (merge — see the merge section below for what of it survived).
  */
 
 import * as fs from 'fs';
@@ -61,10 +61,12 @@ import {
   parseFrontmatter,
 } from '../supervisor/learnedClauses';
 import { Tier } from '../supervisor/knowledge';
-import { AblationReport, GREEN_PERSISTENCE_NOTE, RED_NOT_PROPOSED, SHADOWED_NOTE } from './ablate';
+import {
+  AblationReport, GREEN_PERSISTENCE_NOTE, RED_NOT_PROPOSED, SHADOWED_NOTE, isSafetyLevel,
+} from './ablate';
 import { Cluster, Lane, SHELL_TOOLS, Support, evidenceIds } from './mine';
 import { prefixOf } from './generalise';
-import { escapeForMatcher } from './practices';
+import { Clause, ClauseMatcher, escapeForMatcher } from './practices';
 import { ReplayCandidate } from './replay';
 
 // --------------------------------------------------------------------------- the emission rule
@@ -700,4 +702,219 @@ export function planRetirements(
   }
   plan.retirements = plan.retirements.slice(0, MAX_RETIREMENTS);
   return plan;
+}
+
+// --------------------------------------------------------------------------- merge (§8.3)
+
+/**
+ * The one merge the evidence can justify, and the two it cannot.
+ *
+ * Merging asks *"are these two clauses the same rule written twice?"* — a question ablation cannot
+ * answer, because both halves of a duplicated pair are individually in-service. `11-mine-v2.md` §8.3
+ * offers three detections, and only the first survives contact with what is actually provable here:
+ *
+ *  1. **Containment, same tier and same level.** `A`'s matched set is a proven superset of `B`'s, so
+ *     the pair decides exactly what `A` alone decides and `B` is dead text. This is a *static* fact
+ *     about the pattern strings — no window, no replay, no traffic — so it holds on a corpus that has
+ *     never been exercised, and it is not weakened by the trail rotating at 4 MiB.
+ *  2. **Patterns that intersect without containment** — §8.3 proposes these when "both ablate to the
+ *     same `changed` set". **Refused, and it emits nothing at all, not even a report.** Two reasons,
+ *     either sufficient. (a) The evidence is a bounded claim wearing an unbounded one's clothes:
+ *     "these two never disagreed in this window" is not "these are the same rule", and the window is
+ *     one rotating generation. (b) The intersection case is *not detectable* anyway. Between two
+ *     anchored command matchers, one literal is a token prefix of the other (which is case 1) or no
+ *     command can start with both and the languages are **disjoint** — there is no third outcome. Between
+ *     two arbitrary substrings, intersection-without-containment needs a regex prover, and a prover
+ *     that is subtly wrong is wrong in the direction that merges an exception away. A list of pairs
+ *     assembled by a heuristic is worse than no list: it teaches a reviewer to skim.
+ *  3. **Different levels with intersecting patterns.** Never a merge — this is where the broad clause
+ *     and its narrow exception live, and merging them destroys the exception. Same level is therefore
+ *     not decoration on the containment rule, it is *what makes containment sufficient*: an
+ *     exception that decides the same way as the rule it excepts is a no-op, so a same-level narrower
+ *     clause carries no information the broader one does not already carry.
+ *
+ * ## Why the output is a retirement and not a new clause carrying `supersedes`
+ *
+ * §8.3 shapes a merge as one new `proposed` clause with `supersedes: [A, B]`, because `assertWritable`
+ * forbids editing or deleting `A` and `B`. That shape is right for a merge whose matcher is *neither*
+ * clause's — and case 2 is the only one of those, and it is refused. For containment the merged
+ * matcher would be `A`'s, byte for byte, so the new file is a **duplicate of a clause already in the
+ * corpus** under a fresh id, and the net reduction (+1 −2 = −1) is exactly the net reduction of
+ * retiring `B` (−1). It buys nothing and costs the two failure modes #60 had to add refusals for: a
+ * `supersedes` naming an id that does not exist, and a supersession cycle. So the finding is emitted
+ * on the channel {@link planRetirements} already uses — a run-line entry, no file, a human acts — and
+ * **this module never writes a `supersedes` at all.** That is not a weaker guarantee than "our
+ * `supersedes` is acyclic"; it is the same guarantee with nothing left to get wrong.
+ *
+ * ## Non-widening, and it is set *equality* rather than an inequality
+ *
+ * The merged policy is the kept clause, unchanged. `L(keep) ⊇ L(drop)` gives
+ * `L(keep) = L(keep) ∪ L(drop)`, so the corpus after the retirement decides **exactly** what it
+ * decided before: a green allows no command it did not allow, and a red denies every command it
+ * denied. Both are asserted behaviourally rather than argued — `ablate(drop, corpus, records)`
+ * reports `changed: 0`, and it is the same evaluator the runtime uses.
+ *
+ * Three narrowings keep that proof true rather than merely plausible:
+ *
+ *  - **Only a `learned` clause is ever dropped.** A machine proposal does not initiate retiring a
+ *    human's practice, in either direction, which is the same rule `compareLadder` encodes.
+ *  - **Same tier.** A missing tier is *skipped* by the loader, so a clause in another tier may not be
+ *    present in the context this one is; equality of decided sets only follows when both are loaded
+ *    together.
+ *  - **Red and orange are listed, never proposed**, at any proof strength. The containment argument
+ *    is sound for a red too, and the house rule stands regardless: the pipeline does not get to
+ *    initiate disarming a safety clause.
+ *
+ * ponytail: an O(n²) scan over a few hundred accepted clauses, and `expires` is not consulted because
+ * nothing consumes it yet. Upgrade path if either changes: index by first pattern token; and once
+ * decay ships, refuse a pair whose `expires` differ, since the kept clause could expire first.
+ */
+export type MergeProof = 'identical' | 'substring' | 'command-prefix';
+
+export interface MergeFinding {
+  /** The clause that already decides everything the other does. Untouched. */
+  keep: string;
+  /** The clause whose matched set is a proven subset. Proposed for retirement — no file is written. */
+  drop: string;
+  tier: string;
+  level: string;
+  /** How containment was proved. Never by a regex prover; see the module section above. */
+  proof: MergeProof;
+  /** False for a red or an orange: listed, never proposed. */
+  proposed: boolean;
+  note: string;
+}
+
+/** Reviewer-fatigue cap, the same kind as {@link MAX_RETIREMENTS}. */
+export const MAX_MERGES = 10;
+
+export const MERGE_NON_WIDENING =
+  'The kept clause\'s matched set is a proven superset of the dropped clause\'s, at the same level '
+  + 'and in the same tier, so the pair decides exactly what the kept clause alone decides: retiring '
+  + 'the dropped clause removes no verdict. Containment is proved on the pattern text — substring '
+  + 'containment, or the token prefix of the anchored command form this pipeline emits — and never '
+  + 'by a regex prover, so a pair whose relationship cannot be proved is reported as nothing at all '
+  + 'rather than as a merge.';
+
+/** The literal parts of {@link commandMatcher}'s output, so this module can read back its own shape. */
+const ANCHOR_HEAD = '"command"\\s*:\\s*"';
+const ANCHOR_TAIL = '(?=[\\s"\\\\])';
+
+/**
+ * What a matcher is, for containment purposes — or null when nothing can be proved about it.
+ *
+ * `anywhere` is a plain substring matcher: it matches anywhere in the haystack. `command` is the
+ * anchored form this module emits, recognised by *parsing back its own literal parts* rather than by
+ * proving anything about a general regex. Any other regex is unprovable and returns null, which is
+ * the whole reason a containment prover is safe to have here at all.
+ *
+ * The comparison string is `escapeForMatcher`'s output in both cases, so one substring test serves
+ * both: it is a per-character homomorphism with whitespace runs collapsed to `\s+`, and `\s+` matches
+ * a prefix or a suffix of a longer run, so an alignment found in the escaped text is an alignment
+ * that holds in every string the pattern matches. Lower-cased because `compileMatcher` forces `i`
+ * onto every matcher it builds, substring and regex alike.
+ */
+function shapeOf(m: ClauseMatcher): { kind: 'anywhere' | 'command'; esc: string } | null {
+  if (!m.isRegex) {
+    const esc = escapeForMatcher(m.raw).toLowerCase();
+    return esc === '' ? null : { kind: 'anywhere', esc };
+  }
+  if (!m.raw.startsWith(ANCHOR_HEAD) || !m.raw.endsWith(ANCHOR_TAIL)) { return null; }
+  const esc = m.raw.slice(ANCHOR_HEAD.length, m.raw.length - ANCHOR_TAIL.length).toLowerCase();
+  return esc === '' ? null : { kind: 'command', esc };
+}
+
+/** `L(a) ⊇ L(b)`, proved, or null. */
+export function subsumesMatcher(a: ClauseMatcher, b: ClauseMatcher): MergeProof | null {
+  const sa = shapeOf(a);
+  const sb = shapeOf(b);
+  if (sa === null || sb === null) { return null; }
+  if (sa.kind === 'anywhere') {
+    // A substring found anywhere in the haystack, so it is enough that it occurs inside the other
+    // pattern's text — including inside an anchored matcher's command literal.
+    return sb.esc.includes(sa.esc) ? (sa.esc === sb.esc ? 'identical' : 'substring') : null;
+  }
+  // An anchored matcher constrains the *start* of the command value, so it cannot subsume a matcher
+  // that is free to match anywhere.
+  if (sb.kind !== 'command') { return null; }
+  if (sa.esc === sb.esc) { return 'identical'; }
+  // A longer command prefix matches strictly fewer commands — but only when the extra text starts on
+  // a token boundary. `np` does not subsume `npm test`: nothing after `np` in `npm` is whitespace,
+  // so the shorter matcher's own lookahead refuses the very command the longer one accepts.
+  const rest = sb.esc.startsWith(sa.esc) ? sb.esc.slice(sa.esc.length) : '';
+  return rest.startsWith('\\s+') ? 'command-prefix' : null;
+}
+
+/**
+ * `L(a) ⊇ L(b)` over whole clauses: every one of `b`'s patterns is subsumed by one of `a`'s.
+ *
+ * A clause with no patterns is refused on both sides. Vacuous truth is the failure mode here — "every
+ * pattern of `b` is covered" is trivially true of a prose clause, and a prose clause matches nothing,
+ * so treating it as subsumed would propose retiring text on the strength of it having no matchers.
+ */
+export function subsumesClause(a: Clause, b: Clause): MergeProof | null {
+  if (a.patterns.length === 0 || b.patterns.length === 0) { return null; }
+  const proofs: MergeProof[] = [];
+  for (const pb of b.patterns) {
+    let best: MergeProof | null = null;
+    for (const pa of a.patterns) {
+      const proof = subsumesMatcher(pa, pb);
+      if (proof !== null) { best = proof; break; }
+    }
+    if (best === null) { return null; }
+    proofs.push(best);
+  }
+  if (proofs.every(p => p === 'identical') && a.patterns.length === b.patterns.length) {
+    return 'identical';
+  }
+  return proofs.includes('command-prefix') ? 'command-prefix' : 'substring';
+}
+
+/**
+ * Every provable same-level, same-tier containment in the corpus, at most one finding per dropped
+ * clause.
+ *
+ * Two properties are what keep the findings from forming the state #60 refuses to compile:
+ *
+ *  - **At most one finding names any clause as `drop`.** Otherwise a reviewer is asked to retire the
+ *    same clause three times, once per clause that covers it.
+ *  - **Mutual containment is broken by id, keeping the lower.** Two clauses whose patterns say the
+ *    same thing each subsume the other, and emitting both directions is a two-cycle: accept both and
+ *    the rule disappears entirely, which is the annihilation `supersessionCycles` exists to refuse.
+ *    Across the *kinds* of proof mutual containment cannot arise — an anchored matcher never subsumes
+ *    a free substring — so this only ever fires on genuinely equal languages.
+ */
+export function findSubsumptions(corpus: readonly Clause[]): MergeFinding[] {
+  const ordered = [...corpus].sort((a, b) => a.clauseId.localeCompare(b.clauseId));
+  const out: MergeFinding[] = [];
+  const dropped = new Set<string>();
+  for (const drop of ordered) {
+    // Only a machine's clause is ever dropped. `Clause.origin` absent means `human` and that default
+    // is the safe one — everything `parsePractices` reads is a human's `bottom-line.md`.
+    if ((drop.origin ?? 'human') !== 'learned') { continue; }
+    if (drop.level === null) { continue; }
+    for (const keep of ordered) {
+      if (keep.clauseId === drop.clauseId || dropped.has(drop.clauseId)) { continue; }
+      // Same level is what makes containment sufficient (see the section above), same tier is what
+      // makes "both are loaded together" true.
+      if (keep.level !== drop.level || keep.tier !== drop.tier) { continue; }
+      const proof = subsumesClause(keep, drop);
+      if (proof === null) { continue; }
+      // Equal languages: keep the lower id, so the pair yields one finding rather than a two-cycle.
+      if (subsumesClause(drop, keep) !== null
+        && keep.clauseId.localeCompare(drop.clauseId) > 0) { continue; }
+      const proposed = !isSafetyLevel(drop.level);
+      out.push({
+        keep: keep.clauseId,
+        drop: drop.clauseId,
+        tier: drop.tier,
+        level: drop.level,
+        proof,
+        proposed,
+        note: proposed ? MERGE_NON_WIDENING : `${MERGE_NON_WIDENING} ${RED_NOT_PROPOSED}`,
+      });
+      dropped.add(drop.clauseId);
+    }
+  }
+  return out.slice(0, MAX_MERGES);
 }
