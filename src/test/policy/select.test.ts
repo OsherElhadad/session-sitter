@@ -156,11 +156,23 @@ describe('expiry prunes the prompt and never disarms a block', () => {
       .toHaveLength(1);
   });
 
-  it('drops an expired yellow or green entirely — that direction is the safe one', () => {
+  it('drops an expired green entirely — that direction is the safe one', () => {
     const s = select([clause({ id: 'stale-green', level: 'green', expires: '2026-01-01', patterns: [] })]);
     expect(s.selected).toEqual([]);
     expect(s.expiredSafety).toEqual([]);
     expect(s.dropped.expired).toBe(1);
+  });
+
+  it('an expired yellow is named, not silently dropped: it is a narrowing too', () => {
+    // The title of the test above used to say "yellow or green" and only ever exercised the green,
+    // which is how this stayed wrong. An accepted yellow carries no fix (F3), so it can only
+    // *withhold* an allow — and letting a date remove it turns "ask a human" back into "allowed"
+    // with no diff and nothing said.
+    const s = select([clause({ id: 'stale-yellow', level: 'yellow', expires: '2026-01-01', patterns: [] })]);
+    expect(s.selected).toEqual([]);
+    expect(s.expiredSafety).toEqual(['stale-yellow']);
+    expect(s.dropped['expired-safety']).toBe(1);
+    expect(s.dropped.expired).toBe(0);
   });
 
   it('reads the date it is given, not a clock, so a replay selects what it selected then', () => {

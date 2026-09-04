@@ -393,9 +393,23 @@ describe('the four auto-rejects (§4.3)', () => {
     expect(rejection?.code).toBe('AR3');
   });
 
-  it('AR3 — the same overturn by a permissive *yellow* is not an AR3', () => {
+  it('AR3 — a rewriting yellow is a widening too, and does not walk past it', () => {
+    // This test used to assert the opposite, and the opposite was a hole. AR3 tested
+    // `level === 'green'`, but `directionOf` reads a yellow WITH a fix as a widening — so the one
+    // candidate class that could turn a recorded deny into an allow *and edit the command on the way
+    // through* was the one class the gate could not see. The test now pins the direction, not the
+    // level, so adding a third widening shape cannot reopen it.
     const cand = candidate({
       id: 'chmod-narrower', level: 'yellow', hasFix: true, match: ['/chmod -R 777/'],
+    });
+    expect(autoReject(cand, diffFor(cand, [deniedByBuiltIn()]))?.code).toBe('AR3');
+  });
+
+  it('AR3 — a yellow with no fix is a narrowing and is not caught by it', () => {
+    // The other side of the same comparison: without a fix the clause cannot allow anything, so
+    // there is no widening to refuse and AR3 must stay out of its way.
+    const cand = candidate({
+      id: 'chmod-ask', level: 'yellow', hasFix: false, match: ['/chmod -R 777/'],
     });
     expect(autoReject(cand, diffFor(cand, [deniedByBuiltIn()]))?.code).not.toBe('AR3');
   });
@@ -547,6 +561,29 @@ describe('T18 — the report renders §4.4 byte-for-byte', () => {
     expect(result.diff.changed).toBe(0);
     expect(result.rejection?.code).toBe('INERT');
     expect(result.report_text).toContain('Verdict: REJECT INERT');
+  });
+
+  it('does not call a narrowing yellow INERT: the verdict vocabulary cannot see an escalation', () => {
+    // Same records, same shape, and the *only* difference from the test above is the candidate's
+    // level. A no-fix yellow's whole effect is "send this to a human", which is `none` — the same
+    // value the fail-closed records it was mined from already carry — so `changed` is zero for it no
+    // matter how good the clause is. Rejecting it here would reject every yellow for the vocabulary's
+    // blind spot rather than for its own behaviour, so it passes with a note instead.
+    const records = [deniedByRed(), ...Array.from({ length: 20 }, () => fellClosed('yarn build'))];
+    const cand = candidate({
+      id: 'force-ask', level: 'yellow', hasFix: false, match: ['/git push --force/'],
+    });
+    const result = replayCandidate(cand, records, CORPUS, { window: 21 });
+    expect(result.diff.matched).toBe(1);
+    expect(result.diff.changed).toBe(0);
+    expect(result.rejection).toBeNull();
+    expect(result.verdict).toBe('pass');
+    expect(result.notes.join()).toContain('cannot tell that apart');
+    // And the exemption is exactly one shape wide: add a fix and it is a widening again, INERT and all.
+    const withFix = candidate({
+      id: 'force-fix', level: 'yellow', hasFix: true, match: ['/git push --force/'],
+    });
+    expect(replayCandidate(withFix, records, CORPUS, { window: 21 }).rejection?.code).toBe('INERT');
   });
 
   it('a candidate that matches nothing at all is not INERT — that is the static stage\'s E7', () => {

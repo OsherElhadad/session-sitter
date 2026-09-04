@@ -17,11 +17,12 @@ vi.mock('../../supervisor/factory', () => ({
 import {
   PermissionDecision,
   PermissionRequestOutput,
+  clauseFromCompiled,
   decideDeterministically,
   failClosedOutput,
   handle,
 } from '../../hooks/permissionRequest';
-import { parsePractices } from '../../policy/practices';
+import { Clause, parsePractices } from '../../policy/practices';
 import { compilePolicy, currentPath, writePolicy } from '../../policy/compile';
 import { parseBottomLine } from '../../supervisor/knowledge';
 import { parseLearnedClause } from '../../supervisor/learnedClauses';
@@ -957,5 +958,105 @@ nobody read is the one that deletes a database.
     publish();
     await handle(req('AskUserQuestion', { question: 'ship it?' }));
     expect(only()).toMatchObject({ decision: 'none', rev: null, policySource: 'none' });
+  });
+});
+
+// --------------------------------------------------------------------------- the yellow rung
+
+/**
+ * Rung 4's other half: a yellow clause takes an allow away.
+ *
+ * Every clause here goes through `parseLearnedClause` → `compilePolicy` → `clauseFromCompiled`, which
+ * is the path `loadPolicyInputs` uses on the hot path. Building a `Clause` literal with
+ * `level: 'yellow'` would skip the loader, and the loader is the half that used to refuse this level
+ * outright — a literal would prove the runtime honours a string nobody could write.
+ */
+describe('decideDeterministically — rung 4, a yellow withholds a green', () => {
+  const RATIONALE =
+    'Deploy scripts read credentials from the environment and reach production, so a human should\n'
+    + 'see one go out even when the surrounding command shape is routine and already permitted.';
+
+  const learned = (id: string, level: string, match: string): string => `---
+id: ${id}
+status: accepted
+level: ${level}
+evidence: EXTRACTED
+support: 12
+contradictions: 0
+learned_at: 2026-08-30
+adopted_at: 2026-09-01
+learned_from:
+  decisions: [d-1, d-2]
+---
+
+### Intention: ${level === 'green' ? 'Running' : 'Asking about'} \`${match}\`
+
+Match: \`/"command"\\s*:\\s*"${match}(?=[\\s"\\\\])/\`
+
+${RATIONALE}
+`;
+
+  /** The real loader → compile → hot-path shape, with nothing hand-built in between. */
+  const asClauses = (files: string[]): Clause[] => {
+    const parsed = files.map((text, i) => {
+      const id = /^id: (.+)$/m.exec(text)![1];
+      const p = parseLearnedClause(text, 'project', `data/knowledge/projects/p/learned/${id}.md`);
+      if (p.clause === null || p.findings.some(f => f.severity === 'error')) {
+        throw new Error(`fixture ${i} does not load: ${p.findings.map(f => f.message).join('; ')}`);
+      }
+      return p.clause;
+    });
+    const { policy, errors } = compilePolicy({
+      routing: { user: 'u', project: 'p', team: 't' }, human: [], learned: parsed,
+      today: '2026-09-02', builtAt: '2026-09-02T00:00:00.000Z',
+    });
+    expect(errors).toEqual([]);
+    return policy!.clauses.map(clauseFromCompiled);
+  };
+
+  const GREEN = learned('npm-run-ok', 'green', 'npm run');
+  const YELLOW = learned('npm-run-deploy-ask', 'yellow', 'npm run deploy');
+
+  it('allows the call when only the green matches', () => {
+    const v = decideDeterministically(req('Bash', { command: 'npm run deploy' }), asClauses([GREEN]));
+    expect(v?.decision.behavior).toBe('allow');
+    expect(v?.clause).toBe('practices §npm-run-ok');
+  });
+
+  it('withholds the allow when a learned yellow also matches', () => {
+    // Same call, same green. The only difference is the yellow, and the decision moves from a
+    // settled allow to no verdict at all — which is the ambiguity the classifier or the fail-closed
+    // deny picks up. It is a narrowing: nothing is granted, so nothing can be granted wrongly.
+    const v = decideDeterministically(
+      req('Bash', { command: 'npm run deploy' }), asClauses([GREEN, YELLOW]));
+    expect(v).toBeNull();
+  });
+
+  it('leaves a call the yellow does not match alone', () => {
+    const v = decideDeterministically(
+      req('Bash', { command: 'npm run build' }), asClauses([GREEN, YELLOW]));
+    expect(v?.decision.behavior).toBe('allow');
+  });
+
+  it('a learned yellow cannot withhold a HUMAN green', () => {
+    // The direction that would let one bad extraction stop a team's work overnight.
+    const human = parsePractices('### Intention: Deploys are approved\n\n| Field | Value |\n'
+      + '|---|---|\n| id | deploy-ok |\n| level | green |\n\nMatch: npm run deploy\n', 'team');
+    const v = decideDeterministically(
+      req('Bash', { command: 'npm run deploy' }), [...human, ...asClauses([YELLOW])]);
+    expect(v?.decision.behavior).toBe('allow');
+    expect(v?.clause).toBe('practices §deploy-ok');
+  });
+
+  it('a withheld green still lets rung 5 have its say', () => {
+    // Withholding must not swallow the built-in destructive table: the yellow removes an approval,
+    // it does not remove a denial.
+    const green = learned('rm-build-ok', 'green', 'rm -rf ./build');
+    const yellow = learned('rm-ask', 'yellow', 'rm -rf');
+    const v = decideDeterministically(
+      req('Bash', { command: 'rm -rf ./build' }), asClauses([green, yellow]));
+    expect(v?.decision.behavior).toBe('deny');
+    expect(v?.actor).toBe('deterministic');
+    expect(v?.decision.message).toContain('built-in');
   });
 });

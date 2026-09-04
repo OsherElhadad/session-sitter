@@ -37,7 +37,7 @@
  * worse than no output: it launders "I have no evidence" as "I have evidence of nothing".
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.CEILING_PER_TIER = exports.RED_RETIREMENT_CAVEAT = exports.RED_NOT_PROPOSED = exports.SHADOWED_NOTE = exports.GREEN_PERSISTENCE_NOTE = void 0;
+exports.CEILING_PER_TIER = exports.YELLOW_ABLATION_BLIND = exports.RED_RETIREMENT_CAVEAT = exports.RED_NOT_PROPOSED = exports.SHADOWED_NOTE = exports.GREEN_PERSISTENCE_NOTE = void 0;
 exports.isSafetyLevel = isSafetyLevel;
 exports.ablationWindow = ablationWindow;
 exports.relaxations = relaxations;
@@ -356,6 +356,19 @@ function classify(level, changed, lifetimeFires, misses, matches = 0) {
     return 'retire';
 }
 /**
+ * What a reviewer is told before retiring a yellow on a zero.
+ *
+ * The zero is real and the conclusion does not follow from it. An accepted yellow carries no fix, so
+ * its only effect is to withhold an allow and send the call to a human — and ablation measures
+ * `allow | deny | none`, in which "sent to a human" is `none`, the same value a call nothing decided
+ * already had. A yellow with nothing to withhold in this window therefore ablates to exactly zero
+ * whether it is dead weight or whether the green it was written to hold back simply has not been
+ * proposed yet. Retiring it may well be right; the number is not what makes it right.
+ */
+exports.YELLOW_ABLATION_BLIND = 'This clause\'s zero is not evidence on its own: a yellow withholds an allow and sends the call '
+    + 'to a human, and ablation\'s three verdicts cannot tell that apart from the `none` an undecided '
+    + 'call already records. Retire it on its rationale, not on the count.';
+/**
  * The note a reviewer reads. Composed rather than picked, because a shadowed red needs both halves:
  * what to do about the redundancy, *and* that the gate is not proposing anything.
  */
@@ -366,6 +379,9 @@ function noteFor(level, retirement, evidenceClass) {
     }
     if (isSafetyLevel(level)) {
         parts.push(exports.RED_NOT_PROPOSED);
+    }
+    if (retirement && level === 'yellow') {
+        parts.push(exports.YELLOW_ABLATION_BLIND);
     }
     if (retirement && level === 'green') {
         parts.push(exports.GREEN_PERSISTENCE_NOTE);

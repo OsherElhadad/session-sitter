@@ -532,8 +532,19 @@ export interface AutoReject {
  * this gate exists to prevent — a clause with no effect cannot be ablated into evidence later either,
  * because its zero is indistinguishable from dead weight the day it lands.
  */
-export function inertFinding(diff: ReplayDiff): AutoReject | null {
+export function inertFinding(
+  diff: ReplayDiff, candidate: ReplayCandidate | null = null,
+): AutoReject | null {
   if (diff.matched === 0 || diff.changed > 0) { return null; }
+  // A no-fix yellow is the one candidate this metric cannot measure, and the reason is structural
+  // rather than a special case: `ReplayVerdict` is `allow | deny | none`, and a narrowing yellow's
+  // whole effect is to escalate — which is `none`, the same value the fail-closed record it was
+  // mined from already recorded. `replayOne` reproduces a `fallback` record's verdict verbatim, so
+  // the evidence that motivates a gap-derived yellow can never appear in `changed`, for any
+  // candidate at all. Rejecting it here would reject every yellow for the vocabulary's blind spot
+  // instead of for its own behaviour. `replayCandidate` says so in a note, so it is visible rather
+  // than silent, and AR1–AR4 still apply to it unchanged.
+  if (candidate !== null && candidate.level === 'yellow' && !candidate.hasFix) { return null; }
   return {
     code: 'INERT',
     message: `this matches ${diff.matched} real call(s) in the window and changes none of them — a `
@@ -585,7 +596,12 @@ export function autoReject(
     };
   }
 
-  if (candidate.level === 'green') {
+  if (directionOf(candidate.level, candidate.hasFix) === 'widening') {
+    // The test is the *direction*, not the level, and that is a correction rather than a nicety: a
+    // yellow carrying a `fix` is a widening too (`directionOf`), and on `level === 'green'` alone it
+    // walked straight past this gate. A rewrite that turns a recorded deny into an allow-with-edit is
+    // the single worst thing this pipeline could propose, and it was the one AR3 could not see.
+    //
     // §4.3 writes AR3 as "any recorded deny, regardless of `verdict_source`" — which contradicts the
     // same section's rule that a model-sourced verdict can never auto-reject. Two exclusions resolve
     // it, and both are deliberate:
@@ -606,8 +622,9 @@ export function autoReject(
     if (overRed) {
       return {
         code: 'AR3',
-        message: 'a green candidate would turn a recorded deny into an allow. Learned green never '
-          + 'beats anything red, whatever produced the deny',
+        message: `a ${candidate.hasFix && candidate.level === 'yellow'
+          ? 'rewriting yellow' : 'green'} candidate would turn a recorded deny into an allow. A `
+          + 'learned widening never beats anything red, whatever produced the deny',
         evidence: `${overRed.record.tool}: ${excerpt(overRed.record)}`,
       };
     }
@@ -692,6 +709,18 @@ export function renderReport(input: ReportInput): string {
  * is never consulted for matching calls — so revoking the clause reaches nothing. It is the one
  * failure in this design with no undo, which is why the line is a constant and not a judgement.
  */
+/**
+ * What a reviewer is told when a narrowing yellow matched real calls and moved no verdict.
+ *
+ * Not a rejection (see {@link inertFinding}) and not a pass mark either: it says the number the
+ * report leads with is not evidence *for* the clause, so the reviewer has to judge it on its prose.
+ */
+export const NARROWING_YELLOW_UNMEASURED =
+  'This clause matched real calls and changed no verdict. That is not evidence it is inert: a '
+  + 'yellow with no fix withholds an allow and sends the call to a human, and replay\'s three '
+  + 'verdicts (allow/deny/none) cannot tell that apart from the fail-closed `none` already '
+  + 'recorded. Judge it on its rationale and its matcher, not on the changed count.';
+
 export const WIDENING_WARNING =
   'This clause can allow calls. If settings-persistence is enabled, revoking it later may not '
   + 'revoke the permission it grants.';
@@ -734,12 +763,15 @@ export function replayCandidate(
   const calibration = calibrate(records, corpus, opts);
   const diff = replayWindow(records, [...corpus, candidateClause(candidate)], candidate, opts);
   const rejection = calibration.ok
-    ? autoReject(candidate, diff) ?? inertFinding(diff)
+    ? autoReject(candidate, diff) ?? inertFinding(diff, candidate)
     : null;
   const direction = directionOf(candidate.level, candidate.hasFix);
 
   const notes: string[] = [];
   if (direction === 'widening') { notes.push(WIDENING_WARNING); }
+  if (candidate.level === 'yellow' && !candidate.hasFix && diff.matched > 0 && diff.changed === 0) {
+    notes.push(NARROWING_YELLOW_UNMEASURED);
+  }
   if (diff.unreplayable > 0) {
     notes.push(`${diff.unreplayable} record(s) in this window predate the \`call\` field and could `
       + 'not be re-evaluated. They are excluded from every number above rather than counted as '

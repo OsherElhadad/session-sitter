@@ -212,7 +212,7 @@ the learned file: an ordinary edit, in an ordinary PR. `status: accepted` on a l
 human approved this machine clause*, which is a strictly weaker statement, and the ladder treats it
 as such.
 
-### 3. The four-rung ladder — a machine proposal never overrides a human, in either direction
+### 3. The five-rung ladder — a machine proposal never overrides a human, in either direction
 
 The existing hook evaluates written red clauses before written green ones across all tiers, because
 a deterministic matcher has to break the tie somehow and safety is the only defensible way. That

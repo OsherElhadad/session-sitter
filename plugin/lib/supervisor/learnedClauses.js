@@ -83,11 +83,13 @@ exports.readLearnedDir = readLearnedDir;
 exports.assertWritable = assertWritable;
 exports.compareLadder = compareLadder;
 exports.sortByLadder = sortByLadder;
+exports.onRung = onRung;
 exports.decideByLadder = decideByLadder;
 exports.auditVerdicts = auditVerdicts;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const knowledge_1 = require("./knowledge");
+const corrections_1 = require("../policy/corrections");
 /** The canonical vocabulary. Exported so a test can pin it — it has drifted apart once already. */
 exports.CLAUSE_STATUSES = [
     'proposed', 'audit', 'accepted', 'declined', 'superseded', 'retired',
@@ -346,6 +348,72 @@ function rationaleOf(entry) {
  */
 exports.RATIONALE_MIN_CHARS = 80;
 /**
+ * The four rules a `fix` on a learned clause must satisfy (F1–F4).
+ *
+ * A `fix` is the largest grant in the schema: it does not permit a call, it *changes what runs*, and
+ * the agent believes it ran what it asked for. Everything else here is a permission; this is an edit.
+ * So the bar is not "a bit more evidence than a green" — it is a different shape of bar, and three of
+ * the four rules have no analogue on any other level.
+ *
+ *  - **F1 — a `fix` belongs to `level: yellow` and nowhere else.** `directionOf` reads a yellow's fix
+ *    as the thing that flips it from narrowing to widening (`replay.ts:229`), so on any other level
+ *    the field has no direction and no consumer: a `fix` on a red or a green would be carried into
+ *    the artifact and the selector and silently never applied.
+ *
+ *  - **F2 — the rewrite must be one the shipped correction table already performs.** The check is a
+ *    *call into the real correction lane*: `applyCorrection('Bash', { command: from })` must return
+ *    exactly `to`. This is the structural answer to "a machine must not author a rewrite nobody
+ *    reviewed" — the set of rewrites a learned clause may carry is, by construction, exactly the set
+ *    of rewrites in `CORRECTION_RULES`, which is hand-written, hand-reviewed, and covered by
+ *    `corrections.test.ts`. A miner, a tampered file or a hand edit cannot widen that set without
+ *    editing reviewed TypeScript, which is a different review with different owners.
+ *
+ *  - **F3 — a fix-carrying clause may not be `accepted`.** Nothing in the runtime applies a clause
+ *    `fix`: `applyCorrection` reads its own table, and `permissionRequest.ts` never consults
+ *    `clause.fix`. An `accepted` fix-carrying clause would therefore be matched and never applied —
+ *    exactly the silently-unenforced state that keeps `orange` out of the level enum. `audit` is the
+ *    highest status it can reach, which is also the whole review asymmetry: a learned green becomes
+ *    enforceable by a human flipping one word, and a learned rewrite cannot become enforceable at
+ *    all until the rewrite consumer ships with its own review.
+ *
+ *  - **F4 — at `audit`, the evidence must be extracted and uncontradicted.** A trial that puts a
+ *    rewrite in front of live traffic may not rest on an *inferred* derivation, and may not run on a
+ *    shape something has already decided the other way. `contradictions` must be written out: absent
+ *    reads as 0 everywhere else in this file, and the optimistic default is not good enough here.
+ */
+function checkFix(fix, level, status, evidenceRaw, contradictionsRaw, err, at) {
+    if (level !== 'yellow') {
+        err(at('fix_from'), `F1: a \`fix\` is only meaningful on \`level: yellow\` (this clause is `
+            + `\`${level ?? 'prose'}\`). A fix decides a yellow's direction and has no consumer on any `
+            + 'other level, so it would be carried into the artifact and never applied');
+    }
+    const reproduced = (0, corrections_1.applyCorrection)('Bash', { command: fix.from });
+    if (reproduced === null || reproduced.updatedInput.command !== fix.to) {
+        err(at('fix_to'), `F2: this rewrite is not one the correction table performs. `
+            + `\`${fix.from}\` -> \`${reproduced === null ? '(no rule matched)'
+                : String(reproduced.updatedInput.command)}\`, not \`${fix.to}\`. A learned clause may only `
+            + 'carry a rewrite that `src/policy/corrections.ts` already produces, so no machine and no '
+            + 'hand edit can introduce a rewrite that was never reviewed as one');
+    }
+    if (status === 'accepted') {
+        err(at('status'), 'F3: a clause carrying a `fix` may not be `accepted` — nothing in the runtime '
+            + 'applies a clause `fix`, so an accepted one would be matched and never applied. `audit` is '
+            + 'the highest status a rewrite can reach until the rewrite consumer ships');
+    }
+    if (status === 'audit') {
+        if (evidenceRaw !== 'EXTRACTED') {
+            err(at('evidence'), `F4: a rewrite may only be trialled on extracted evidence, not `
+                + `\`${evidenceRaw ?? 'none'}\` — an inferred derivation is not a basis for editing `
+                + 'somebody\'s command line');
+        }
+        if (contradictionsRaw !== '0') {
+            err(at('contradictions'), `F4: a rewrite trial requires \`contradictions: 0\` written out `
+                + `(this says \`${contradictionsRaw ?? 'nothing'}\`). Absent reads as 0 everywhere else in `
+                + 'this schema, and the optimistic default is not good enough for a clause that edits a call');
+        }
+    }
+}
+/**
  * Parse one learned clause file.
  *
  * `sourceFile` is the repo-relative path, and it is authoritative: `origin` comes from it, and the
@@ -419,12 +487,14 @@ function parseLearnedClause(text, tier, sourceFile) {
         if (!CLAUSE_LEVELS.includes(levelRaw)) {
             err(at('level'), `unknown \`level: ${levelRaw}\` (expected red, orange, yellow or green)`);
         }
-        else if (levelRaw !== 'red' && levelRaw !== 'green') {
-            // The ladder (`decideByLadder`) only defines red/green rungs for a learned clause: an
-            // accepted orange/yellow would match but could never be selected, which is the same
-            // silently-unenforced failure as an unrecognised level.
+        else if (levelRaw === 'orange') {
+            // `orange` still has no rung, and the reason is the same one that used to exclude `yellow`:
+            // an accepted clause that matches and can never be selected is silently unenforced, which is
+            // indistinguishable from an unrecognised level. `yellow` now has rung 4 (see
+            // {@link LADDER_RUNGS}); `orange` does not, and inventing one would mean inventing a runtime
+            // meaning for it that no code has.
             err(at('level'), `\`level: ${levelRaw}\` is not enforceable for a learned clause `
-                + '(the ladder only has red/green rungs)');
+                + '(the ladder has red, yellow and green rungs — not orange)');
         }
         else {
             level = levelRaw;
@@ -510,6 +580,9 @@ function parseLearnedClause(text, tier, sourceFile) {
     }
     else if (fixFrom !== null || fixTo !== null) {
         err(at(fixFrom === null ? 'fix_to' : 'fix_from'), '`fix_from` and `fix_to` are both-or-neither: one without the other cannot rewrite anything');
+    }
+    if (fix !== null) {
+        checkFix(fix, level, status, evidenceRaw, scalar('contradictions'), err, at);
     }
     // ---- retirement: three fields set together, and only together (§4.4).
     const retiredAt = date('retired_at');
@@ -790,6 +863,11 @@ const LEVEL_RANK = { red: 0, green: 1, orange: 2, yellow: 3 };
  *
  * Tier is narrower-first (user > project > team), then id, so the order is total: two clauses
  * identical but for their id have a stable, documented winner.
+ *
+ * This is the *reporting* order and the tie-break **within** a rung; {@link LADDER_RUNGS} is the
+ * selection order, and the two differ for `yellow` — `LEVEL_RANK` sorts it last while its rung sits
+ * between red and green. That is harmless because `decideByLadder` iterates rungs outermost, so this
+ * comparator only ever orders clauses that are already on the same rung.
  */
 function compareLadder(a, b) {
     return (ORIGIN_RANK[a.origin] - ORIGIN_RANK[b.origin])
@@ -800,13 +878,52 @@ function compareLadder(a, b) {
 function sortByLadder(clauses) {
     return [...clauses].sort(compareLadder);
 }
-/** Which rung a clause sits on. `human red` → `learned green`, in evaluation order. */
+/**
+ * Which rung a clause sits on, in evaluation order. `human red` → `learned green`.
+ *
+ * `origin` still leads, unchanged and for the unchanged reason: a machine proposal never overrides a
+ * human's explicit practice in either direction (see {@link compareLadder}).
+ *
+ * **Where the yellow rung went, and why.** A yellow is two clauses wearing one level: with a `fix`
+ * it is a *widening* and without one a *narrowing* (`directionOf`, `replay.ts:229`). Putting both on
+ * one rung would place a rewrite and its opposite at the same authority, so they are separated by
+ * the `hasFix` discriminator and only the narrowing one has a rung:
+ *
+ *  - **learned yellow with no fix sits above learned green** (rung 4, before rung 5). Its whole
+ *    effect is to *withhold* an allow a learned green would have granted and send the call to a
+ *    human, so it has to be reached before the clause it withholds or it can never fire. Above a
+ *    learned green and below a learned red is the only position where it is both reachable and
+ *    incapable of licensing anything: it cannot outrank a human clause (origin leads), it cannot
+ *    turn a red into an allow (red is rung 3), and the worst it can do is add friction, which is
+ *    reversible and visible.
+ *
+ *  - **learned yellow *with* a fix has no rung, deliberately.** A rewrite is the largest grant in
+ *    the system — it silently changes what runs — so its rung would have to be the *last* one, after
+ *    every other authority has passed. But no rung is the honest answer today: nothing in the
+ *    runtime applies a clause `fix` (`applyCorrection` reads its own table), so a rung here would be
+ *    a rung `decideByLadder` could select onto and then do nothing with. That is the same
+ *    silently-unenforced failure that keeps `orange` out of the level enum, which is why F3
+ *    (`checkFix`) refuses `status: accepted` for a fix-carrying clause instead. When a rewrite
+ *    consumer ships, its rung goes at the end of this list — `{ origin: 'learned', level: 'yellow',
+ *    hasFix: true }` — and F3 is what must be relaxed, in the same reviewed change.
+ *
+ * A *human* yellow has no rung either. That is pre-existing and out of scope here: the human lane's
+ * yellow is served by the correction lane (`permissionRequest.ts` rung 2) and by the classifier, and
+ * giving it a rung is a change to human-authored policy semantics, not to the machine lane.
+ */
 exports.LADDER_RUNGS = [
     { origin: 'human', level: 'red' },
     { origin: 'human', level: 'green' },
     { origin: 'learned', level: 'red' },
+    { origin: 'learned', level: 'yellow', hasFix: false },
     { origin: 'learned', level: 'green' },
 ];
+/** Whether a clause sits on this rung. The `hasFix` half is what separates the two yellows. */
+function onRung(clause, rung) {
+    return clause.origin === rung.origin
+        && clause.level === rung.level
+        && (rung.hasFix === undefined || (clause.fix != null) === rung.hasFix);
+}
 /**
  * Walk the four rungs and return the first clause that decides, or null.
  *
@@ -823,7 +940,7 @@ function decideByLadder(clauses, matches) {
     const live = sortByLadder(clauses.filter(c => isEnforceable(c.status)));
     for (const rung of exports.LADDER_RUNGS) {
         for (const clause of live) {
-            if (clause.origin === rung.origin && clause.level === rung.level && matches(clause)) {
+            if (onRung(clause, rung) && matches(clause)) {
                 return { clause, level: rung.level };
             }
         }

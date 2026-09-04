@@ -36,7 +36,7 @@ import { CitedClause, cite, clauseIndex, selectForPolicy } from './select';
 import { Clause } from './practices';
 import {
   PolicyInputs, Verdict, clauseFromCompiled, decideDeterministically, loadPolicyInputs,
-  routeAmbiguous,
+  routeAmbiguous, withheldGreen,
 } from '../hooks/permissionRequest';
 import { PluginSettings, loadSettings } from '../hooks/settings';
 import { haystackFor } from '../hooks/session';
@@ -248,6 +248,11 @@ export async function explainCall(
 
   if (verdict === null) {
     const route = routeAmbiguous(settings);
+    // A yellow that withheld a green is the one ambiguity with a clause behind it. Reported with the
+    // same recompute the hook uses, so the two cannot disagree about which rule spoke — an explain
+    // saying "nothing covered this" about a call a clause deliberately escalated is the exact class
+    // of lie the `--rev` branch above refuses for revisions.
+    const withheld = withheldGreen(query.tool, query.input, inputs.clauses);
     // `actor` is the value the hook would *record*, which is why fail-closed and observe both read
     // `timeout` — that is what `handle` writes. The classifier route is the one case it stays null:
     // only running the model settles whether the record says `model` or `timeout`, and an explain
@@ -261,9 +266,17 @@ export async function explainCall(
         : ['deny', 7, 'timeout',
           'nothing said this call is safe, and silence is not approval.'] as const;
     return {
-      would, rung, rungLabel: RUNG_LABELS[rung], actor, light: null, clause: null,
-      citation: null,
-      title: null, message: null, sourceFile: null, fix: null, rewritten: null, note,
+      would, rung, rungLabel: RUNG_LABELS[rung], actor, light: null,
+      clause: withheld?.yellow.citation ?? null,
+      citation: withheld?.yellow.citation ?? null,
+      title: withheld?.yellow.title ?? null,
+      message: withheld?.yellow.text ?? null,
+      sourceFile: withheld?.yellow.sourceFile ?? null,
+      fix: null,
+      rewritten: null,
+      note: withheld === null ? note
+        : `${withheld.yellow.citation} withheld the allow ${withheld.green.citation} would have `
+          + `given, so a human is asked instead. ${note}`,
       policy, selection,
     };
   }

@@ -36,6 +36,8 @@ import { loadSettings } from '../../hooks/settings';
 import { artifactPath, compilePolicy, currentPath, policyDir, writePolicy } from '../../policy/compile';
 import { parseBottomLine } from '../../supervisor/knowledge';
 import { decisionsPath } from '../../hooks/paths';
+import { parseLearnedClause } from '../../supervisor/learnedClauses';
+import { readJsonl, type DecisionRecord } from '../../audit/trail';
 
 const ROUTING = { user: 'dana', project: 'ledger-api', team: 'payments' };
 
@@ -512,5 +514,100 @@ describe('renderExplain', () => {
 
   it('points at the file the clause was written in', () => {
     expect(renderExplain(answer())).toContain('team/bottom-line.md');
+  });
+});
+
+// --------------------------------------------------------------------------- the withheld green
+
+/**
+ * A yellow that withholds a green is the one ambiguity that has a clause behind it.
+ *
+ * `decideOne` returns no verdict when it withholds, because a yellow produces none — and `null`
+ * carries no citation. So without the recompute, both the fail-closed denial and `explain` report
+ * "nothing said this call is safe" about a call a clause deliberately escalated. `explain` exists to
+ * answer "which rule decided"; getting that wrong is worse here than anywhere else in the system.
+ */
+describe('a withheld green is reported, by the hook and by explain alike', () => {
+  const LEARNED = (id: string, level: string, match: string): string => `---
+id: ${id}
+status: accepted
+level: ${level}
+evidence: EXTRACTED
+support: 9
+contradictions: 0
+learned_at: 2026-08-30
+adopted_at: 2026-09-01
+learned_from:
+  decisions: [d-1, d-2]
+---
+
+### Intention: ${level === 'green' ? 'Running' : 'Asking about'} \`${match}\`
+
+Match: \`/"command"\\s*:\\s*"${match}(?=[\\s"\\\\])/\`
+
+Deploy scripts read credentials from the environment and reach production, so a human should see
+one go out even when the surrounding command shape is routine and already permitted.
+`;
+
+  const publishLearned = (files: string[]) => {
+    const learned = files.map(text => {
+      const id = /^id: (.+)$/m.exec(text)![1];
+      const p = parseLearnedClause(text, 'project', `data/knowledge/projects/p/learned/${id}.md`);
+      if (p.clause === null || p.findings.some(f => f.severity === 'error')) {
+        throw new Error(`fixture does not load: ${p.findings.map(f => f.message).join('; ')}`);
+      }
+      return p.clause;
+    });
+    const { policy, errors } = compilePolicy({
+      routing: ROUTING, human: parseBottomLine(PRACTICES, 'team'), learned,
+      today: '2026-09-02', builtAt: '2026-09-02T00:00:00.000Z', corpusRef: 'git:1a2b3c4',
+    });
+    expect(errors).toEqual([]);
+    writePolicy(policy!);
+  };
+
+  const GREEN = LEARNED('npm-run-ok', 'green', 'npm run');
+  const YELLOW = LEARNED('npm-run-deploy-ask', 'yellow', 'npm run deploy');
+  const CALL = { command: 'npm run deploy' };
+
+  it('explain names the yellow instead of claiming nothing covered the call', async () => {
+    publishLearned([GREEN]);
+    const allowed = await ask('Bash', CALL);
+    expect(allowed.would).toBe('allow');
+    expect(allowed.clause).toBe('practices §npm-run-ok');
+
+    // Same call, same green, one clause added.
+    publishLearned([GREEN, YELLOW]);
+    const withheld = await ask('Bash', CALL);
+    expect(withheld.would).toBe('deny');
+    expect(withheld.clause).toBe('practices §npm-run-deploy-ask');
+    expect(withheld.title).toContain('npm run deploy');
+    expect(withheld.note).toContain('withheld the allow practices §npm-run-ok would have given');
+  });
+
+  it('the hook says the same thing, in the message the developer actually sees', async () => {
+    publishLearned([GREEN, YELLOW]);
+    const out = await handle({
+      hook_event_name: 'PermissionRequest', session_id: 's-1', cwd: '/w/api',
+      tool_name: 'Bash', tool_input: CALL,
+    } as never) as PermissionRequestOutput;
+    expect(out.hookSpecificOutput.decision.behavior).toBe('deny');
+    const message = out.hookSpecificOutput.decision.message ?? '';
+    expect(message).toContain('practices §npm-run-deploy-ask');
+    expect(message).toContain('practices §npm-run-ok');
+    expect(message).toContain('Delete or decline that clause');
+    // The recorded note has to name it too, or the trail cannot explain its own deny.
+    const records = readJsonl<DecisionRecord>(decisionsPath());
+    expect(records.at(-1)?.note).toContain('withheld the allow');
+  });
+
+  it('says nothing about a withheld green when none was withheld', async () => {
+    // The negative case, so the assertions above cannot pass by naming a clause unconditionally.
+    publishLearned([GREEN, YELLOW]);
+    const other = await ask('Bash', { command: 'npm run build' });
+    expect(other.would).toBe('allow');
+    const uncovered = await ask('Bash', { command: 'pnpm exec tsc --noEmit' });
+    expect(uncovered.clause).toBeNull();
+    expect(uncovered.note).not.toContain('withheld');
   });
 });

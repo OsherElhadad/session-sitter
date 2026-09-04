@@ -19,6 +19,7 @@ import {
   GREEN_PERSISTENCE_NOTE,
   Incumbent,
   RED_NOT_PROPOSED,
+  YELLOW_ABLATION_BLIND,
   RED_RETIREMENT_CAVEAT,
   ablate,
   ablateAll,
@@ -44,12 +45,13 @@ const entry = (id: string, level: string, match: string, title = id) =>
 // `bucket-drop` matters: `aws s3 rb` is on no built-in destructive pattern and no correction rule, so
 // it is the one red here that nothing else in the ladder would decide. `sql-drop` is deliberately the
 // opposite — rung 5 covers `drop table` too — which is what the shadowing tests below exercise.
-const CORPUS = clauses([
+const ENTRIES = [
   entry('git-force', 'red', '/git\\s+push\\b.*(--force(?!-with-lease)|\\s-f\\b)/'),
   entry('sql-drop', 'red', '/drop\\s+table/i'),
   entry('bucket-drop', 'red', '/aws s3 rb s3:\\/\\/prod-/'),
   entry('learned-fetch', 'green', '/git fetch/'),
-].join('\n---\n\n'));
+];
+const CORPUS = clauses(ENTRIES.join('\n---\n\n'));
 
 let seq = 0;
 const record = (over: Partial<DecisionRecord> = {}): DecisionRecord => {
@@ -185,6 +187,20 @@ describe('ablating one clause', () => {
 
   it('T25: a green retirement candidate carries the settings-persistence note', () => {
     expect(ablate('learned-fetch', CORPUS, noise(200)).note).toBe(GREEN_PERSISTENCE_NOTE);
+  });
+
+  it('a yellow retirement candidate says its zero is not evidence on its own', () => {
+    // The same blind spot replay has, on the other side of the loop: an accepted yellow's whole
+    // effect is "send this to a human", which ablation reads as `none` — the value an undecided call
+    // already had. So a yellow with nothing to withhold in this window ablates to exactly zero
+    // whether it is dead weight or whether the green it holds back has not been proposed yet.
+    // Without this note the pipeline proposes retiring every yellow it ever got accepted.
+    const corpus = clauses(
+      [...ENTRIES, entry('learned-lint-ask', 'yellow', '/pnpm lint/')].join('\n---\n\n'));
+    const report = ablate('learned-lint-ask', corpus, noise(200));
+    expect(report.changed).toBe(0);
+    expect(report.evidence_class).toBe('retire');
+    expect(report.note).toContain(YELLOW_ABLATION_BLIND);
   });
 
   it('T24: an `audit`-only shadow match does not keep a clause alive', () => {

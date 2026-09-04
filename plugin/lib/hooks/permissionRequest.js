@@ -22,7 +22,9 @@
  *     clauses before it is returned, so a rewrite can never smuggle a denied call through.
  *  3. **A written red clause** matches. Deny, citing the clause.
  *  4. **A written green clause** matches. Allow, citing the clause. This is what makes an overnight
- *     run survivable: the standing policy that says what the agent may do without asking.
+ *     run survivable: the standing policy that says what the agent may do without asking — unless a
+ *     yellow clause of at least equal authority also matches, in which case the allow is *withheld*
+ *     and the call carries on down the ladder to a human. See {@link withholdingYellow}.
  *  5. **The engine's deterministic red table** (`preClassify` RED). Deny.
  *  6. **The classifier**, with the practices as context — only when explicitly enabled.
  *  7. **Fail closed.** Deny, saying plainly that the supervisor was unreachable.
@@ -88,6 +90,7 @@ exports.loadClauses = loadClauses;
 exports.clauseFromCompiled = clauseFromCompiled;
 exports.loadPolicyInputs = loadPolicyInputs;
 exports.constituentsOf = constituentsOf;
+exports.withheldGreen = withheldGreen;
 exports.combineVerdicts = combineVerdicts;
 exports.decideDeterministically = decideDeterministically;
 exports.routeAmbiguous = routeAmbiguous;
@@ -174,6 +177,7 @@ function clauseFromCompiled(clause) {
             .map(p => (0, practices_1.compileMatcher)(p.raw))
             .filter((p) => p !== null),
         sourceFile: clause.source_file,
+        origin: clause.origin,
     };
 }
 /**
@@ -187,7 +191,7 @@ function clauseFromCompiled(clause) {
  * artifact so they *can* be matched, but they must not change an outcome.
  *
  * TODO: record their would-be verdicts. `learnedClauses.ts` already has `auditVerdicts()`; wiring it
- * needs `decideOne` replaced by the four-rung `decideByLadder`, which belongs with the governance
+ * needs `decideOne` replaced by the five-rung `decideByLadder`, which belongs with the governance
  * work rather than here. Until then an audit trial records nothing, and `accept --audit` should say so.
  */
 async function loadPolicyInputs(settings) {
@@ -346,8 +350,9 @@ function decideOne(toolName, toolInput, clauses) {
     // 4. A written green clause — the standing policy that makes an overnight run survivable.
     // Deliberately the identity haystack: a green clause must never be satisfied by the bytes a
     // Write happens to contain. See haystackFor.
-    const green = (0, practices_1.findMatchingClause)(clauses, (0, session_1.haystackFor)(toolName, toolInput, 'identity-only'), 'green');
-    if (green) {
+    const identityHay = (0, session_1.haystackFor)(toolName, toolInput, 'identity-only');
+    const green = (0, practices_1.findMatchingClause)(clauses, identityHay, 'green');
+    if (green && withholdingYellow(clauses, identityHay, green) === null) {
         return {
             decision: { behavior: 'allow' },
             light: models_1.TrafficLight.GREEN,
@@ -359,6 +364,13 @@ function decideOne(toolName, toolInput, clauses) {
             allowedBy: green,
         };
     }
+    // A withheld green falls through to rung 5 and then to ambiguity. Nothing is granted and nothing
+    // is denied here: the call goes to the classifier or to the fail-closed deny, which is where a
+    // "somebody should look at this" belongs.
+    //
+    // ponytail: the withholding clause is not named in the decision record, because there is no
+    // "escalated by" field on a Verdict and adding one is plumbing through three modules for a line of
+    // prose. Upgrade path when it matters: carry the clause on the ambiguity instead of returning null.
     // 5. The engine's built-in deterministic red table.
     if ((0, tiers_1.preClassify)(session) === models_1.TrafficLight.RED) {
         return {
@@ -375,6 +387,67 @@ function decideOne(toolName, toolInput, clauses) {
             settled: false,
             allowedBy: null,
         };
+    }
+    return null;
+}
+/**
+ * The yellow clause that withholds this green's allow, or null.
+ *
+ * A yellow is "a human should look at this". It cannot deny — that is red — and it must not allow,
+ * so the only thing it can do to a decision is *take an allow away*, which is why it is checked here
+ * and nowhere else. The call then continues down the ladder to rung 5 and on to the classifier or
+ * the fail-closed deny, so the worst a wrong yellow costs is friction: a prompt that should not have
+ * appeared, visible immediately, reversible by deleting the clause.
+ *
+ * The origin comparison is the same rule the whole ladder rests on, applied here in one line: a
+ * yellow withholds a green only when it is *at least as authoritative*. So a human yellow withholds
+ * a human green and a learned green, and a **learned yellow withholds only a learned green** — it
+ * can never take away a permission a human wrote, which is the direction that would let one bad
+ * extraction stop a team's work overnight.
+ *
+ * Note what is deliberately not checked: whether the yellow carries a `fix`. A fix-carrying clause
+ * cannot be `accepted` (F3, `checkFix`) and only `accepted` clauses reach this function, so the
+ * state does not exist — and writing a branch for a state that cannot occur is how two rules got
+ * written against impossible inputs this week.
+ */
+function withholdingYellow(clauses, haystack, green) {
+    const yellow = (0, practices_1.findMatchingClause)(clauses, haystack, 'yellow');
+    if (yellow === null) {
+        return null;
+    }
+    const rank = (c) => (c.origin === 'learned' ? 1 : 0);
+    return rank(yellow) <= rank(green) ? yellow : null;
+}
+/**
+ * The green a yellow withheld on this call, or null — recomputed for reporting only.
+ *
+ * `decideOne` returns `null` when it withholds, because a yellow produces no verdict: it takes an
+ * allow away and the call carries on. `null` carries no citation, so without this the fail-closed
+ * deny and `policy explain` both say "nothing said this call is safe" about a call where something
+ * did speak — and `explain` exists precisely to answer "which rule decided".
+ *
+ * Recomputed at the reporting site rather than threaded out of the decision, which is the shape
+ * `unsplittable` already uses in `handle` for the same reason: the alternative is a second return
+ * channel on a function whose whole contract is "a verdict or nothing". It runs only on the ambiguous
+ * path, so it costs nothing on any call that was actually decided.
+ *
+ * Per-constituent, like {@link firstRedClause}: a compound is withheld if any of its commands is.
+ */
+function withheldGreen(toolName, toolInput, clauses) {
+    const { commands } = constituentsOf(toolName, toolInput);
+    const inputs = commands === null
+        ? [toolInput]
+        : commands.map(command => ({ ...(toolInput ?? {}), command }));
+    for (const input of inputs) {
+        const hay = (0, session_1.haystackFor)(toolName, input, 'identity-only');
+        const green = (0, practices_1.findMatchingClause)(clauses, hay, 'green');
+        if (green === null) {
+            continue;
+        }
+        const yellow = withholdingYellow(clauses, hay, green);
+        if (yellow !== null) {
+            return { yellow, green };
+        }
     }
     return null;
 }
@@ -740,10 +813,13 @@ async function handle(rawInput) {
             // reported as a hook error in the transcript, and `{}` is unambiguously "no verdict".
             return {};
         }
-        const why = unsplittable === null
-            ? 'no classifier configured and no written clause applied'
-            : `the shell command line could not be split with certainty (${unsplittable}), so no part of `
-                + 'it could be evaluated';
+        const withheld = withheldGreen(toolName, input.tool_input ?? null, policy.clauses);
+        const why = withheld !== null
+            ? `${withheld.yellow.citation} withheld the allow ${withheld.green.citation} would have given`
+            : unsplittable === null
+                ? 'no classifier configured and no written clause applied'
+                : `the shell command line could not be split with certainty (${unsplittable}), so no part of `
+                    + 'it could be evaluated';
         // The last step of rung 7, before it fails closed: ask a human, if one can be reached.
         //
         // Still rung 7, deliberately not a rung 8. This is the last resort, and asking a human *is* the
@@ -751,6 +827,11 @@ async function handle(rawInput) {
         // and it is already the field that answers "who decided". Renumbering would also have meant
         // rewriting `docs/EVIDENCE.md`, which is a dated record of real decisions; a record edited to
         // suit a later refactor is not a record.
+        //
+        // A withheld green reaches a human through `why`, which already names both clauses. That is the
+        // outcome a withholding yellow was written to produce: the clause says a human was wanted, and
+        // this is the path that fetches one. Denying is the fallback for when escalation is off, not the
+        // intent — so the withheld detail belongs in both branches, phrased for who reads it.
         if (settings.escalate) {
             verdict = await escalateToHuman({
                 input, toolName, why, waitSeconds: settings.escalateWaitSeconds, unsplittable,
@@ -760,8 +841,14 @@ async function handle(rawInput) {
             verdict = {
                 decision: {
                     behavior: 'deny',
-                    message: unsplittable === null ? UNREACHABLE_MESSAGE
-                        : `${UNREACHABLE_MESSAGE}\n\n(shell: ${unsplittable})`,
+                    message: withheld !== null
+                        ? `${UNREACHABLE_MESSAGE}\n\n(withheld: ${withheld.yellow.citation}: `
+                            + `${withheld.yellow.title} — it holds back ${withheld.green.citation}, which would `
+                            + 'otherwise have allowed this. Nothing here says the call is unsafe; a human was '
+                            + 'wanted, and no escalation channel is configured. Delete or decline that clause to '
+                            + 'get the allow back, or turn escalation on.)'
+                        : unsplittable === null ? UNREACHABLE_MESSAGE
+                            : `${UNREACHABLE_MESSAGE}\n\n(shell: ${unsplittable})`,
                 },
                 light: null, clause: null, actor: 'timeout', rung: 7,
                 note: `denied — ${why}`, settled: false,
