@@ -50,7 +50,11 @@ import { effectiveMessageParts, startupBlocker, type RemoteControlConfig } from 
 import { ForumApi, type ReplyMarkup } from './forum';
 import { classifyUpdate, decodeCallback, encodeCallback, type Intent } from './intent';
 import { ReaderLease, LEASE_RENEW_MS } from './lease';
-import { resolveOwner, resolveOwners, writeBlockedReason, type Ownership } from './ownership';
+import {
+  daemonClaimantFrom, resolveOwner, resolveOwners, writeBlockedReason,
+  type DaemonClaimant, type Ownership,
+} from './ownership';
+import { health, heartbeatPath, readHeartbeat } from '../daemonHeartbeat';
 import {
   fleetSignature, planMirror, renderFleetList, renderHelp, renderHistoryList, renderTopicHeader,
   renderWho, sessionLabel, topicName, type ListEntry,
@@ -208,10 +212,15 @@ export class RemoteControlService {
     try {
       isReader = await this.lease.tryAcquire();
       const windows = await readLiveWindows({ homedir: this.deps.homedir });
+      // A daemon on this machine is the claimant of last resort, below both window tiers. Read here
+      // as well as in the daemon so a window and the daemon compute the *same* owner for the same
+      // session — two surfaces disagreeing about who is responsible is worse than either being wrong,
+      // because then neither answer can be trusted.
+      const daemon = await this.daemonClaimant();
       const { active, history } = await this.deps.partition();
       const all = [...active, ...history];
       const fleet: FleetView = {
-        active, history, all, owners: resolveOwners(all, windows), windows,
+        active, history, all, owners: resolveOwners(all, windows, daemon), windows,
       };
 
       await this.mirrorOwnedSessions(active, fleet.owners);
@@ -1057,9 +1066,22 @@ export class RemoteControlService {
     return sent.ok;
   }
 
+  /**
+   * The `session-sitter daemon` on this machine, when one is running and working.
+   *
+   * `running` and nothing else: a wedged daemon claiming sessions would take them off the read-only
+   * tier and then fail to serve them, and the list would say somebody had.
+   */
+  private async daemonClaimant(): Promise<DaemonClaimant | null> {
+    const beat = await readHeartbeat(heartbeatPath());
+    return daemonClaimantFrom(beat, health(beat, Date.now(), pid => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    }));
+  }
+
   /** Ownership of one session, for callers that need to know before acting. */
-  ownerOf(session: ClaudeSession, windows: WindowEntry[]): Ownership {
-    return resolveOwner(session, windows);
+  async ownerOf(session: ClaudeSession, windows: WindowEntry[]): Promise<Ownership> {
+    return resolveOwner(session, windows, await this.daemonClaimant());
   }
 
   /** Publish a command from outside the loop (used by the debug command). */

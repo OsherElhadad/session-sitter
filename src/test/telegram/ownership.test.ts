@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canInject,
+  daemonClaimantFrom,
+  injectionBlocker,
   isWritableSource,
+  ownedByThisWindow,
   pathContains,
   resolveOwner,
   resolveOwners,
   writeBlockedReason,
+  type Ownership,
 } from '../../telegram/ownership';
 import type { ClaudeSession } from '../../SessionManager';
 import type { WindowEntry } from '../../WindowRegistry';
@@ -159,5 +164,135 @@ describe('writeBlockedReason', () => {
   it('reports the peer before the source when both apply', () => {
     const reason = writeBlockedReason(session({ peer: 'me@laptop2', source: 'codex' }), owned);
     expect(reason).toContain('laptop2');
+  });
+});
+
+// ── The daemon as a claimant ────────────────────────────────────────────────
+
+const DAEMON = { pid: 9001 };
+
+describe('the daemon tier', () => {
+  /**
+   * The gap this closes. With no VS Code at all, tiers 1 and 2 find nothing, so every session was
+   * read-only — a terminal-only fleet could be neither listed nor answered.
+   */
+  it('claims a session no window claims', () => {
+    expect(resolveOwner(session(), [], DAEMON))
+      .toEqual({ pid: 9001, basis: 'daemon', workspace: '' });
+  });
+
+  it('leaves a session read-only when there is no daemon either', () => {
+    expect(resolveOwner(session(), [], null).basis).toBe('none');
+  });
+
+  /**
+   * Below both window tiers, and not because a window is more trustworthy: a window can do strictly
+   * more — text can be written into it. Claiming first would take a session that could be answered
+   * from a phone and hand it to an owner that can only watch.
+   */
+  it('never outranks a window that holds the session', () => {
+    const holder = window({ pid: 100, openClaudeSessionIds: ['s1'] });
+    expect(resolveOwner(session(), [holder], DAEMON)).toMatchObject({ pid: 100, basis: 'holds' });
+  });
+
+  it('never outranks a window that owns the workspace', () => {
+    const byPath = window({ pid: 101, workspaceFolders: ['/work/app'] });
+    expect(resolveOwner(session(), [byPath], DAEMON))
+      .toMatchObject({ pid: 101, basis: 'workspace' });
+  });
+
+  it('does not claim a session on another machine', () => {
+    // Only that machine's own processes can act on it, daemon or otherwise.
+    expect(resolveOwner(session({ peer: 'buildbox' }), [], DAEMON).basis).toBe('none');
+  });
+
+  it('resolves a whole fleet in one pass', () => {
+    const sessions = [session({ sessionId: 's1' }), session({ sessionId: 's2' })];
+    expect([...resolveOwners(sessions, [], DAEMON).values()].map(o => o.basis))
+      .toEqual(['daemon', 'daemon']);
+  });
+
+  it('answers "is that me" for a daemon exactly as it does for a window', () => {
+    expect(ownedByThisWindow(session(), [], 9001, DAEMON)).toBe(true);
+    expect(ownedByThisWindow(session(), [], 9002, DAEMON)).toBe(false);
+  });
+});
+
+describe('daemonClaimantFrom', () => {
+  it('claims only while the daemon is actually working', () => {
+    expect(daemonClaimantFrom({ pid: 9001 }, 'running')).toEqual({ pid: 9001 });
+  });
+
+  /**
+   * A `stale` daemon — process alive, passes stopped — must not claim. It would take sessions off the
+   * read-only tier and then fail to mirror or answer them, which is worse than nobody claiming them:
+   * the list would say somebody had.
+   */
+  it('does not claim when wedged, dead, or absent', () => {
+    for (const health of ['stale', 'dead', 'none', 'oneshot']) {
+      expect(daemonClaimantFrom({ pid: 9001 }, health), health).toBeNull();
+    }
+    expect(daemonClaimantFrom(null, 'running')).toBeNull();
+  });
+});
+
+describe('canInject', () => {
+  const owner = (basis: Ownership['basis'], pid: number | null = 1): Ownership =>
+    ({ pid, basis, workspace: '' });
+
+  it('is true only for a window, the only thing with an extension host', () => {
+    expect(canInject(owner('holds'))).toBe(true);
+    expect(canInject(owner('workspace'))).toBe(true);
+  });
+
+  it('is false for the daemon, which can mirror and answer but not type', () => {
+    expect(canInject(owner('daemon', 9001))).toBe(false);
+  });
+
+  it('is false for nobody', () => {
+    expect(canInject(owner('none', null))).toBe(false);
+  });
+});
+
+describe('injectionBlocker', () => {
+  it('is null when the owner can write', () => {
+    expect(injectionBlocker({ pid: 1, basis: 'holds', workspace: '' })).toBeNull();
+  });
+
+  /**
+   * The sentence goes straight into a Telegram topic, so it has to say what happened *and* what to do.
+   * "Read-only" alone would leave someone assuming the feature is broken.
+   */
+  it('explains the daemon case and names the fix', () => {
+    const why = injectionBlocker({ pid: 9001, basis: 'daemon', workspace: '' }) ?? '';
+    expect(why).toContain('daemon');
+    expect(why).toContain('extension host');
+    expect(why).toContain('Open the session in an IDE window');
+  });
+
+  it('distinguishes "nobody claims it" from "the daemon claims it"', () => {
+    const nobody = injectionBlocker({ pid: null, basis: 'none', workspace: '' }) ?? '';
+    expect(nobody).toContain('no window or daemon');
+    expect(nobody).not.toContain('extension host');
+  });
+});
+
+describe('writeBlockedReason, with a daemon owner', () => {
+  const byDaemon: Ownership = { pid: 9001, basis: 'daemon', workspace: '' };
+
+  it('reports up front that a daemon-held session cannot be typed into', () => {
+    // Said in the topic header, rather than after someone has typed a message and waited for it.
+    const why = writeBlockedReason(session(), byDaemon) ?? '';
+    expect(why).toContain('daemon');
+    expect(why).toContain('Open the session in an IDE window');
+  });
+
+  it('still says nothing when a window owns it', () => {
+    expect(writeBlockedReason(session(), { pid: 100, basis: 'holds', workspace: '' })).toBeNull();
+  });
+
+  it('still prefers the peer and unwritable-source reasons, which are more specific', () => {
+    expect(writeBlockedReason(session({ peer: 'buildbox' }), byDaemon)).toContain('runs on buildbox');
+    expect(writeBlockedReason(session({ source: 'codex' }), byDaemon)).toContain('no message API');
   });
 });

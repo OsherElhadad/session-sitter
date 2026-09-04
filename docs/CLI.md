@@ -199,6 +199,37 @@ With `--peers`, each peer's reachability is reported — including the reason a 
 rather than the peer silently vanishing from the list. A peer failure never costs you the local
 worklist.
 
+### `--owners`
+
+Adds a column naming what is **responsible** for each session — and, more usefully, what can be done
+about it:
+
+```
+   STATUS    SESSION                      AGENT   WORKSPACE       OWNER         UPDATED
+!  approval  bump the pinned deps         Claude  infra           daemon 9001        2m
+◉  finished  add the retry test           Claude  session-sitter  window 33550       1d
+·  dormant   an old experiment            Codex   scratch         read-only          6d
+```
+
+| | |
+|---|---|
+| `window <pid>` | a VS Code window holds it, or owns its workspace. **Text can be written into it** |
+| `daemon <pid>` | [`session-sitter daemon`](#daemon) claims it, because no window does. It mirrors the session and answers the permission prompts it raises — **it cannot type into it** |
+| `read-only` | nothing on this machine claims it |
+
+That middle row is the distinction the column exists for, and it is a capability, not a label.
+Injecting text into a session goes through the agent's own extension host over the V8 inspector, which
+runs only inside VS Code — so the daemon can be responsible for a session it cannot write to. Printing
+both owners as a pid would hide the only difference that matters, which is why `--json` reports
+`owner.canWrite` rather than leaving each caller to infer it from `basis`.
+
+Ownership is resolved by exactly the code the IDE panel uses, from files on disk — the window registry
+and the daemon's heartbeat — so a terminal reaches the same answer without being an IDE. Two surfaces
+disagreeing about who holds a session would be worse than either being wrong, because then neither
+could be trusted.
+
+Off by default: it reads two more places for a column most invocations do not print.
+
 ### `--watch`
 
 Redraws in place: the screen and its scrollback are cleared before each frame, so a long watch does
@@ -775,7 +806,8 @@ repurposed**, and `version` goes up the day a field's meaning changes. An unreco
       "status": "approval",
       "blockedOnYou": true,
       "updatedAt": "2026-09-01T08:11:58.707Z",
-      "ageSeconds": 45
+      "ageSeconds": 45,
+      "owner": { "kind": "daemon", "pid": 9001, "basis": "daemon", "canWrite": false }
     }
   ],
   "peers": [
@@ -792,6 +824,7 @@ repurposed**, and `version` goes up the day a field's meaning changes. An unreco
 | `machine` | short host; this machine for a local session, the peer's for a remote one |
 | `status` | one of `approval` \| `question` \| `finished` \| `working` \| `seen` \| `dormant` — the same value the panel renders |
 | `blockedOnYou` | `true` for `approval` and `question`, so a consumer need not hard-code which two those are |
+| `owner` | **absent** unless `--owners`, and `null` when nothing on this machine claims the session. Absent and null are different: absent means nobody looked. `canWrite` is the field to branch on — a `daemon` owner is responsible for the session and still cannot have text written into it |
 | `peers` | empty unless `--peers`; `sessionCount` and `error` are `null` when not reported |
 
 `status` is the single source of truth and `blockedOnYou` is derived from it — a consumer may branch

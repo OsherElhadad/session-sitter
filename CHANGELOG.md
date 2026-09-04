@@ -5,6 +5,60 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.16 — On a machine with no VS Code, nothing owned anything
+
+Session ownership had three tiers, and the first two both resolve to a **VS Code window**: one that
+holds the session, or one whose workspace contains it. On a machine with no window at all, both find
+nothing and every session fell to tier three — *nobody*, read-only. So a terminal-only fleet could be
+neither listed as owned nor acted on, which is the assumption the whole remote interface was built on
+and the one a terminal breaks.
+
+`session-sitter daemon` is now a claimant, below both window tiers. Below, and not because a window is
+more trustworthy: a window can do strictly **more**. Claiming first would take a session that could be
+answered from a phone and hand it to an owner that can only watch.
+
+**Owning a session is not the same as being able to write to it**, and that is now explicit rather than
+assumed. `canInject` is a separate question from `basis`, because injecting text goes through the
+agent's own extension host over the V8 inspector — which exists only inside VS Code. The daemon can be
+responsible for a session, mirror it, answer the permission prompts it raises through hook escalation,
+and still be unable to type into it.
+
+Conflating those would have the remote interface offer a button that silently does nothing, against a
+feature whose stated rule is that it never writes to a session it cannot positively reach and says why
+where it cannot. So `applyCommand` refuses `sendText`, `focus` and `newSession` **before** calling any
+sender, with a sentence that names the fix ("open the session in an IDE window"). Checking first rather
+than letting a sender fail matters: the senders' own failures are `no-channel` and `ambiguous`, which
+describe a window that could not find the right conversation — a different problem with a different
+fix, and reporting one as the other sends someone hunting for a session that was never reachable from
+here at all.
+
+A daemon claims only while its heartbeat reads `running`. A wedged one would take sessions off the
+read-only tier and then fail to serve them, and the list would say somebody had.
+
+**`session-sitter status --owners`** makes the model observable, and observable from a terminal:
+
+```
+   STATUS    SESSION                 AGENT   WORKSPACE       OWNER         UPDATED
+!  approval  bump the pinned deps    Claude  infra           daemon 9001        2m
+◉  finished  add the retry test      Claude  session-sitter  window 33550       1d
+·  dormant   an old experiment       Codex   scratch         read-only          6d
+```
+
+Resolved by exactly the code the panel uses, from files on disk — the window registry and the
+heartbeat — so a terminal reaches the same answer without being an IDE. Sharing the resolver rather
+than reimplementing it is the point: two surfaces disagreeing about who holds a session is worse than
+either being wrong, because then neither can be trusted. `--json` reports `owner.canWrite` rather than
+leaving each caller to infer it from `basis`, and the key is **absent** without `--owners` rather than
+null — absent means nobody looked, and null means nothing claims it.
+
+The Telegram topic header and the `/who` listing now name a daemon owner as a daemon. Calling it a
+"window" would tell a reader they can type there, which is the one thing they cannot do.
+
+**Not in this change, and worth being plain about:** the daemon does not yet *run* the Telegram mirror.
+That needs a host-free session partition — `RemoteControlService` takes a `SessionManager` and asks the
+panel which sessions are active — and porting that is a larger piece than the ownership model. What
+landed is the model, the capability distinction, the refusals, and one surface that uses all three.
+
 ### 0.8.15 — Half the settings could not be set without VS Code, and nothing said so
 
 The `supervisor.*` group has layered settings over the environment for a long time, so a headless run

@@ -29,6 +29,9 @@ import {
   type SessionStorePaths,
 } from '../sessionScan';
 import { isBlockedOnYou } from '../sessionStatus';
+import { readLiveWindows } from '../WindowRegistry';
+import { daemonClaimantFrom, resolveOwners, type Ownership } from '../telegram/ownership';
+import { health, heartbeatPath, readHeartbeat } from '../daemonHeartbeat';
 
 
 export interface CollectOptions {
@@ -44,6 +47,15 @@ export interface CollectOptions {
   peers?: boolean;
   /** Injected in tests, so no test ever opens a connection. */
   remote?: RemoteReader;
+  /**
+   * Also resolve what is responsible for each session — a VS Code window, the daemon, or nothing.
+   *
+   * Off unless asked because it reads two more places (the window registry and the daemon heartbeat)
+   * for a column most invocations do not print. It is host-free: the window registry is a directory of
+   * JSON files, so a terminal can answer this without an IDE, and answers it the same way the panel
+   * does.
+   */
+  owners?: boolean;
 }
 
 /**
@@ -72,6 +84,8 @@ export interface Worklist {
   peers: PeerStatus[];
   /** Set when peers were asked for and the pull failed outright, rather than per-peer. */
   peerError?: string;
+  /** Present only when `owners` was asked for. Keyed by session id. */
+  owners?: Map<string, Ownership>;
 }
 
 /**
@@ -92,6 +106,7 @@ export async function collectSessions(opts: CollectOptions = {}): Promise<Workli
   const result: Worklist = { sessions, peers: [] };
   if (!opts.peers && !opts.remote) {
     result.sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    if (opts.owners) { result.owners = await resolveOwnership(result.sessions); }
     return result;
   }
 
@@ -110,7 +125,25 @@ export async function collectSessions(opts: CollectOptions = {}): Promise<Workli
     result.peerError = String(err);
   }
   result.sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+  if (opts.owners) { result.owners = await resolveOwnership(result.sessions); }
   return result;
+}
+
+/**
+ * Who is responsible for each session, resolved exactly as the panel resolves it.
+ *
+ * Host-free on purpose: the window registry is a directory of JSON files and the heartbeat is one more,
+ * so a terminal reaches the same answer as an IDE without being one. Sharing `resolveOwners` rather
+ * than reimplementing it is what stops the two surfaces disagreeing about who holds a session — which
+ * is worse than either being wrong, because then neither can be trusted.
+ */
+async function resolveOwnership(sessions: ClaudeSession[]): Promise<Map<string, Ownership>> {
+  const windows = await readLiveWindows();
+  const beat = await readHeartbeat(heartbeatPath());
+  const daemon = daemonClaimantFrom(beat, health(beat, Date.now(), pid => {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  }));
+  return resolveOwners(sessions, windows, daemon);
 }
 
 export interface FilterOptions {

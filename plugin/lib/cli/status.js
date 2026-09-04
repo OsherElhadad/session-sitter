@@ -17,9 +17,25 @@ exports.run = run;
 const sessionSort_1 = require("../sessionSort");
 const sessionStatus_1 = require("../sessionStatus");
 const sessions_1 = require("./sessions");
+const ownership_1 = require("../telegram/ownership");
 const args_1 = require("./args");
 const time_1 = require("./time");
 const render_1 = require("./render");
+/**
+ * What is responsible for a session, in one column.
+ *
+ * The distinction the column exists to draw is not "who" but **what can be done**: an IDE window can
+ * have text written into it, and the daemon cannot — it mirrors the session and answers the permission
+ * prompts it raises. Printing both as a pid would hide the only difference that matters.
+ */
+function ownerLabel(owner, paint) {
+    if (owner === undefined || owner.pid === null) {
+        return paint('read-only', 'dim');
+    }
+    return owner.basis === 'daemon'
+        ? paint(`daemon ${owner.pid}`, 'dim')
+        : `window ${owner.pid}`;
+}
 /** Every order `--sort` accepts — the same six the panel's sort menu offers. */
 const SORT_MODES = sessionSort_1.SESSION_SORT_MODES.map(m => m.id);
 /**
@@ -43,6 +59,7 @@ Options:
                       (default: ${DEFAULT_SORT} — most urgent first)
   --peers             also pull sessions from peer machines over SSH
   --watch [SECONDS]   redraw in place every SECONDS (default: 5); Ctrl-C to stop
+  --owners            add a column naming what is responsible for each session
   --json              machine-readable output (see docs/CLI.md for the contract)
   -h, --help          show this help
 
@@ -64,6 +81,7 @@ const SPEC = {
     '--sort': 'string',
     '--peers': 'boolean',
     '--watch': 'optionalNumber',
+    '--owners': 'boolean',
     '--json': 'boolean',
     '--help': 'boolean',
     '-h': 'boolean',
@@ -113,6 +131,7 @@ function parse(argv, io) {
         needsMe: (0, args_1.flagBool)(args, '--needs-me'),
         sort,
         peers: (0, args_1.flagBool)(args, '--peers'),
+        owners: (0, args_1.flagBool)(args, '--owners'),
         json: (0, args_1.flagBool)(args, '--json'),
     };
     if (!all) {
@@ -137,7 +156,7 @@ function parse(argv, io) {
 }
 /** The rows, filtered and ordered, plus the peer reachability the JSON reports alongside them. */
 async function worklist(options, collect) {
-    const source = await collect({ peers: options.peers });
+    const source = await collect({ peers: options.peers, owners: options.owners });
     const filtered = (0, sessions_1.filterSessions)(source.sessions, {
         since: options.since, agent: options.agent, needsMe: options.needsMe,
     });
@@ -171,6 +190,7 @@ function renderText(sessions, source, options, io) {
     const paint = (0, render_1.painter)((0, render_1.colorEnabled)(io));
     const now = io.now();
     const showMachine = sessions.some(s => s.peer) || source.peers.length > 0;
+    const owners = source.owners;
     const lines = [summary(sessions, options, paint, now), ''];
     if (sessions.length === 0) {
         lines.push(paint('No sessions match. Try --all, a wider --since, or drop --needs-me.', 'dim'));
@@ -183,6 +203,7 @@ function renderText(sessions, source, options, io) {
             { header: 'AGENT' },
             { header: 'WORKSPACE', max: 24 },
             ...(showMachine ? [{ header: 'MACHINE' }] : []),
+            ...(owners !== undefined ? [{ header: 'OWNER' }] : []),
             { header: 'UPDATED', right: true },
         ];
         const here = (0, sessions_1.localHost)();
@@ -195,6 +216,8 @@ function renderText(sessions, source, options, io) {
                 AGENTS[s.source] ?? s.source,
                 s.projectName || paint('(no workspace)', 'dim'),
                 ...(showMachine ? [s.peer ? (0, sessions_1.peerHost)(s.peer) : paint(here, 'dim')] : []),
+                ...(owners !== undefined
+                    ? [ownerLabel(owners.get(s.sessionId), paint)] : []),
                 (0, time_1.humanAge)(s.updatedAt, now),
             ];
         });
@@ -212,6 +235,20 @@ function renderText(sessions, source, options, io) {
         lines.push('', paint('Peer machines not included. Add --peers to pull them over SSH.', 'dim'));
     }
     return `${lines.join('\n')}\n`;
+}
+/** One session's owner, in the `--json` shape. Null when nothing on this machine claims it. */
+function ownerJson(owner) {
+    if (owner === undefined || owner.pid === null) {
+        return null;
+    }
+    return {
+        kind: owner.basis === 'daemon' ? 'daemon' : 'window',
+        pid: owner.pid,
+        basis: owner.basis,
+        // The field that matters, and computed once here rather than at each call site: a daemon owns the
+        // session and still cannot have text written into it.
+        canWrite: (0, ownership_1.canInject)(owner),
+    };
 }
 function renderJson(sessions, source, now) {
     const here = (0, sessions_1.localHost)();
@@ -231,6 +268,10 @@ function renderJson(sessions, source, now) {
             blockedOnYou: (0, sessionStatus_1.isBlockedOnYou)(s.status),
             updatedAt: s.updatedAt.toISOString(),
             ageSeconds: Math.max(0, Math.round((now.getTime() - s.updatedAt.getTime()) / 1000)),
+            // Additive, and present only when it was asked for: a consumer written against version 1 before
+            // this existed reads every other key unchanged, and one that did not pass `--owners` sees no
+            // key rather than a null it might read as "nothing claims it".
+            ...(source.owners !== undefined ? { owner: ownerJson(source.owners.get(s.sessionId)) } : {}),
         })),
         peers: source.peers.map(p => ({
             peer: p.peer,

@@ -701,10 +701,10 @@ split at random. It half-worked because the state dir is shared — a window tha
 reply could still find that record — but for Claude the decision was then applied to the *wrong*
 session. Routing an inbound reply to the owning window is what fixes that.
 
-### Ownership: claim by what a window holds, not by path
+### Ownership: claim by what a process holds, not by path
 
 The obvious rule — the window whose workspace is the session's cwd — is wrong in cases this repository
-creates deliberately. So three tiers, strongest first:
+creates deliberately. So four tiers, strongest first:
 
 1. **A window has it open**, from the `openClaudeSessionIds` / `openBobTaskIds` this window registry
    already publishes. Exact, and it is what makes a write land correctly.
@@ -712,11 +712,32 @@ creates deliberately. So three tiers, strongest first:
    worktree case right: a session in `<repo>/.claude/worktrees/feat` belongs to the window on the
    worktree if one is open, and to the parent repo's window otherwise. A separator check stops
    `/work/app` claiming `/work/app-legacy`.
-3. **Nobody**, so the session is read-only — reported, never silently swallowed.
+3. **The `session-sitter daemon`**, when one is running on this machine. Below both window tiers, and
+   not because a window is more trustworthy — a window can do strictly *more*. Without this tier a
+   machine with no VS Code at all found no owner for anything, so a terminal-only fleet could be
+   neither listed nor answered.
+4. **Nobody**, so the session is read-only — reported, never silently swallowed.
 
 Every tier is computed from a registry snapshot passed in, so ownership is pure and unit-tested; ties
 break on lowest pid, which is what lets each window reach the same answer without talking to the
-others.
+others. The daemon claimant comes from its heartbeat and counts only while that reads `running`: a
+wedged daemon claiming sessions would take them off the read-only tier and then fail to serve them,
+and the list would say somebody had.
+
+#### Owning a session is not the same as being able to write to it
+
+`canInject` is a separate question from `basis`, and keeping them separate is load-bearing. Injecting
+text goes through the agent's own extension host over the V8 inspector, which exists only inside VS
+Code — so the daemon can be responsible for a session, mirror it, answer the permission prompts it
+raises through hook escalation, and still be unable to type into it.
+
+Conflating the two would have the remote interface offer a button that silently does nothing. The rule
+this feature rests on is that it never writes to a session it cannot positively reach and says why
+where it cannot, so `applyCommand` refuses `sendText`, `focus` and `newSession` **before** calling any
+sender when the owner cannot write. Checking first rather than letting a sender fail matters: the
+senders' own failures are `no-channel` and `ambiguous`, which describe a window that could not find the
+right conversation — a different problem with a different fix, and reporting one as the other sends
+someone hunting for a session that was never reachable from here at all.
 
 ### The bus: addressed by session, claimed by rename
 
