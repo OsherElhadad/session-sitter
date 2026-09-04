@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  effectiveMessageParts,
   remoteControlConfigFrom,
   startupBlocker,
   type RemoteControlConfig,
   type SettingsReader,
 } from '../../telegram/config';
+import { MAX_MESSAGE_PARTS_DEFAULT, MAX_MESSAGE_PARTS_LIMIT } from '../../telegram/render';
 import type { SupervisorConfig } from '../../supervisor/config';
 
 function settings(values: Record<string, unknown> = {}): SettingsReader {
   return {
     getBoolean: (key, fallback) => (key in values ? values[key] as boolean : fallback),
     getStringArray: (key, fallback) => (key in values ? values[key] as string[] : fallback),
+    getNumber: (key, fallback) => (key in values ? values[key] as number : fallback),
   };
 }
 
@@ -28,6 +31,8 @@ function config(over: Partial<RemoteControlConfig> = {}): RemoteControlConfig {
     botToken: 'tok',
     chatId: '-100999',
     allowedUserIds: ['42'],
+    fullMessages: true,
+    maxMessageParts: MAX_MESSAGE_PARTS_DEFAULT,
     ...over,
   };
 }
@@ -92,5 +97,59 @@ describe('startupBlocker', () => {
 
   it('reports the token before the allowlist, so setup is fixed in order', () => {
     expect(startupBlocker(config({ botToken: '', allowedUserIds: [] }))).toContain('bot token');
+  });
+});
+
+describe('remoteControlConfigFrom message parts', () => {
+  it('mirrors whole turns unless told otherwise', () => {
+    // Default-on: the truncated mirror was unusable away from the machine, so the fix is not
+    // something a user should have to discover a setting to get.
+    expect(remoteControlConfigFrom(settings(), supervisor()).fullMessages).toBe(true);
+  });
+
+  it('can be switched back to the one-message preview', () => {
+    const cfg = remoteControlConfigFrom(
+      settings({ 'telegram.fullMessages': false }), supervisor());
+    expect(cfg.fullMessages).toBe(false);
+  });
+
+  it('defaults the budget to more than one message', () => {
+    expect(remoteControlConfigFrom(settings(), supervisor()).maxMessageParts)
+      .toBe(MAX_MESSAGE_PARTS_DEFAULT);
+  });
+
+  it('takes the budget from settings', () => {
+    expect(remoteControlConfigFrom(
+      settings({ 'telegram.maxMessageParts': 8 }), supervisor()).maxMessageParts).toBe(8);
+  });
+
+  it('clamps a budget that would spend more than a minute of the group’s allowance', () => {
+    // Telegram takes ~20 messages a minute for one group. A setting of 500 would wedge every
+    // other topic behind one answer, so the ceiling is enforced here rather than trusted.
+    expect(remoteControlConfigFrom(
+      settings({ 'telegram.maxMessageParts': 500 }), supervisor()).maxMessageParts)
+      .toBe(MAX_MESSAGE_PARTS_LIMIT);
+  });
+
+  it('clamps a zero, negative or fractional budget to one whole message', () => {
+    for (const bad of [0, -4, 0.5]) {
+      expect(remoteControlConfigFrom(
+        settings({ 'telegram.maxMessageParts': bad }), supervisor()).maxMessageParts).toBe(1);
+    }
+  });
+
+  it('falls back to the default when the setting is not a number', () => {
+    // VS Code will hand back whatever is in settings.json, including a string.
+    expect(remoteControlConfigFrom(
+      settings({ 'telegram.maxMessageParts': 'lots' }), supervisor()).maxMessageParts)
+      .toBe(MAX_MESSAGE_PARTS_DEFAULT);
+  });
+
+  it('reports the effective budget as 1 when full mode is off', () => {
+    // One place decides it, so the service never has to combine the two settings itself.
+    const cfg = remoteControlConfigFrom(
+      settings({ 'telegram.fullMessages': false, 'telegram.maxMessageParts': 8 }), supervisor());
+    expect(effectiveMessageParts(cfg)).toBe(1);
+    expect(effectiveMessageParts(config({ fullMessages: true, maxMessageParts: 8 }))).toBe(8);
   });
 });

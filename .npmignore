@@ -1,0 +1,66 @@
+# What the npm tarball does NOT ship.
+#
+# The npm package exists for one thing: the `session-sitter` command, so `npx session-sitter` and
+# `npm i -g` work for someone who is never going to install a VS Code extension. Everything here is
+# either build input, another front end's packaging, or a test.
+#
+# ## Why this file exists at all, rather than a `files` array
+#
+# `files` in package.json would be the obvious way to express an allowlist, and it cannot be used:
+# **vsce refuses to run when both `.vscodeignore` and `files` are present** ("VSCE does not support
+# combining both strategies"), so adding `files` breaks `make package` and the .vsix with it. vsce
+# prefers `.vscodeignore` when it exists and never reads `.npmignore`, so the two packagings stay
+# independent — which is the property worth having, because they ship different things: the extension
+# needs `resources/` and no CLI entry point, the tarball needs the opposite.
+#
+# ## Why `out/` is not listed here
+#
+# It is in `.gitignore`, and npm falls back to `.gitignore` **only when there is no `.npmignore`**.
+# The existence of this file is therefore what puts the compiled output into the tarball at all; the
+# `prepare` script is what makes sure it has been built. Removing this file does not make the package
+# bigger — it makes it empty of the one thing it is for.
+
+# ── Build input ─────────────────────────────────────────────────────────────
+src/
+tsconfig.json
+vitest.config.ts
+.eslintrc.json
+Makefile
+scripts/
+ci/
+.github/
+
+# ── Compiled tests and source maps ──────────────────────────────────────────
+# The tests are not the product, and a source map without its `src/` resolves to nothing.
+out/test/
+*.js.map
+
+# ── The other two front ends ────────────────────────────────────────────────
+# The Claude Code plugin ships as a git ref, and the extension as a .vsix. Neither reaches a user
+# through npm, and `plugin/lib/` alone would roughly double the tarball.
+plugin/
+.claude-plugin/
+resources/
+*.vsix
+.vscodeignore
+skills/
+
+# ── Development tooling ─────────────────────────────────────────────────────
+# Benchmarks and the screenshot harness need a checkout and a browser, neither of which an npm
+# install has.
+tools/
+
+# ── Docs, except the one this package is about ──────────────────────────────
+#
+# `docs/*` and not `docs/`: gitignore semantics cannot re-include a file whose parent directory is
+# excluded, so excluding the directory outright makes the `!` below dead and — as observed — leaves
+# every screenshot in the tarball. 14 MB of PNGs for a command-line tool.
+docs/*
+!docs/CLI.md
+knowledge/
+
+# ── Local and editor state ──────────────────────────────────────────────────
+.claude/
+.vscode/
+.vscode-test/
+CLAUDE.md

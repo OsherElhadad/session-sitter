@@ -14,6 +14,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.loadSettings = loadSettings;
 const config_1 = require("../supervisor/config");
 const generalise_1 = require("../policy/generalise");
+const escalate_1 = require("./escalate");
 function bool(raw, fallback) {
     if (raw === undefined || raw.trim() === '') {
         return fallback;
@@ -34,6 +35,8 @@ function loadSettings(env = process.env, cwd) {
         persistRules: bool(env.SESSION_SITTER_PERSIST_RULES, false),
         ruleDestination: ruleDestination(env.SESSION_SITTER_RULE_DESTINATION),
         preToolUse: bool(env.SESSION_SITTER_PRETOOL, true),
+        escalate: bool(env.SESSION_SITTER_ESCALATE, false),
+        escalateWaitSeconds: (0, escalate_1.waitSeconds)(env.SESSION_SITTER_ESCALATE_WAIT),
         user: env.SESSION_SITTER_USER || null,
         project: env.SESSION_SITTER_PROJECT || null,
         team: env.SESSION_SITTER_TEAM || null,

@@ -20,10 +20,47 @@ session-sitter export --html > report.html   # one file you can send someone
 
 ---
 
+## Getting it
+
+Three ways in, and none of them needs VS Code.
+
+**It comes with the Claude Code plugin.** The plugin ships the whole command at `lib/cli/index.js`,
+and the slash commands are backed by it, so `/session-sitter:log` and `session-sitter log` are the
+same code. To put it on your `PATH`, symlink the launcher the plugin ships:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$(ls -d ~/.claude/plugins/cache/*/session-sitter/*/bin/session-sitter | tail -1)" \
+       ~/.local/bin/session-sitter
+```
+
+The install path is version-stamped, so re-run that after a plugin update. The launcher resolves its
+own symlinks and, when the link goes stale, prints the path it resolved to and the command to fix it
+rather than a Node module error.
+
+**Or on its own, with no plugin and no extension:**
+
+```bash
+npx github:eranra/session-sitter status     # nothing installed
+npm i -g github:eranra/session-sitter       # or keep it on PATH
+```
+
+Both compile on the way in, because `out/` is not committed — so they want a toolchain, not a clone.
+
+**Or from a checkout**, which is what a contributor wants:
+
+```bash
+make compile && node out/cli/index.js status
+```
+
+---
+
 ## Contents
 
+- [Getting it](#getting-it)
 - [Common conventions](#common-conventions)
 - [`status`](#status)
+- [`daemon`](#daemon)
 - [`log`](#log)
 - [`digest`](#digest)
 - [`policy check`](#policy-check)
@@ -162,6 +199,37 @@ With `--peers`, each peer's reachability is reported — including the reason a 
 rather than the peer silently vanishing from the list. A peer failure never costs you the local
 worklist.
 
+### `--owners`
+
+Adds a column naming what is **responsible** for each session — and, more usefully, what can be done
+about it:
+
+```
+   STATUS    SESSION                      AGENT   WORKSPACE       OWNER         UPDATED
+!  approval  bump the pinned deps         Claude  infra           daemon 9001        2m
+◉  finished  add the retry test           Claude  session-sitter  window 33550       1d
+·  dormant   an old experiment            Codex   scratch         read-only          6d
+```
+
+| | |
+|---|---|
+| `window <pid>` | a VS Code window holds it, or owns its workspace. **Text can be written into it** |
+| `daemon <pid>` | [`session-sitter daemon`](#daemon) claims it, because no window does. It mirrors the session and answers the permission prompts it raises — **it cannot type into it** |
+| `read-only` | nothing on this machine claims it |
+
+That middle row is the distinction the column exists for, and it is a capability, not a label.
+Injecting text into a session goes through the agent's own extension host over the V8 inspector, which
+runs only inside VS Code — so the daemon can be responsible for a session it cannot write to. Printing
+both owners as a pid would hide the only difference that matters, which is why `--json` reports
+`owner.canWrite` rather than leaving each caller to infer it from `basis`.
+
+Ownership is resolved by exactly the code the IDE panel uses, from files on disk — the window registry
+and the daemon's heartbeat — so a terminal reaches the same answer without being an IDE. Two surfaces
+disagreeing about who holds a session would be worse than either being wrong, because then neither
+could be trusted.
+
+Off by default: it reads two more places for a column most invocations do not print.
+
 ### `--watch`
 
 Redraws in place: the screen and its scrollback are cleared before each frame, so a long watch does
@@ -171,6 +239,142 @@ out, whichever way the loop ends.
 Ctrl-C is honoured immediately, not at the end of the current interval. `--watch` requires a
 terminal — into a pipe the escapes would be garbage and the frames would append forever, so it
 refuses with exit 2 — and cannot be combined with `--json`.
+
+---
+
+## `daemon`
+
+Keeps supervision running on a machine with no IDE.
+
+```bash
+session-sitter daemon                    # resident, 5s passes
+session-sitter daemon --status           # is it running, and is it working?
+session-sitter daemon --once             # one pass — for cron
+```
+
+### What one pass does, and why it matters
+
+Three things: **post new questions** from hook escalations, **correlate replies** to escalated
+decisions, and **expire the ones nobody answered.**
+
+The order is the order of one round trip, and it matters. A question written by a hook a moment ago is
+posted *before* the pass looks for replies, so it does not lose a whole pass waiting — and for a hook
+holding a prompt open, a pass is most of its deadline.
+
+That first job is what makes [`SESSION_SITTER_ESCALATE`](PLUGIN.md#escalation-answering-a-prompt-from-somewhere-else)
+work: the hook writes an ask and waits on a *file*, and this daemon is the only process that touches
+the messaging channel. A hook runs once per prompt, so a hook that polled Telegram itself would be an
+unbounded number of readers of a stream that only one process may read.
+
+The second is the reason this command exists. Expiring a card is the mechanism behind *silence is
+never approval* — and with nothing running, an escalated call never reaches its deadline. It sits in
+`orange_awaiting_user` for as long as the state dir survives, which is the one outcome this project
+says it will not produce. Before this, that mechanism ran only inside a VS Code window, or as
+`supervise poll --loop` typed by hand.
+
+### What it deliberately does not do
+
+**It does not apply decisions into a paused agent.** The orchestrator writes its decisions as JSON
+into `<stateDir>/outbox/`, and getting from there into a blocked agent means resolving a prompt
+through that agent's approval emitter — which lives inside another VS Code extension's process. A
+terminal cannot reach it.
+
+So the daemon **counts** the backlog and says a window is needed:
+
+```
+14:02 3 deliveries waiting for an IDE window — a terminal cannot reach a paused agent, so they stay queued
+```
+
+Nothing is lost by waiting: the outbox moves a delivery to `done/` only on a confirmed apply, so a
+window opening later drains the queue. A daemon that discarded what it could not deliver would be
+worse than one that never ran.
+
+It also does not start `SupervisionService`, `AutoResponder` or `PendingWatcher`, and that is not an
+omission. Those are driven by IBM Bob's pending-approval queue, read through the VS Code extension
+host — Bob is an IDE, so on a terminal-only machine **their input does not exist.** A daemon that
+constructed them would be watching an empty room.
+
+### One reader per machine
+
+A Telegram bot token has one update stream, and `getUpdates` consumes it **destructively**. Two
+pollers do not each get a copy: each update goes to whichever asked first, and the shared offset
+advances past updates the other never saw. Replies are silently split at random, and both halves look
+like they are working.
+
+So the daemon takes the same reader lease the Telegram remote control uses
+(`~/.claude/session-sitter/bus/telegram.lock`) and **reads only while it holds it.** Not holding it is
+not an error — it means a window is the reader here, and that window is already doing this work:
+
+```
+14:02 another reader holds the Telegram lease — timeouts only, no replies read
+```
+
+Note what still runs in that state: **timeouts.** Not holding the lease suppresses reading replies, never
+expiring a card, because standing fully down would leave escalations pending past their deadline.
+
+It also **refuses to start** when a live VS Code extension host is registered on this machine, naming
+the pids so the claim can be checked:
+
+```
+$ session-sitter daemon
+session-sitter daemon: refusing to start: 1 VS Code extension host live on this machine (pid 33550).
+```
+
+The lease alone is not enough for that case: with the Telegram remote interface off,
+`SupervisionService` polls `getUpdates` *without* taking the lease, so nothing would arbitrate.
+`--allow-with-ide` overrides it when you know the window is not supervising this state dir.
+
+### `--status` answers a different question from `systemctl status`
+
+```
+$ session-sitter daemon --status
+running · pid 164800 · eranra-wsl
+  started   09-04 14:55
+  last pass 09-04 14:56
+  passes    34, 0 record(s) transitioned
+  reading   no — timeouts only
+  state dir /repo/.supervisor-state
+```
+
+A pid cannot answer "are my timeouts being applied": pids are recycled, and **a daemon wedged
+mid-pass is still a live pid** — `active (running)` to systemd. So every pass writes a heartbeat, and
+the status is read from that:
+
+| | |
+|---|---|
+| `running` | the pid is live and a pass landed recently |
+| `stale` | **the process is up and the work has stopped.** Says so in as many words: timeouts are not being applied |
+| `dead` | the pid is gone |
+| `single pass` | a finished `--once` run. The process exiting is expected, so this is not reported as a failure — a status line that cries wolf at a working cron setup is one people stop reading |
+| — | nothing has ever run here, and it names the path it looked at |
+
+Staleness scales with `--interval`, so a daemon that wakes every ten minutes is not called wedged for
+being nine minutes idle. Exit is 0 only for `running`, so `--status` works as a health check.
+
+### Running it as a service
+
+A user unit ships at [`plugin/systemd/session-sitter-daemon.service`](../plugin/systemd/session-sitter-daemon.service):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp plugin/systemd/session-sitter-daemon.service ~/.config/systemd/user/
+# edit ExecStart for how you installed it, then:
+systemctl --user daemon-reload
+systemctl --user enable --now session-sitter-daemon
+loginctl enable-linger "$USER"        # survive logout — usually the point on a build box
+```
+
+A **user** unit, not a system one: everything it reads is under `$HOME`, and it has to run as the
+person whose agents it supervises. A system unit runs as root against the wrong home, which is the
+kind of misconfiguration that looks like it is working.
+
+`Restart=always` rather than `on-failure`, because the daemon exits 0 on `SIGTERM` and a clean exit
+that was not a `systemctl stop` still means nothing is applying timeouts.
+
+For cron instead, `--once` is the pass: `*/5 * * * * session-sitter daemon --once --state-dir ~/...`.
+
+Either way it stops cleanly on `SIGINT`/`SIGTERM` — it finishes the pass in flight, releases the lease
+and exits 0, rather than being killed halfway through writing a record.
 
 ---
 
@@ -216,16 +420,30 @@ Combining filters is an AND. `--json` and `--csv` cannot be combined.
 | `failed` | the supervisor itself failed |
 | `unknown` | the writer recorded no outcome, and none could be read from the light without guessing |
 
-### The two writers
+### The three writers
 
-`log` reads both and labels each decision with its origin in `--json` (`from`):
+`log` reads all three and labels each decision with its origin in `--json` (`from`), and each
+decision's `id` names the file and line it came from, so a surprising row traces back to a byte on
+disk:
 
-- **`audit`** — `<stateDir>/audit.jsonl`, one JSON object per decision, written by the hook front
-  end. Carries the clause citation, the actor, the latency and the rewritten input.
+- **`audit`, from `decisions.jsonl`** — the plugin's hooks, one record per governance decision
+  (`decisions.jsonl:12`). The trail that exists on a terminal-only machine. Carries the clause
+  citation, which rung answered (`actor` is `deterministic`, `policy`, `correction`, `classifier`,
+  `human` or `timeout`), the latency, and the whole redacted call. It records no `host` and no
+  session name, and no cost — it stores token counts, and turning those into money in a reader would
+  mean pinning prices where nobody could trace them.
+- **`audit`, from `audit.jsonl`** — `<stateDir>/audit.jsonl`, the same reader's shape for a trail
+  shipped from elsewhere. Nothing in this repository writes it yet.
 - **`supervision`** — `<stateDir>/records/req-*.json`, written by the extension and the `supervise`
   CLI since before the audit trail existed. These carry a traffic light, a lifecycle state and a
   rule trace but **no clause citation**, so `clause.id` is empty for them. That gap is the reason
   the audit trail exists, and printing it empty is how it stays visible.
+
+Two translations happen on the way in, and both are deliberate. A hook record's `decision: "allow"`
+with `rewritten: true` reads as outcome **`correct`** — the correction lane is the distinction the
+whole trail exists to make. And `decision: "none"`, which means the hook reached no verdict at all
+(an exempt tool, or observe mode), reads as **`unknown`**, never as `allow`: a layer that records a
+decision it did not take is a layer whose trail cannot be used as evidence.
 
 A half-written line is skipped and the rest of the trail is still returned: a governance log that
 becomes unqueryable because of one truncated write is a log you cannot use in the situation you
@@ -498,7 +716,7 @@ The surface question has three answers because three people ask it.
 |---|---|---|---|
 | Where they are | one laptop, no team tier | a checkout of the corpus repo, reviewing PRs | a terminal, and nothing else |
 | Primary surface | the hook, silently. The denial message names the clause and quotes it, so most days they invoke nothing | `policy explain` to test a clause *before* writing it; `policy check --replay` for the blast radius of an edit | `session-sitter` on `$PATH` |
-| Concretely | third time the same thing is blocked: `/session-sitter:explain`, then the `writing-practices` skill | `policy explain <tool> --command …` · `policy check <file> --replay` · `policy compile --dry-run` in CI · `policy ablate` for clauses that stopped mattering | `session-sitter policy explain … --json`, `log --denied`, `digest --since 24h`, `export --html > report.html` to hand someone a file |
+| Concretely | third time the same thing is blocked: `/session-sitter:explain`, then the `writing-practices` skill | `policy explain <tool> --command …` · `policy check <file> --replay` · `policy compile --dry-run` in CI · `policy ablate` for clauses that stopped mattering | `session-sitter policy explain … --json`, `log --denied`, `digest --since 24h`, `export --html > report.html` to hand someone a file — and `session-sitter daemon` as a user unit, because nothing else expires an escalation on that machine |
 | Do they need the skill? | **yes, most of all** — no reviewer, so the pre-flight check is the only thing between them and a denial loop | rarely; they read the corpus directly | no; they type the command |
 
 **The bare-terminal path is not a degraded path.** The plugin's hooks are plain `node` commands
@@ -512,6 +730,12 @@ session-sitter policy explain Bash --command 'terraform apply' --json | jq -r '.
 
 That is also the CI path: exit 0 answered, 1 no policy loaded, 2 bad arguments.
 
+One thing on that machine is **not** free, and saying so is the honest version of the claim above:
+if you use escalation, something has to be resident to expire a card nobody answered. That is
+[`session-sitter daemon`](#daemon), and without it an escalated call stays pending instead of failing
+closed at its deadline. The governance decision itself needs nothing resident — the hook decides
+in-process — so this applies only to the escalation path.
+
 A surface a solo dev *must* invoke to get value is a surface that failed — so the hook decides
 silently, the denial explains itself, and `explain` is there for the third time the same thing gets
 blocked.
@@ -520,19 +744,38 @@ blocked.
 
 ## Where state is read from
 
-`log`, `digest` and `policy check --replay` need the supervision state dir. There are two
-conventions in this project, and both are searched, in order:
+`log`, `digest` and `policy check --replay` read decisions from two *kinds* of place, and the
+difference matters: one is a state dir, and one is the plugin's own data dir.
 
-1. `--state-dir PATH` — honoured outright, even when empty. Being told where to look and looking
-   somewhere else is not a favour.
-2. `$STATE_DIR`, or a `.env` beside the working directory that sets it (the same resolution
+**The hook trail — always read.** `<dataDir>/decisions.jsonl`, where `dataDir` is
+`$SESSION_SITTER_DATA_DIR`, else `$CLAUDE_PLUGIN_DATA` (the directory Claude Code hands an installed
+plugin), else `~/.claude/session-sitter`. This is the file the plugin's hooks append to, and **on a
+terminal-only machine it is the only trail there is** — the hooks are the only front end running.
+
+**The state dir — searched, first populated one wins.** Two conventions, both looked at, in order:
+
+1. `$STATE_DIR`, or a `.env` beside the working directory that sets it (the same resolution
    [`src/supervisor/config.ts`](../src/supervisor/config.ts) applies), else
    `<cwd>/.supervisor-state` — where the `supervise` CLI writes.
-3. `<VS Code user dir>/globalStorage/eranra.session-sitter/state` — where the extension writes when
+2. `<VS Code user dir>/globalStorage/eranra.session-sitter/state` — where the extension writes when
    `sessionSitter.supervisorStateDir` is unset.
 
-The first that actually holds an `audit.jsonl` or a `records/` directory wins. Every command reports
-which one it used (in `--json` as `stateDir`), and every empty result lists the places it looked.
+The first that actually holds an `audit.jsonl` or a `records/` directory wins.
+
+**The hook trail is read *as well as* the state dir, never instead of it.** A machine can have both —
+an IDE window supervising sessions, and terminal sessions governed by the same practices — and
+showing one while hiding the other is the worst failure available to an evidence tool. It is also the
+bug this resolution replaced: `log` reported `No supervision state found` on machines whose
+`decisions.jsonl` had been filling up for weeks, because the hook trail was not among the places it
+looked.
+
+`--state-dir PATH` is the one exception. It is honoured outright, even when empty, **and to the
+exclusion of the hook trail** — being told where to look and reading somewhere else as well is not a
+favour either. Pass it when you mean one directory and nothing else.
+
+Every command reports what it actually read — in text as the trailing `·`-separated path, in `--json`
+as `stateDir` plus `hookTrail` — and every empty result lists every place it looked, the hook trail
+included.
 
 ---
 
@@ -563,7 +806,8 @@ repurposed**, and `version` goes up the day a field's meaning changes. An unreco
       "status": "approval",
       "blockedOnYou": true,
       "updatedAt": "2026-09-01T08:11:58.707Z",
-      "ageSeconds": 45
+      "ageSeconds": 45,
+      "owner": { "kind": "daemon", "pid": 9001, "basis": "daemon", "canWrite": false }
     }
   ],
   "peers": [
@@ -580,6 +824,7 @@ repurposed**, and `version` goes up the day a field's meaning changes. An unreco
 | `machine` | short host; this machine for a local session, the peer's for a remote one |
 | `status` | one of `approval` \| `question` \| `finished` \| `working` \| `seen` \| `dormant` — the same value the panel renders |
 | `blockedOnYou` | `true` for `approval` and `question`, so a consumer need not hard-code which two those are |
+| `owner` | **absent** unless `--owners`, and `null` when nothing on this machine claims the session. Absent and null are different: absent means nobody looked. `canWrite` is the field to branch on — a `daemon` owner is responsible for the session and still cannot have text written into it |
 | `peers` | empty unless `--peers`; `sessionCount` and `error` are `null` when not reported |
 
 `status` is the single source of truth and `blockedOnYou` is derived from it — a consumer may branch
@@ -593,6 +838,7 @@ switch over the six is the natural way to read this field.
   "version": 1,
   "generatedAt": "2026-09-01T08:12:44.101Z",
   "stateDir": "/Users/u/repo/.supervisor-state",
+  "hookTrail": "/Users/u/.claude/session-sitter/decisions.jsonl",
   "populated": true,
   "count": 1,
   "decisions": [
@@ -620,12 +866,14 @@ switch over the six is the natural way to read this field.
 
 | Field | Notes |
 |---|---|
-| `stateDir`, `populated` | which directory was read, and whether it held anything |
-| `id` | the request id for a supervision record; `audit.jsonl:<line>` for a trail line |
+| `stateDir` | which state dir was read |
+| `hookTrail` | the plugin's `decisions.jsonl` when it was read; `null` when it does not exist, or when `--state-dir` confined the read to one directory |
+| `populated` | whether either store held anything a reader can use |
+| `id` | the request id for a supervision record; `<file>:<line>` for a trail line, so the row traces back to disk |
 | `from` | `audit` \| `supervision` — which writer it came from |
 | `light` | `green` \| `yellow` \| `orange` \| `red`, or `""` |
 | `outcome` | see [outcomes](#outcomes) |
-| `actor` | `rule` \| `classifier` \| `human`, or `""` |
+| `actor` | `rule` \| `classifier` \| `human` from the older writers; `deterministic` \| `policy` \| `correction` \| `classifier` \| `human` \| `timeout` from the hook trail, which records *which* rung answered. `""` when not recorded. |
 | `clause` | `null` when no clause was cited — distinct from a cited clause with empty text |
 | `rewritten` | `true` only for the correction lane |
 | `latencyMs`, `costUsd` | `null` when not recorded. Not `0`. |
@@ -647,6 +895,7 @@ at,session_id,session_name,host,agent,tool,light,outcome,actor,clause_id,clause_
   "generatedAt": "2026-09-01T08:12:44.101Z",
   "window": { "since": "2026-08-31T17:00:00.000Z", "until": "2026-09-01T08:12:44.101Z" },
   "stateDir": "/Users/u/repo/.supervisor-state",
+  "hookTrail": "/Users/u/.claude/session-sitter/decisions.jsonl",
   "populated": true,
   "totals": {
     "sessions": 3, "decisions": 7, "corrected": 1, "escalated": 1, "denied": 3, "costUsd": 0.0043

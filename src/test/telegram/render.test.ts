@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   MAX_MESSAGE_CHARS,
+  MAX_MESSAGE_PARTS_DEFAULT,
+  MAX_MESSAGE_PARTS_LIMIT,
   MAX_TOPIC_NAME_CHARS,
   MAX_TURNS_PER_PASS,
   isEchoOfSent,
@@ -11,8 +13,10 @@ import {
   renderHelp,
   renderHistoryList,
   renderTopicHeader,
+  renderTurn,
   renderWho,
   sessionLabel,
+  splitMessages,
   statusIcon,
   topicName,
   truncate,
@@ -417,5 +421,201 @@ describe('renderHelp and renderWho', () => {
 
   it('who says so when there is nothing to show', () => {
     expect(renderWho([], 'desktop')).toBe('No sessions found.');
+  });
+});
+
+describe('splitMessages', () => {
+  const lead = '🤖 ';
+
+  it('leaves a short body as one unnumbered message', () => {
+    // Numbering a single message would be noise on the overwhelming majority of turns.
+    expect(splitMessages(lead, 'done', 4)).toEqual(['🤖 done']);
+  });
+
+  it('keeps a body that exactly fills a message in one part', () => {
+    const body = 'x'.repeat(MAX_MESSAGE_CHARS - lead.length);
+    const parts = splitMessages(lead, body, 4);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].length).toBe(MAX_MESSAGE_CHARS);
+  });
+
+  it('splits one character past the limit into two numbered parts', () => {
+    const body = 'x'.repeat(MAX_MESSAGE_CHARS - lead.length + 1);
+    const parts = splitMessages(lead, body, 4);
+    expect(parts).toHaveLength(2);
+    expect(parts[0]).toContain('(1/2)');
+    expect(parts[1]).toContain('(2/2)');
+  });
+
+  it('never exceeds Telegram’s limit in any part', () => {
+    const body = 'word '.repeat(6000);
+    for (const part of splitMessages(lead, body, MAX_MESSAGE_PARTS_LIMIT)) {
+      expect(part.length).toBeLessThanOrEqual(MAX_MESSAGE_CHARS);
+    }
+  });
+
+  it('loses not one character of the body when it fits the budget', () => {
+    // The whole point of the feature: a split must be lossless, not a prettier truncation.
+    const body = Array.from({ length: 400 }, (_, i) => `line ${i} of the answer`).join('\n');
+    const parts = splitMessages(lead, body, 4);
+    expect(parts.length).toBeGreaterThan(1);
+    const rejoined = parts
+      .map(p => p.replace(/^🤖 \(\d+\/\d+\) /u, ''))
+      .join('\n');
+    expect(rejoined).toBe(body);
+  });
+
+  it('prefers a paragraph boundary over cutting mid-sentence', () => {
+    const para = 'p'.repeat(3000);
+    const parts = splitMessages(lead, `${para}\n\n${para}`, 4);
+    expect(parts).toHaveLength(2);
+    expect(parts[0].endsWith('p')).toBe(true);
+    expect(parts[1].endsWith('p')).toBe(true);
+  });
+
+  it('falls back to a word boundary when there is no newline', () => {
+    const body = 'word '.repeat(1200).trim();
+    const parts = splitMessages(lead, body, 4);
+    expect(parts[0].endsWith('word')).toBe(true);
+  });
+
+  it('hard-cuts a body with no boundary at all rather than overflowing', () => {
+    const parts = splitMessages(lead, 'x'.repeat(9000), 4);
+    expect(parts).toHaveLength(3);
+    expect(parts.every(p => p.length <= MAX_MESSAGE_CHARS)).toBe(true);
+  });
+
+  it('points at the transcript when the body outruns the budget', () => {
+    const parts = splitMessages(lead, 'x'.repeat(40_000), 2);
+    expect(parts).toHaveLength(2);
+    expect(parts[1]).toContain('more characters');
+    expect(parts[1]).toContain('Full transcript');
+  });
+
+  it('reports how much was left out, not a vague ellipsis', () => {
+    const parts = splitMessages(lead, 'x'.repeat(20_000), 1);
+    const shown = parts[0].replace(/\n… [\s\S]*$/, '').length - lead.length;
+    expect(parts[0]).toContain(`${20_000 - shown} more characters`);
+  });
+
+  it('treats a maxParts of zero or less as one part', () => {
+    // A setting clamped elsewhere must still not produce an empty mirror here.
+    expect(splitMessages(lead, 'hello', 0)).toEqual(['🤖 hello']);
+    expect(splitMessages(lead, 'hello', -3)).toEqual(['🤖 hello']);
+  });
+
+  it('never emits an empty message', () => {
+    const parts = splitMessages(lead, 'x'.repeat(12_000), 4);
+    expect(parts.every(p => p.trim().length > lead.trim().length)).toBe(true);
+  });
+});
+
+describe('renderTurn', () => {
+  it('marks who is speaking on every part, so a continuation is still attributed', () => {
+    const parts = renderTurn({ role: 'assistant', text: 'x'.repeat(9000) }, 4);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every(p => p.startsWith('🤖 '))).toBe(true);
+  });
+
+  it('keeps a single-part turn exactly as it was before splitting existed', () => {
+    expect(renderTurn({ role: 'user', text: 'run the tests' }, 4))
+      .toEqual(['🧑 run the tests']);
+  });
+
+  it('defaults to one part, so a caller that opts out is unaffected', () => {
+    const parts = renderTurn({ role: 'assistant', text: 'x'.repeat(9000) });
+    expect(parts).toHaveLength(1);
+  });
+});
+
+describe('planMirror parts budget', () => {
+  const turn = (text: string, role: 'user' | 'assistant' = 'assistant'): MessageExchange =>
+    ({ role, text });
+
+  it('splits a long answer instead of truncating it', () => {
+    const plan = planMirror([turn('x'.repeat(12_000))], 0, { maxParts: 4 });
+    expect(plan.messages).toHaveLength(3);
+    expect(plan.messages.join('')).not.toContain('truncated');
+  });
+
+  it('gives the newest turn the whole budget and the older ones one part each', () => {
+    // Telegram takes ~20 messages a minute for one group. When several turns land together the
+    // last is the one being answered, so it gets the room and the rest stay one message apiece.
+    const turns = [
+      turn('x'.repeat(12_000)), turn('y'.repeat(12_000)), turn('z'.repeat(12_000)),
+    ];
+    const plan = planMirror(turns, 0, { maxParts: 4 });
+    expect(plan.messages).toHaveLength(1 + 1 + 3);
+    expect(plan.messages[0]).toContain('more characters');
+    expect(plan.messages[plan.messages.length - 1]).toContain('(3/3)');
+  });
+
+  it('stays under the group rate limit in the worst case', () => {
+    const turns = Array.from({ length: 30 }, () => turn('x'.repeat(200_000)));
+    const plan = planMirror(turns, 0, { maxParts: MAX_MESSAGE_PARTS_LIMIT });
+    // one collapse line + (MAX_TURNS_PER_PASS - 1) single parts + the newest turn's full budget.
+    expect(plan.messages.length)
+      .toBe(1 + (MAX_TURNS_PER_PASS - 1) + MAX_MESSAGE_PARTS_LIMIT);
+  });
+
+  it('advances the cursor by turns, not by messages', () => {
+    // The cursor counts transcript turns. Counting messages would replay a split turn forever.
+    const turns = [turn('a'), turn('x'.repeat(12_000))];
+    const plan = planMirror(turns, 0, { maxParts: 4 });
+    expect(plan.nextCursor).toBe(2);
+    expect(planMirror(turns, plan.nextCursor, { maxParts: 4 }).messages).toEqual([]);
+  });
+
+  it('keeps the old one-message-per-turn shape when no budget is given', () => {
+    const plan = planMirror([turn('x'.repeat(12_000))], 0);
+    expect(plan.messages).toHaveLength(1);
+  });
+
+  it('has a default budget of more than one part', () => {
+    // The setting defaults on; a default of 1 would ship the feature switched off.
+    expect(MAX_MESSAGE_PARTS_DEFAULT).toBeGreaterThan(1);
+    expect(MAX_MESSAGE_PARTS_DEFAULT).toBeLessThanOrEqual(MAX_MESSAGE_PARTS_LIMIT);
+  });
+});
+
+describe('planMirror echo suppression', () => {
+  const sent = 'please run the full test suite';
+
+  it('does not repost a prompt this window just injected', () => {
+    const plan = planMirror([{ role: 'user', text: sent }], 0, { recentlySent: [sent] });
+    expect(plan.messages).toEqual([]);
+    expect(plan.nextCursor).toBe(1);
+  });
+
+  it('suppresses a prompt long enough to have been split', () => {
+    // Telegram accepts 4096 characters, and the icon pushes that over one message — so the echo
+    // check has to compare the turn, not the rendered message, or a long prompt comes straight back.
+    const long = 'q'.repeat(MAX_MESSAGE_CHARS);
+    const plan = planMirror([{ role: 'user', text: long }], 0, {
+      recentlySent: [long], maxParts: 4,
+    });
+    expect(plan.messages).toEqual([]);
+  });
+
+  it('still posts the answer that follows a suppressed prompt', () => {
+    const plan = planMirror(
+      [{ role: 'user', text: sent }, { role: 'assistant', text: 'all green' }],
+      0,
+      { recentlySent: [sent] },
+    );
+    expect(plan.messages).toHaveLength(1);
+    expect(plan.messages[0]).toContain('all green');
+    expect(plan.nextCursor).toBe(2);
+  });
+
+  it('never suppresses an assistant turn, whatever was sent', () => {
+    const plan = planMirror([{ role: 'assistant', text: sent }], 0, { recentlySent: [sent] });
+    expect(plan.messages).toHaveLength(1);
+  });
+
+  it('posts a prompt typed at the keyboard rather than sent from Telegram', () => {
+    const plan = planMirror([{ role: 'user', text: 'something else' }], 0,
+      { recentlySent: [sent] });
+    expect(plan.messages).toHaveLength(1);
   });
 });

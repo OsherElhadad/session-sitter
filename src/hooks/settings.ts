@@ -9,6 +9,7 @@
 
 import { SupervisorConfig, loadConfig } from '../supervisor/config';
 import { RULE_DESTINATIONS, RuleDestination } from '../policy/generalise';
+import { waitSeconds } from './escalate';
 
 /**
  * `enforce` applies the full ladder, including the fail-closed rule: a call that is not
@@ -50,6 +51,20 @@ export interface PluginSettings {
    * `PermissionRequest` would give the same call — and no decision at all.
    */
   preToolUse: boolean;
+  /**
+   * Whether rung 7 may ask a human before it fails closed.
+   *
+   * Off by default, and the default is not timidity: escalation holds the agent still for up to
+   * `escalateWaitSeconds`, and it only works when a `session-sitter daemon` is running to serve the
+   * ask. Turning it on is a statement that both of those are true.
+   */
+  escalate: boolean;
+  /**
+   * How long rung 7 waits for that answer. Capped below the event's own 60s budget, because being
+   * killed mid-wait returns no JSON at all — which Claude Code reports as a hook error rather than as
+   * a decision, and a governance layer whose failure mode is "no verdict" is not one.
+   */
+  escalateWaitSeconds: number;
   /** Knowledge-routing triple for the practices tiers. A missing tier is skipped, not an error. */
   user: string | null;
   project: string | null;
@@ -80,6 +95,8 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env, cwd?: string)
     persistRules: bool(env.SESSION_SITTER_PERSIST_RULES, false),
     ruleDestination: ruleDestination(env.SESSION_SITTER_RULE_DESTINATION),
     preToolUse: bool(env.SESSION_SITTER_PRETOOL, true),
+    escalate: bool(env.SESSION_SITTER_ESCALATE, false),
+    escalateWaitSeconds: waitSeconds(env.SESSION_SITTER_ESCALATE_WAIT),
     user: env.SESSION_SITTER_USER || null,
     project: env.SESSION_SITTER_PROJECT || null,
     team: env.SESSION_SITTER_TEAM || null,

@@ -8,6 +8,7 @@
  * supervision decisions, an overnight digest, and a linter for the practices file.
  *
  *     session-sitter status              every session, and which of them need you
+ *     session-sitter daemon              keep applying timeouts with no IDE running
  *     session-sitter log                 the audit trail of supervision decisions
  *     session-sitter digest              what your agents did last night
  *     session-sitter policy check        lint a practices file, replay decisions against it
@@ -22,6 +23,7 @@
 import { BUILD_TIME, BUILD_VERSION } from '../buildInfo';
 import { CliError } from './args';
 import { processIo, type Io } from './render';
+import * as daemon from './daemon';
 import * as digest from './digest';
 import * as exportCmd from './export';
 import * as learn from './learn';
@@ -36,6 +38,10 @@ interface Command {
 
 const COMMANDS: Readonly<Record<string, Command>> = {
   status: { summary: 'every agent session, and which of them need you', run: status.run },
+  daemon: {
+    summary: 'keep supervision running without an IDE — replies, and timeouts',
+    run: daemon.run,
+  },
   log: { summary: 'query the audit trail of supervision decisions', run: log.run },
   digest: { summary: 'what your agents did last night, one page per session', run: digest.run },
   policy: { summary: 'lint a practices file, or ask what it would decide', run: policy.run },
@@ -67,7 +73,12 @@ export async function main(argv: readonly string[], io: Io = processIo()): Promi
   if (name === undefined) { io.err(USAGE); return 2; }
   if (name === '-h' || name === '--help') { io.out(USAGE); return 0; }
   if (name === '-v' || name === '--version') {
-    io.out(`session-sitter ${BUILD_VERSION} (built ${BUILD_TIME})\n`);
+    // A plugin install has no build time — it is a git ref cloned into place, not a build — and
+    // `scripts/build-plugin-lib.js` empties the field rather than shipping the moment a maintainer
+    // ran `make plugin`. Printing `(built )` would be worse than printing nothing.
+    io.out(BUILD_TIME
+      ? `session-sitter ${BUILD_VERSION} (built ${BUILD_TIME})\n`
+      : `session-sitter ${BUILD_VERSION}\n`);
     return 0;
   }
 

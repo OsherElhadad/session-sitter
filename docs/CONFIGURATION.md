@@ -58,6 +58,65 @@ deprecation.
 
 ---
 
+## Configuring without VS Code
+
+Every setting says how a terminal sets it, and
+[`src/settingsBridge.ts`](../src/settingsBridge.ts) is where that is written down.
+`ci/check-settings.mjs` compares that table against `package.json` in both directions, so a setting
+added without deciding how a headless run configures it fails CI rather than shipping — and it checks
+that each variable it names is actually read, because **a variable nobody reads is worse than none:
+someone sets it and watches it do nothing.**
+
+There are three kinds of answer, because there are genuinely three.
+
+### Environment variables
+
+Read from the process environment, and from a `.env` beside the working directory. The `supervisor.*`
+group has always worked this way; these are the ones that did not, and now do:
+
+| Variable | Setting | |
+|---|---|---|
+| `SESSION_SITTER_TELEGRAM_REMOTE_CONTROL` | `sessionSitter.telegram.remoteControl` | `on`/`off` |
+| `SESSION_SITTER_TELEGRAM_ALLOWED_USER_IDS` | `sessionSitter.telegram.allowedUserIds` | comma- or space-separated ids. **Empty authorises nobody** |
+| `SESSION_SITTER_TELEGRAM_FULL_MESSAGES` | `sessionSitter.telegram.fullMessages` | `on`/`off` |
+| `SESSION_SITTER_TELEGRAM_MAX_MESSAGE_PARTS` | `sessionSitter.telegram.maxMessageParts` | 1–20 |
+
+The knowledge triple and the paths were already reachable, and are listed for completeness:
+`SESSION_SITTER_USER`, `SESSION_SITTER_PROJECT`, `SESSION_SITTER_TEAM`,
+`KNOWLEDGE_REGISTRY_PATH`, `KNOWLEDGE_LOCAL_REPO` (which is `sessionSitter.dataRepoPath`), and
+`STATE_DIR` (`sessionSitter.supervisorStateDir`).
+
+**Precedence is the same everywhere:** a setting the user explicitly set wins, otherwise the
+environment, otherwise the declared default. So one machine can be configured once and read the same
+way by a window and by `session-sitter daemon`. That ordering needs `inspect()` rather than `get()` on
+the VS Code side — `get()` returns the manifest default for an unset setting, which would make the
+environment unreachable for every setting that has one.
+
+### Command-line flags
+
+Where the setting is *consent* to something with a side effect, a flag typed at the moment of use is
+clearer than a variable inherited from a shell profile:
+
+| Flag | Setting | |
+|---|---|---|
+| `session-sitter status --peers` | `sessionSitter.remotePeers` | opens SSH connections to peer machines |
+| `session-sitter daemon --workspace-root PATH` | `sessionSitter.supervisorRepoPath` | which repo is supervised. Defaults to the working directory, which for a service is set by a unit file rather than by a shell |
+
+### Settings with no headless equivalent, on purpose
+
+Seven settings configure the IDE surface and have no headless behaviour to change:
+`autoSupervise`, `autoRespond`, `sessionSort`, `workspaceColors`, `windowAttentionMinutes`,
+`probelessActiveWindowMinutes` and `debugCommands`. Each carries its reason in the table, because "no
+equivalent needed" is a claim, and an unexplained one is how a real gap gets filed under this heading
+and forgotten.
+
+Two are worth stating outright. `autoSupervise` gates the supervision loop *inside a window*; the
+headless equivalent is not a setting but whether [`session-sitter daemon`](CLI.md#daemon) is running,
+which is a stronger and more visible control. And a `workspaceColors` variable would be a knob wired
+to nothing — worse than its absence, because it implies the terminal has a panel to colour.
+
+---
+
 ## VS Code settings
 
 The Settings UI groups them under the same headings this section uses. Two groups are also marked
@@ -160,6 +219,8 @@ warning is logged — supervision degrades rather than failing silently.
 |---|---|---|
 | `sessionSitter.telegram.remoteControl` | `false` | Turn on the remote interface: each session becomes a topic in a Telegram forum group, and typing in a topic sends into that session. |
 | `sessionSitter.telegram.allowedUserIds` | `[]` | Telegram **user ids** permitted to drive it. **Empty authorises nobody.** Rejected ids are logged so you can copy them in. |
+| `sessionSitter.telegram.fullMessages` | `true` | Mirror each turn **whole**, split over as many messages as it needs. Off falls back to the panel's ~250-character preview. |
+| `sessionSitter.telegram.maxMessageParts` | `4` | Messages one turn may be split into, 1–20. Past the budget the last message says how many characters were left out and points at **📄 Full transcript**. |
 
 The bot token and chat id are **reused** from `sessionSitter.supervisor.telegramBotToken` /
 `.telegramChatId` (and their `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` fallbacks), so supervision

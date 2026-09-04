@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { CliError } from '../../cli/args';
 import type { ClaudeSession } from '../../sessionScan';
-import { filterSessions } from '../../cli/sessions';
+import { filterSessions, type Worklist } from '../../cli/sessions';
+import type { Ownership } from '../../telegram/ownership';
 import { SESSION_STATUSES } from '../../sessionStatus';
 import { sortSessions } from '../../sessionSort';
 import { renderJson, renderText, run, parseStatusArgs, type StatusOptions } from '../../cli/status';
@@ -23,7 +24,7 @@ function session(over: Partial<ClaudeSession> = {}): ClaudeSession {
 }
 
 const OPTIONS: StatusOptions = {
-  needsMe: false, sort: 'status', peers: false, json: false,
+  needsMe: false, sort: 'status', peers: false, owners: false, json: false,
 };
 
 describe('the six-state markers', () => {
@@ -268,5 +269,97 @@ describe('run', () => {
     const io = fakeIo({ now: NOW });
     expect(await run([], io, collect)).toBe(0);
     expect(io.text()).toContain('SESSION');
+  });
+});
+
+// ── The owner column ────────────────────────────────────────────────────────
+
+describe('--owners', () => {
+  const io = fakeIo({ now: NOW });
+  const withOwners = { ...OPTIONS, owners: true };
+
+  function worklist(owners: Map<string, Ownership>): Worklist {
+    return { sessions: [], peers: [], owners };
+  }
+
+  it('names a window as a window', () => {
+    const out = renderText(
+      [session({ sessionId: 's1' })],
+      worklist(new Map([['s1', { pid: 100, basis: 'holds', workspace: '/w' }]])),
+      withOwners, io);
+    expect(out).toContain('OWNER');
+    expect(out).toContain('window 100');
+  });
+
+  /**
+   * The distinction the column exists for. Printing the daemon as a window would tell a reader they
+   * can type into the session, which is the one thing a daemon-held session cannot do.
+   */
+  it('names the daemon as the daemon', () => {
+    const out = renderText(
+      [session({ sessionId: 's1' })],
+      worklist(new Map([['s1', { pid: 9001, basis: 'daemon', workspace: '' }]])),
+      withOwners, io);
+    expect(out).toContain('daemon 9001');
+    expect(out).not.toContain('window 9001');
+  });
+
+  it('says read-only when nothing claims it', () => {
+    const out = renderText(
+      [session({ sessionId: 's1' })],
+      worklist(new Map([['s1', { pid: null, basis: 'none', workspace: '' }]])),
+      withOwners, io);
+    expect(out).toContain('read-only');
+  });
+
+  it('says read-only for a session the map does not mention', () => {
+    const out = renderText(
+      [session({ sessionId: 's1' })], worklist(new Map()), withOwners, io);
+    expect(out).toContain('read-only');
+  });
+
+  it('adds no column at all without the flag', () => {
+    const out = renderText([session()], { sessions: [], peers: [] }, OPTIONS, io);
+    expect(out).not.toContain('OWNER');
+  });
+});
+
+describe('renderJson — the owner', () => {
+  it('reports what can be written to, which is the question a caller has', () => {
+    const json = renderJson(
+      [session({ sessionId: 's1' })],
+      { sessions: [], peers: [], owners: new Map([
+        ['s1', { pid: 9001, basis: 'daemon', workspace: '' }],
+      ]) },
+      NOW);
+    expect(json.sessions[0].owner).toEqual({
+      kind: 'daemon', pid: 9001, basis: 'daemon', canWrite: false,
+    });
+  });
+
+  it('reports a window as writable', () => {
+    const json = renderJson(
+      [session({ sessionId: 's1' })],
+      { sessions: [], peers: [], owners: new Map([
+        ['s1', { pid: 100, basis: 'workspace', workspace: '/w' }],
+      ]) },
+      NOW);
+    expect(json.sessions[0].owner).toMatchObject({ kind: 'window', canWrite: true });
+  });
+
+  it('is null when nothing claims the session', () => {
+    const json = renderJson(
+      [session({ sessionId: 's1' })],
+      { sessions: [], peers: [], owners: new Map() }, NOW);
+    expect(json.sessions[0].owner).toBeNull();
+  });
+
+  /**
+   * Absent, not null, when it was never asked for. A consumer that did not pass `--owners` must not
+   * read a null as "nothing claims this session" — it means "nobody looked".
+   */
+  it('omits the key entirely when owners were not resolved', () => {
+    const json = renderJson([session()], { sessions: [], peers: [] }, NOW);
+    expect('owner' in json.sessions[0]).toBe(false);
   });
 });

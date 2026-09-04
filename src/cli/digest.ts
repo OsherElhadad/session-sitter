@@ -192,6 +192,8 @@ export interface DigestJson {
   generatedAt: string;
   window: { since: string; until: string };
   stateDir: string;
+  /** The plugin's `decisions.jsonl` when it was read, else null. Additive, exactly as in `log`. */
+  hookTrail: string | null;
   populated: boolean;
   totals: {
     sessions: number;
@@ -220,6 +222,7 @@ export interface DigestJson {
 
 export function renderJson(
   pages: readonly SessionDigest[], since: Date, until: Date, stateDir: string, populated: boolean,
+  hookTrail: string | null = null,
 ): DigestJson {
   const costs = pages.map(p => p.costUsd).filter((c): c is number => c !== null);
   return {
@@ -227,6 +230,7 @@ export function renderJson(
     generatedAt: until.toISOString(),
     window: { since: since.toISOString(), until: until.toISOString() },
     stateDir,
+    hookTrail,
     populated,
     totals: {
       sessions: pages.length,
@@ -246,7 +250,7 @@ export function renderJson(
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
-export type ReadDecisions = (stateDir: string) => Promise<Decision[]>;
+export type ReadDecisions = (stateDir: string, hookTrail?: string | null) => Promise<Decision[]>;
 
 export async function run(
   argv: readonly string[], io: Io, read: ReadDecisions = readDecisions,
@@ -264,11 +268,12 @@ export async function run(
 
   const filter = { since, ...(flagString(args, '--session') !== undefined
     ? { sessionId: flagString(args, '--session') } : {}) };
-  const pages = summarise(filterDecisions(await read(state.dir), filter));
+  const pages = summarise(filterDecisions(await read(state.dir, state.hookTrail), filter));
 
   if (flagBool(args, '--json')) {
     io.out(`${JSON.stringify(
-      renderJson(pages, since, now, state.dir, state.populated), null, 2)}\n`);
+      renderJson(pages, since, now, state.dir, state.populated, state.hookTrail),
+      null, 2)}\n`);
     return 0;
   }
 

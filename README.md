@@ -87,9 +87,18 @@ code --install-extension session-sitter-*.vsix
 Extensions panel → `···` → **Install from VSIX…** · reload the window and you are done.
 
 > [!NOTE]
-> Not on the VS Code Marketplace yet, so installation is by VSIX. A Claude Code plugin and a
-> `session-sitter` CLI are designed and in review — until they land, the extension is the way in.
-> [The design](docs/superpowers/specs/2026-09-01-claude-code-plugin-design.md).
+> Not on the VS Code Marketplace yet, so the extension installs by VSIX. **The extension is not the
+> only way in, and for a terminal it is not the recommended one** — the Claude Code plugin and the
+> `session-sitter` command have both landed:
+>
+> ```bash
+> /plugin marketplace add eranra/session-sitter    # governance in the terminal
+> /plugin install session-sitter@session-sitter
+> npx github:eranra/session-sitter status          # the command, on its own
+> ```
+>
+> [The plugin](docs/PLUGIN.md) · [the command](docs/CLI.md) ·
+> [the design](docs/superpowers/specs/2026-09-01-claude-code-plugin-design.md).
 
 Every pull request also attaches a build, under the CI run's **Artifacts** — handy for trying a
 change before it lands.

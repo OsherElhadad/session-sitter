@@ -554,6 +554,34 @@ export class Orchestrator {
     'approve', 'approved', 'allow', 'yes', 'ok', 'okay', 'proceed', 'accept', 'go', 'confirm',
   ]);
 
+  /**
+   * Words that negate an approval, however many approval words sit beside them.
+   *
+   * This list is the fix for a real defect. The rule used to be "contains an approval word", so
+   * **"no, don't allow that" approved the call** — it contains `allow`. That was survivable while this
+   * only resolved Bob approvals; it is not, now that `PermissionRequest` escalation routes a
+   * permission decision through the same parser.
+   *
+   * Requiring *every* word to be an approval was the other obvious fix and is worse: it denies "yes
+   * please" and "ok go ahead", which is how a human actually answers. Negation is the thing that
+   * changes the meaning, so negation is what is checked.
+   */
+  static readonly NEGATION_WORDS: ReadonlySet<string> = new Set([
+    'no', 'not', 'dont', 'don', 'never', 'stop', 'cancel', 'deny', 'denied', 'reject', 'rejected',
+    'refuse', 'wait', 'hold', 'nope', 'nah', 'abort', 'kill', 'revert', 'undo',
+  ]);
+
+  /**
+   * Whether a reply means "let the original action proceed".
+   *
+   * An approval word must be present **and** no negation word may be, so the only replies that
+   * approve are the ones that unambiguously do. Everything else denies and the words are relayed to
+   * the agent — including a redirect like "just commit instead", which is not permission for the call
+   * that was asked about.
+   *
+   * Erring toward denial is the whole point: a misread denial costs one more prompt, and a misread
+   * approval runs the command.
+   */
   static replyApproves(reply: string): boolean {
     const words = reply.toLowerCase()
       .split('')
@@ -561,6 +589,7 @@ export class Orchestrator {
       .join('')
       .split(/\s+/)
       .filter(w => w.length > 0);
+    if (words.some(w => Orchestrator.NEGATION_WORDS.has(w))) { return false; }
     return words.some(w => Orchestrator.APPROVE_WORDS.has(w));
   }
 

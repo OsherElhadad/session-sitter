@@ -1,15 +1,26 @@
 /**
  * Reading the evidence: what was decided, by whom, under which clause.
  *
- * Two writers feed this reader, and it has to be useful with either one alone:
+ * Three writers feed this reader, and it has to be useful with any one of them alone:
  *
- *  1. **The audit trail** — `<stateDir>/audit.jsonl`, one JSON object per decision, written by the
- *     hook front end. This is the record designed for the query surface, and `AuditRecord` below is
- *     the contract this reader holds the writer to.
- *  2. **The supervision records** — `<stateDir>/records/req-*.json`, which the extension and
+ *  1. **The hook trail** — `<dataDir>/decisions.jsonl`, one `DecisionRecord` per decision, written
+ *     by the plugin's hooks. This is the one that exists on a terminal-only machine, because the
+ *     hooks are the only front end running there. It lives under the plugin's data directory
+ *     (`$CLAUDE_PLUGIN_DATA`, else `~/.claude/session-sitter`) rather than under a state dir,
+ *     because Claude Code owns that path and hands it to the hook in the environment.
+ *  2. **The audit trail** — `<stateDir>/audit.jsonl`, one `AuditRecord` per decision. Nothing in
+ *     this repository writes it yet; it is the shape a future exporter is held to, and it is read
+ *     because a trail shipped from elsewhere arrives in it.
+ *  3. **The supervision records** — `<stateDir>/records/req-*.json`, which the extension and
  *     `supervise` CLI have written since long before the audit trail existed. They carry a traffic
  *     light, a state and a rule trace but no clause citation, so they map into a decision with the
  *     clause field genuinely empty.
+ *
+ * The hook trail is read *in addition to* the state dir rather than as another candidate for it: the
+ * two are different kinds of store in different places, and a machine that has both — an IDE window
+ * and a terminal session governed by the same practices — must show the decisions from both. Picking
+ * one and hiding the other is how `log` came to report "no supervision state found" on a machine
+ * that had been recording decisions all along.
  *
  * Where a field is absent it stays absent. `log` and `digest` print "not recorded" for those, and
  * nothing in here fills a gap with a plausible-looking value.
@@ -19,6 +30,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { recordToItem } from '../SupervisionActivity';
+import { DecisionRecord } from '../audit/trail';
+import { decisionsPath } from '../hooks/paths';
 import { loadConfig } from '../supervisor/config';
 import { vscodeUserDir } from '../sessionScan';
 
@@ -90,6 +103,15 @@ export interface AuditRecord {
 
 /** The file the audit trail is written to, under the state dir. */
 export const AUDIT_FILE = 'audit.jsonl';
+
+/**
+ * The file the plugin's hooks append to, under the plugin data dir — not under a state dir.
+ *
+ * Named here rather than imported from `src/hooks/paths.ts` because that module exports the whole
+ * path and this reader needs the basename for a decision's id, so a record traces back to the line
+ * it came from the same way an `audit.jsonl` one does.
+ */
+export const DECISIONS_FILE = 'decisions.jsonl';
 
 // ── The reader's own view ──────────────────────────────────────────────────
 
@@ -206,6 +228,101 @@ export async function readAuditTrail(stateDir: string): Promise<Decision[]> {
   return decisions;
 }
 
+// ── The hook trail, as decisions ───────────────────────────────────────────
+
+/**
+ * How a hook record's `actor` reads in this reader's vocabulary.
+ *
+ * Only `model` is translated. The supervision reader already turns its `supervisor` into
+ * `classifier`, and one word for "a model decided this" across all three writers is worth the
+ * translation. The rest pass through verbatim: `deterministic`, `policy` and `correction` say
+ * *which* deterministic rung answered, and collapsing them into `rule` would throw away the only
+ * record of that — the trail's own precision is not this reader's to spend.
+ */
+function hookActor(actor: string): string {
+  return actor === 'model' ? 'classifier' : actor;
+}
+
+/**
+ * Map one hook record into a decision.
+ *
+ * The two shapes disagree about more than spelling, and each difference is resolved by recording
+ * what the writer knew rather than by filling the gap:
+ *
+ *  - **`decision` is not an outcome.** `allow`/`deny` map straight across, but a rewrite is recorded
+ *    as `decision: 'allow'` plus `rewritten: true`, and the correction lane is the distinction this
+ *    whole trail exists to make — so a rewrite reads as `correct`. `none` means the hook reached no
+ *    verdict (an exempt tool, or observe mode) and reads as `unknown`, never as `allow`: a layer
+ *    that records a decision it did not take is a layer whose trail cannot be used as evidence.
+ *  - **`clause` is a citation string, not a pair.** It becomes `clauseId`; `clauseText` stays empty,
+ *    because the hook does not store the clause body and the renderers say "not recorded" for it.
+ *  - **No host, and no session name.** Neither is in `DecisionRecord`. `sessionName` falls back to
+ *    the session id, exactly as `auditToDecision` does for the same gap.
+ *  - **The agent is `claude`.** Not inferred — `decisions.jsonl` is written only by the hooks of a
+ *    Claude Code plugin, so there is no other agent it could have been.
+ */
+export function hookToDecision(record: DecisionRecord, id: string): Decision {
+  const rewritten = record.rewritten === true;
+  return {
+    from: 'audit',
+    id,
+    at: new Date(record.ts),
+    sessionId: str(record.sessionId),
+    sessionName: str(record.sessionId),
+    host: '',
+    agent: 'claude',
+    tool: str(record.tool),
+    light: str(record.light),
+    outcome: rewritten ? 'correct'
+      : record.decision === 'allow' ? 'allow'
+      : record.decision === 'deny' ? 'deny'
+      : 'unknown',
+    actor: hookActor(str(record.actor)),
+    clauseId: str(record.clause),
+    clauseText: '',
+    rewritten,
+    reason: str(record.note),
+    ask: '',
+    // `call.input` is the whole redacted input, which is what a replay has to re-decide.
+    // `inputSummary` cannot serve — it keeps one field and truncates at 300 characters.
+    input: record.call?.input ?? undefined,
+    latencyMs: num(record.latencyMs),
+    // The hook records token counts, not money. Deriving a cost from them here would mean pinning
+    // prices in a reader, and a figure nobody can trace is worse than an empty column.
+    costUsd: null,
+  };
+}
+
+/**
+ * Read `<dataDir>/decisions.jsonl`.
+ *
+ * Tolerant in exactly the way {@link readAuditTrail} is, and for the same reason: a half-written
+ * final line is the normal state of a JSONL file whose writer was killed, and it must not cost the
+ * reader the rest of the trail.
+ */
+export async function readHookTrail(trailPath: string): Promise<Decision[]> {
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(trailPath, 'utf8');
+  } catch {
+    return [];
+  }
+  const decisions: Decision[] = [];
+  const lines = raw.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed) { continue; }
+    try {
+      const record = JSON.parse(trimmed) as DecisionRecord;
+      if (typeof record.ts !== 'string') { continue; }
+      const decision = hookToDecision(record, `${DECISIONS_FILE}:${i + 1}`);
+      if (Number.isNaN(decision.at.getTime())) { continue; }
+      decisions.push(decision);
+    } catch { /* half-written or corrupt line — skip it, keep the rest of the trail */ }
+  }
+  return decisions;
+}
+
 // ── The supervision records, as decisions ──────────────────────────────────
 
 /**
@@ -296,9 +413,19 @@ export async function readSupervisionRecords(stateDir: string): Promise<Decision
   return decisions;
 }
 
-/** Every decision from both writers, oldest first. */
-export async function readDecisions(stateDir: string): Promise<Decision[]> {
+/**
+ * Every decision from every writer that is in play, oldest first.
+ *
+ * `hookTrail` is separate from `stateDir` because the hook writes outside any state dir, and it is a
+ * parameter rather than a lookup so that a caller which was told exactly where to read — an explicit
+ * `--state-dir` — can pass `null` and get only what it asked for. {@link resolveState} decides which
+ * of those two situations holds; this function does not guess.
+ */
+export async function readDecisions(
+  stateDir: string, hookTrail?: string | null,
+): Promise<Decision[]> {
   const decisions = [
+    ...(hookTrail ? await readHookTrail(hookTrail) : []),
     ...(await readAuditTrail(stateDir)),
     ...(await readSupervisionRecords(stateDir)),
   ];
@@ -326,34 +453,67 @@ export function stateDirCandidates(cwd: string = process.cwd()): string[] {
 
 export interface ResolvedState {
   dir: string;
-  /** Whether anything a reader can use is actually there. */
+  /** Whether anything a reader can use is actually there — in the state dir or the hook trail. */
   populated: boolean;
   /** Every place that was looked at, in order, for an honest "nothing found" message. */
   searched: string[];
+  /**
+   * The plugin's `decisions.jsonl`, when it exists and is in play — otherwise null.
+   *
+   * Null under an explicit `--state-dir`, which means only that directory. It is a separate field
+   * rather than another entry in `searched` because it is not a candidate the state dir was chosen
+   * from: it is read as well as, never instead of.
+   */
+  hookTrail: string | null;
 }
 
-/** Does this directory hold either writer's output? */
+/** Does this directory hold either state-dir writer's output? */
 function hasState(dir: string): boolean {
   return fs.existsSync(path.join(dir, AUDIT_FILE)) || fs.existsSync(path.join(dir, 'records'));
 }
 
 /**
- * Resolve the state dir to read from: an explicit `--state-dir` wins outright, otherwise the first
- * candidate that actually holds records.
+ * Resolve what to read: an explicit `--state-dir` wins outright, otherwise the first candidate that
+ * actually holds records, plus the plugin's hook trail whenever that exists.
  *
- * An explicit path is honoured even when empty — being told where to look and looking somewhere
- * else is not a favour.
+ * An explicit path is honoured even when empty, and to the exclusion of the hook trail — being told
+ * where to look and reading somewhere else as well is not a favour either. Without one, the hook
+ * trail is always in play: on a terminal-only machine it is the only writer there is, and a state
+ * dir that happens to exist must not hide it.
  */
-export function resolveState(explicit: string | undefined, cwd: string = process.cwd()): ResolvedState {
+export function resolveState(
+  explicit: string | undefined,
+  cwd: string = process.cwd(),
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedState {
   if (explicit !== undefined) {
     const dir = path.resolve(expandHome(explicit));
-    return { dir, populated: hasState(dir), searched: [dir] };
+    return { dir, populated: hasState(dir), searched: [dir], hookTrail: null };
   }
-  const searched = stateDirCandidates(cwd);
-  for (const dir of searched) {
-    if (hasState(dir)) { return { dir, populated: true, searched }; }
+  const trail = decisionsPath(env);
+  const hookTrail = fs.existsSync(trail) ? trail : null;
+  const searched = [...stateDirCandidates(cwd), trail];
+  for (const dir of stateDirCandidates(cwd)) {
+    if (hasState(dir)) { return { dir, populated: true, searched, hookTrail }; }
   }
-  return { dir: searched[0], populated: false, searched };
+  return { dir: searched[0], populated: hookTrail !== null, searched, hookTrail };
+}
+
+/**
+ * What was actually read, for the line every command prints so a reader can tell an empty result
+ * from a wrong path.
+ *
+ * Names both stores when both are in play. This is not cosmetic: once the hook trail is read
+ * alongside the state dir, printing only `state.dir` tells someone their decisions came from a
+ * directory that may not even exist — the precise failure this reader was changed to stop.
+ */
+export function readFrom(state: ResolvedState): string {
+  const parts: string[] = [];
+  if (hasState(state.dir)) { parts.push(state.dir); }
+  if (state.hookTrail !== null) { parts.push(state.hookTrail); }
+  // Neither holds anything: name the directory that was chosen, so the message still points
+  // somewhere rather than nowhere.
+  return parts.length > 0 ? parts.join(' + ') : state.dir;
 }
 
 function expandHome(p: string): string {

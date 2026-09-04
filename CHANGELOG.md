@@ -5,6 +5,387 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.17 — `/new` started a session you could not continue from Telegram
+
+`/new` opened a Claude panel and reported that the session's topic would appear "once it writes its
+first message". Nothing ever wrote one. **A panel nobody has spoken to writes no transcript**, and the
+worklist is built from transcripts — so the session was visible in the IDE, absent from the session
+list, had no topic, and could not be continued from the phone it was started on. The promise in the
+report was never kept because nothing was ever going to keep it.
+
+Two facts made it fixable, and neither was being used. **A fresh panel does have a session id** —
+Claude's live manager (`sessionPanels`) knows it immediately, which `getOpenClaudeSessionIds` already
+reads. And **`BusResult.sessionId` already existed** for exactly this, documented as "set by
+`newSession` once the started session is identified", with nothing setting it and nothing reading it.
+The plumbing had been designed and left unfinished.
+
+So `/new` now reads the open panels *before* opening, opens, waits briefly for exactly one new id to
+appear, **sends that session a first message** — which is what makes the CLI write a transcript and the
+session real — and hands the id back so its topic is created there and then instead of waited for.
+
+Where it cannot be sure it says so rather than guessing: two sessions appearing at once is a refusal to
+pick (a first message in the wrong conversation is worse than none), nothing registering within 8s
+leaves the panel open and unnamed, and a first message that does not land still gets a topic with the
+reason quoted. **None of those is reported as "could not start"** — the panel is open in every one of
+them, and saying otherwise sends someone looking for a window sitting in front of them. Bob is
+unchanged and still unconfirmable: `startTask` returns nothing.
+
+**And a session could open in a workspace you did not pick.** The menu paired each folder with
+*whichever window listed it first*, so a multi-root window listed early captured folders that had a
+dedicated window of their own — and tapping one opened a panel in the multi-root window, where Claude
+chose the folder itself. Nothing in Claude's API takes a folder (`primaryEditor.open` accepts a session
+id and nothing else), so the only way to be certain is to open in a window that has no other folder to
+choose from. `chooseLaunchTarget` prefers exactly that, tie-breaking on lowest pid so every window
+reaches the same answer.
+
+Where no single-folder window exists the folder is still offered — it is startable, just not guaranteed
+— with the caveat printed in the menu, naming the other folders it could land in. Said **before** the
+tap, because once the session exists in the wrong folder the only remedy is to close it and start
+again, which costs the round trip the warning would have saved. Guessing an undocumented option name
+for the command would have been worse than naming the part that is not ours to decide.
+
+### 0.8.16 — On a machine with no VS Code, nothing owned anything
+
+Session ownership had three tiers, and the first two both resolve to a **VS Code window**: one that
+holds the session, or one whose workspace contains it. On a machine with no window at all, both find
+nothing and every session fell to tier three — *nobody*, read-only. So a terminal-only fleet could be
+neither listed as owned nor acted on, which is the assumption the whole remote interface was built on
+and the one a terminal breaks.
+
+`session-sitter daemon` is now a claimant, below both window tiers. Below, and not because a window is
+more trustworthy: a window can do strictly **more**. Claiming first would take a session that could be
+answered from a phone and hand it to an owner that can only watch.
+
+**Owning a session is not the same as being able to write to it**, and that is now explicit rather than
+assumed. `canInject` is a separate question from `basis`, because injecting text goes through the
+agent's own extension host over the V8 inspector — which exists only inside VS Code. The daemon can be
+responsible for a session, mirror it, answer the permission prompts it raises through hook escalation,
+and still be unable to type into it.
+
+Conflating those would have the remote interface offer a button that silently does nothing, against a
+feature whose stated rule is that it never writes to a session it cannot positively reach and says why
+where it cannot. So `applyCommand` refuses `sendText`, `focus` and `newSession` **before** calling any
+sender, with a sentence that names the fix ("open the session in an IDE window"). Checking first rather
+than letting a sender fail matters: the senders' own failures are `no-channel` and `ambiguous`, which
+describe a window that could not find the right conversation — a different problem with a different
+fix, and reporting one as the other sends someone hunting for a session that was never reachable from
+here at all.
+
+A daemon claims only while its heartbeat reads `running`. A wedged one would take sessions off the
+read-only tier and then fail to serve them, and the list would say somebody had.
+
+**`session-sitter status --owners`** makes the model observable, and observable from a terminal:
+
+```
+   STATUS    SESSION                 AGENT   WORKSPACE       OWNER         UPDATED
+!  approval  bump the pinned deps    Claude  infra           daemon 9001        2m
+◉  finished  add the retry test      Claude  session-sitter  window 33550       1d
+·  dormant   an old experiment       Codex   scratch         read-only          6d
+```
+
+Resolved by exactly the code the panel uses, from files on disk — the window registry and the
+heartbeat — so a terminal reaches the same answer without being an IDE. Sharing the resolver rather
+than reimplementing it is the point: two surfaces disagreeing about who holds a session is worse than
+either being wrong, because then neither can be trusted. `--json` reports `owner.canWrite` rather than
+leaving each caller to infer it from `basis`, and the key is **absent** without `--owners` rather than
+null — absent means nobody looked, and null means nothing claims it.
+
+The Telegram topic header and the `/who` listing now name a daemon owner as a daemon. Calling it a
+"window" would tell a reader they can type there, which is the one thing they cannot do.
+
+**Not in this change, and worth being plain about:** the daemon does not yet *run* the Telegram mirror.
+That needs a host-free session partition — `RemoteControlService` takes a `SessionManager` and asks the
+panel which sessions are active — and porting that is a larger piece than the ownership model. What
+landed is the model, the capability distinction, the refusals, and one surface that uses all three.
+
+### 0.8.15 — Half the settings could not be set without VS Code, and nothing said so
+
+The `supervisor.*` group has layered settings over the environment for a long time, so a headless run
+could configure 19 of the 38 settings. The other 19 had no headless story at all — and, worse, no way
+to notice. A setting the extension reads and a terminal cannot is invisible until someone on a build
+box asks why their configuration does nothing.
+
+`src/settingsBridge.ts` now names the answer for **every** setting, and `ci/check-settings.mjs`
+compares that table against `package.json` in both directions. Declaring a setting without deciding how
+a headless run configures it now fails CI rather than shipping.
+
+**Three kinds of answer, because there are genuinely three.** The honest question is not "does every
+setting have an environment variable" — it is "can a person with no IDE configure this":
+
+- **`env`** — a variable, read from the environment or a `.env`. The four `telegram.*` settings had
+  none, which is the concrete gap this closes: the daemon can hold the reader lease and mirror
+  sessions, and until now there was no way to tell it to.
+- **`flag`** — where the setting is *consent* to something with a side effect. `--peers` opens SSH
+  connections, and a flag typed at the moment of use is a clearer consent than a variable inherited
+  from a shell profile. `session-sitter daemon` also gains `--workspace-root`, which is what makes
+  `supervisorRepoPath` genuinely reachable — for a service the working directory comes from a unit
+  file, not a shell.
+- **`ide`** — it configures the IDE surface and there is nothing headless to change. Each of the seven
+  carries its reason, because "no equivalent needed" is a claim, and an unexplained one is how a real
+  gap gets filed under this heading and forgotten. A `workspaceColors` variable would be a knob wired
+  to nothing, which is worse than its absence: it implies the terminal has a panel to colour.
+
+Precedence is unchanged and now uniform: an explicitly-set setting wins, otherwise the environment,
+otherwise the declared default. On the VS Code side that needs `inspect()` rather than `get()` —
+`get()` returns the manifest default for an unset setting, so an environment layer beneath it would be
+unreachable for every setting that has one, which is all four of the new ones.
+
+**Two bugs found by writing the guard, which is the argument for having it.**
+
+Three of the environment names in the first draft of the table were wrong: `BOB_CLI` for
+`BOB_CLI_PATH`, `CLAUDE_CLI` for `CLAUDE_CLI_PATH`, and a `CLASSIFIER_TIMEOUT_SECONDS` that has always
+been `CLAUDE_TIMEOUT_SECONDS`. So the guard checks each name against the source and the documentation
+rather than trusting the table: **a variable nobody reads is worse than none, because someone sets it
+and watches it do nothing.**
+
+And the first version of that name check was **vacuous.** It included `src/settingsBridge.ts` among the
+files searched — but the bridge reads variables *through* the table, so its own source contains every
+name the table holds, including a wrong one. Verified by planting a deliberately bogus name and
+watching the guard pass; evidence now has to come from somewhere the table did not write.
+
+One more thing the existing guard caught, exactly as designed: the first refactor passed the setting
+key through as a variable instead of a literal, which made all four `telegram.*` settings look unread
+and failed check 3. The literals are back, with a comment saying why they have to stay.
+
+### 0.8.14 — Rung 7 can ask a human now, and the hook holds the prompt open to do it
+
+Rung 7 had one answer: deny. Correct, and for a terminal session over SSH it was the *only* answer —
+there was no way for a person who was not at that terminal to say yes. `SESSION_SITTER_ESCALATE=on`
+adds one, and rung 7 becomes *ask a human, then fail closed.*
+
+**The prompt is held open rather than typed into, and that is the design.** The obvious way to answer a
+terminal session from a phone is to write into it — find the process, inject the keystrokes. This
+project has that machinery for the IDE (`ClaudeSender` reaches into the `anthropic.claude-code`
+extension host over the V8 inspector) and it cannot work for a bare `claude` in a terminal, which has
+no extension host to reach into. Inverting it is better, not merely available: `PermissionRequest` is
+**already** the synchronous decision point and is allowed 60 seconds, so nothing needs to write into
+the session at all. What comes back is a real permission decision that can cite a clause, rather than
+simulated typing, and it works identically in a tmux pane, over SSH, or in an IDE.
+
+**The hook never touches the messaging channel.** A bot token has one update stream and `getUpdates`
+consumes it destructively — and a hook runs *once per prompt*, so a hook that polled Telegram would be
+an unbounded number of competing readers, far worse than the two-window case the reader lease exists to
+prevent. So the hook writes an **ask** to a file and polls for a **verdict** beside it; the daemon is
+the single reader that posts it, correlates the reply and writes the verdict. The ask is promoted into
+an ordinary supervision record for that, which is what keeps it inside the *same* `pollResponses` call
+as every other pending decision — a second call would have consumed updates meant for the first, inside
+one process.
+
+**It refuses to wait for something nobody will answer.** With no daemon running, the ask cannot be
+delivered, so the hook denies immediately and names the command that fixes it rather than holding the
+agent still for 45 seconds first. A wedged daemon counts as none — it cannot deliver an ask either, and
+"the pid exists" is not the question. That is what the heartbeat's `stale` verdict is for.
+
+**A real safety bug found and fixed on the way.** `Orchestrator.replyApproves` approved on *any*
+approval word anywhere in the reply — so **"no, don't allow that" approved the call**, because it
+contains `allow`. Survivable while it only resolved Bob approvals; not survivable once a permission
+decision rides on the same parser. It now requires an approval word **and** no negation word.
+Requiring *every* word to be an approval was the other obvious fix and is worse — it rejects "yes
+please" and "ok go ahead", which is how people actually answer. There is still exactly one definition
+of "what counts as approval", and the escalation path deliberately does not add a second.
+
+Two things it will not do, both deliberate:
+
+- **One answer never becomes policy.** An escalated allow is not `settled`, so no standing permission
+  rule is derived from it even with `SESSION_SITTER_PERSIST_RULES=on`.
+- **Silence is still never approval.** The deadline passing is a denial, recorded with `actor: 'timeout'`
+  and a note saying a human was asked and did not answer.
+
+The wait is capped at 55s, below the event's own 60s budget, because a hook killed mid-wait returns no
+JSON at all — which Claude Code reports as a hook *error* rather than as a decision, and a governance
+layer whose failure mode is "no verdict" is not one.
+
+The heartbeat moved into `src/daemonHeartbeat.ts` so the hook can read it without importing the
+daemon. That import would have dragged the orchestrator, the supervisor factory, the Telegram client
+and the window registry into the closure of **every permission prompt**, to call three functions that
+read one small JSON file.
+
+### 0.8.13 — Nothing was expiring an escalation on a machine with no IDE
+
+*Silence is never approval* is this project's founding rule, and the mechanism behind it is a card
+expiring at its deadline. That mechanism ran in exactly two places: inside a VS Code window, or as
+`supervise poll --loop` typed by hand. On a terminal-only machine, neither. An escalated call did not
+fail closed at its deadline — it sat in `orange_awaiting_user` for as long as the state dir survived,
+which is the one outcome the rule says will not happen.
+
+`session-sitter daemon` is that loop as something you can leave on: correlate replies to escalations,
+and expire the ones nobody answered. `--once` for cron, `--status` for whether it is actually working,
+and a user systemd unit at `plugin/systemd/session-sitter-daemon.service`.
+
+**It is deliberately not "the extension's services, headless."** Most of that loop could not be lifted
+out, because on a terminal-only machine *its input does not exist*: `SupervisionService`,
+`AutoResponder` and `PendingWatcher` are all driven by IBM Bob's pending-approval queue, read through
+the VS Code extension host, and Bob is an IDE. A daemon that constructed them would be watching an
+empty room. Two jobs were genuinely homeless, and those are the two it does.
+
+**It does not apply decisions, and says so.** Reaching a paused agent means resolving a prompt through
+that agent's approval emitter, inside another VS Code extension's process — a terminal cannot get
+there. So the daemon counts the outbox backlog and reports that a window is needed, leaving every
+delivery where it is. The outbox moves a delivery to `done/` only on a confirmed apply, so a window
+opening later drains it; a daemon that discarded what it could not deliver would be worse than one
+that never ran.
+
+**One reader per machine, enforced rather than documented.** A bot token has one update stream and
+`getUpdates` consumes it destructively — two pollers split the replies at random and both look like
+they are working. The daemon takes the same `ReaderLease` the Telegram remote control uses and reads
+only while it holds it. Not holding it is not an error: a window is the reader, and it is already
+doing this work. What still runs in that state is **timeouts** — suppressing reads must never suppress
+expiry, or standing down would leave escalations pending past their deadline. Getting this right
+needed a channel wrapper, because `Orchestrator.poll()` reads replies and applies timeouts in one call
+and holds its channel privately: taking the lease without gating the read would have consumed the
+stream either way, and the lease would have been decoration.
+
+It also refuses to start when a live extension host is registered here, naming the pids. The lease
+alone cannot cover that case — with the remote interface off, `SupervisionService` polls Telegram
+*without* taking it, so nothing would arbitrate. `--allow-with-ide` is the override.
+
+**`--status` answers a question `systemctl status` cannot.** A pid does not say whether timeouts are
+being applied: pids are recycled, and a daemon wedged mid-pass is still a live pid and still
+`active (running)` to systemd. So every pass writes a heartbeat, and the status reads `running`,
+`stale` — *the process is up and the work has stopped*, in as many words — `dead`, or `single pass` for
+a finished `--once` run. That last one exists because reporting a working cron setup as `dead` with
+"nothing is applying timeouts" is a status line crying wolf, and those are the ones people stop
+reading. Staleness scales with `--interval`, so a ten-minute daemon is not called wedged for being
+nine minutes idle.
+
+A failed pass is logged and the loop continues — the point is to still be running in an hour, and a
+transient error inside a Telegram read is the likeliest thing to go wrong. `SIGINT`/`SIGTERM` finish
+the pass in flight, release the lease and exit 0.
+
+### 0.8.12 — The plugin was the one way in that did not get the CLI
+
+`docs/CLI.md` describes `session-sitter` as the front end for "people who never open the IDE", and the
+plugin — the way those people install this — shipped `audit/cli.js` and `policy/cli.js` and nothing
+else. So `log` and `policy check` worked from a slash command, and `status --watch`, `export --html`
+and `learn` existed only for someone who had cloned the repository. That is the opposite of the
+audience.
+
+`cli/index.js` is now in the plugin's build closure, which is derived rather than maintained: the
+whole `session-sitter` command and every module it requires, with the no-`vscode` invariant enforced on
+the way in as it is for the hooks. The slash commands point at it, so the terminal and the slash
+command can no longer disagree about what `log` means. `/session-sitter:learn` and
+`/session-sitter:export` are new, and `/session-sitter:status` now answers both of the questions it
+was being asked — the worklist from each agent's own store, and what the hooks have registered, which
+is the one that says whether governance is wired up at all. A session in the first list and not the
+second is running ungoverned.
+
+**A wall-clock timestamp nearly broke every CI run.** `cli/index.js` requires `buildInfo`, whose
+`BUILD_TIME` is stamped at compile time — and `plugin/lib/` is committed build output that
+`ci/check-plugin-lib.sh` verifies by rebuilding and diffing. CI compiles before it checks, so the
+rebuilt file would differ from the committed one on every single run, and the freshness guard would
+fail for a reason that has nothing to do with freshness. The fix is not a workaround but the more
+honest value: **a plugin is not built.** It is a git ref cloned into `~/.claude/plugins/cache/`, so
+there is no build for a build time to describe, and a timestamp there would name the moment some
+maintainer happened to run `make plugin`. The shipped `BUILD_TIME` is empty and `--version` prints the
+clause only when it has one. The build script fails loudly if the generated file's shape ever stops
+matching what it rewrites, because a silent no-op there would put CI back to failing every run.
+
+**The plugin manifest's version had drifted five patch releases behind** `package.json` — 0.8.0
+against 0.8.11 — because nothing read the two together. It is what names the directory an install is
+cloned into, and now that the version is baked into the shipped tree, a manifest claiming a different
+one makes `session-sitter --version` disagree with the plugin you installed. `ci/check-naming.sh`
+compares them.
+
+**On PATH, three ways, none of them needing VS Code.** `plugin/bin/session-sitter` is a launcher to
+symlink; it resolves its own symlinks, so when a plugin update makes the version-stamped link stale it
+says which path it resolved to and prints the re-link command instead of failing with a Node module
+error. Separately, `npx github:eranra/session-sitter` and `npm i -g github:eranra/session-sitter` now
+work: a `prepare` script builds `out/` on the way in, and a `.npmignore` keeps the tarball to the
+command — 444 kB against the 15 MB it started at, once the screenshots were excluded properly.
+(`.npmignore` and not a `files` array: **vsce refuses to run when both `.vscodeignore` and `files` are
+present**, so `files` would have broken the .vsix. The two packagings stay independent, which is worth
+having — they ship different things.)
+
+New tests spawn the shipped tree in a bare `node`, because the existing guard diffs bytes and a
+missing module is invisible to a byte diff — it shows up for the first time as a stack trace in front
+of a user at a permission prompt. They also assert every script a slash command runs exists in
+`plugin/lib` and is declared in `allowed-tools`, which nothing caught before: the manifest validates,
+the tree diffs clean, the tests pass, and the command fails the first time someone types it.
+
+### 0.8.11 — `log` could not see the trail the hooks had been writing all along
+
+On a machine with no VS Code, the plugin's hooks are the only front end running, and
+`decisions.jsonl` is the only governance record there is. `session-sitter log` did not read it. Nor
+did `digest`, nor `policy check --replay`. All three answered:
+
+```
+No supervision state found. Looked in:
+  /home/u/repo/.supervisor-state
+  /home/u/.config/Code/User/globalStorage/eranra.session-sitter/state
+```
+
+— on machines that had been recording every decision for weeks. Two things were wrong at once. The
+hooks write `<dataDir>/decisions.jsonl`, where `dataDir` is `$CLAUDE_PLUGIN_DATA` or
+`~/.claude/session-sitter`; the readers looked for `<stateDir>/audit.jsonl`. **Different directory,
+different filename** — and nothing in the repository writes `audit.jsonl` at all, so the writer the
+reader was built around did not exist yet. `export` had been reading the hook trail correctly the
+whole time, which is why the gap survived: two of the five commands worked.
+
+The fix reads the hook trail **as well as** the state dir, not as another candidate for it. Those are
+different kinds of store in different places, and a machine can have both — an IDE window supervising
+sessions, and terminal sessions governed by the same practices. Picking one and hiding the other is
+the worst failure available to an evidence tool.
+
+`decisions.jsonl` is a different shape from `audit.jsonl`, not a differently-spelled one, and every
+difference is resolved by recording what the writer knew:
+
+- a rewrite is stored as `decision: "allow"` with `rewritten: true`, and reads as outcome
+  **`correct`** — the correction lane is the distinction this trail exists to make;
+- `decision: "none"` means the hook reached no verdict, and reads as **`unknown`**, never `allow`. A
+  layer that records a decision it did not take is a layer whose trail cannot be used as evidence;
+- `actor` keeps the rung that answered (`deterministic`, `policy`, `correction`) rather than being
+  flattened to `rule`. Only `model` is translated, to `classifier`, so all three writers use one word
+  for "a model decided this";
+- no `host`, no session name, no cost. The hook records token counts, and turning those into money
+  inside a reader would mean pinning prices where nobody could trace them.
+
+`--state-dir` is unchanged and now documented as what it always was: one directory and nothing else,
+the hook trail excluded. Being told where to look and reading somewhere else as well is not a favour
+either.
+
+Every command already named the directory it read; that line now names what it **actually** read,
+both stores when both are in play. It was misreporting in the new case — decisions from the hook trail
+printed under a state dir path that need not even exist. `log --json` and `digest --json` gain
+`hookTrail` additively; `stateDir` keeps its meaning and its key.
+
+### 0.8.10 — The mirror was showing you 250 characters of the answer
+
+Telegram topics mirrored a session's turns, and the turns arrived cut off. Not at Telegram's
+4096-character message cap, which would at least have been most of an answer — at **250 characters**,
+because the mirror was reading `getRecentExchanges`, the function written for the preview bubbles the
+Sessions panel draws beside each session. 250 characters is a good preview when the session is on
+screen next to it. It is unusable as the only thing you can see of an answer you have to reply to,
+and the part you need is almost always the end.
+
+Three losses were stacked, and only the last was Telegram's:
+
+- the reader capped assistant text at 250 characters and user text at 150,
+- it took only the **first** text block of a message, so an answer written around a tool call came
+  back as its opening sentence, and
+- the renderer then truncated whatever survived at 4096.
+
+So `getRecentExchanges` grew a `full` option: no caps, every text block joined, and a tail read
+widened from 32 KB to 1 MB — because a record larger than the window is not truncated but *lost*, the
+read starting mid-line and the JSON no longer parsing. The panel and `AutoResponder` call it without
+the option and are unchanged to the character.
+
+A long turn is now **split** across messages rather than cut, numbered `(1/3)`, `(2/3)`, `(3/3)`, on
+paragraph, line or word boundaries. `sessionSitter.telegram.fullMessages` turns this on and **is on
+by default**; `sessionSitter.telegram.maxMessageParts` is the budget, 4 by default and 20 at most.
+Past the budget the last message names the exact number of characters left out and points at
+**📄 Full transcript**.
+
+The ceiling is Telegram's own: about 20 messages a minute to one group. Splitting and the
+four-turns-per-pass cap pull against each other — four turns at four parts each is most of a minute's
+allowance — so the budget is not shared out evenly. **The newest turn of a pass gets all of it and
+the earlier ones get one message each**, because the last turn is the one being answered and the
+ones before it are context you skim. Worst case per pass is three messages plus the budget.
+
+One thing that quietly stops being broken: echo suppression, which keeps a prompt sent from Telegram
+from being posted back as a duplicate, compares the sent text against the transcript's. A prompt over
+150 characters was read back truncated, failed the match, and came back. The comparison also moved
+into `planMirror`, ahead of splitting, so a prompt long enough to be split is still recognised.
+
 ### 0.8.9 — A window can be alive with nobody in it
 
 0.8.8 stopped a closed window's finished sessions from sitting in the worklist forever, by making a

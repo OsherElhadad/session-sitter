@@ -11,8 +11,11 @@
  *
  * Telegram is not a terminal, and three of its limits are load-bearing here:
  *
- *  - A message body caps at 4096 characters. A transcript is far larger, so it is never a
- *    message — long text is truncated with a pointer to the uploaded file.
+ *  - A message body caps at 4096 characters. A whole transcript is far larger, so it is never a
+ *    message — that is what the file upload is for. A single **turn** is a different matter: it is
+ *    the thing you have to read in order to answer, so it is split across as many messages as it
+ *    needs (`splitMessages`) rather than cut off. Truncation is left to the surfaces that are
+ *    re-rendered every pass — the fleet list, the topic header — where the tail carries nothing.
  *  - A forum topic name caps at 128 characters.
  *  - A bot may send on the order of 20 messages per minute to one group. A busy agent produces
  *    far more turns than that, so mirroring *must* drop and summarise rather than queue. Queuing
@@ -31,6 +34,25 @@ export const MAX_MESSAGE_CHARS = 4096;
 export const MAX_TOPIC_NAME_CHARS = 128;
 /** Turns posted per mirror pass, per topic. Overflow collapses into one summary line. */
 export const MAX_TURNS_PER_PASS = 4;
+/** Messages one turn may be split into, by default. See `sessionSitter.telegram.maxMessageParts`. */
+export const MAX_MESSAGE_PARTS_DEFAULT = 4;
+/**
+ * The most parts the setting may ask for.
+ *
+ * 20 is Telegram's own per-minute allowance for one group, so a single turn is never permitted to
+ * spend more than a minute's worth of the group's budget however the setting is turned up.
+ */
+export const MAX_MESSAGE_PARTS_LIMIT = 20;
+
+/**
+ * Room held back on the final part for the "there was more" pointer.
+ *
+ * A fixed reserve rather than a fitted one: the pointer's length depends on the number of
+ * characters dropped, which depends on where the cut lands, which depends on the reserve. Sizing it
+ * once for the longest pointer anyone will ever see breaks the circle and costs a few characters of
+ * a 4096-character message.
+ */
+const POINTER_RESERVE = 64;
 
 /**
  * One glyph per status, matched as closely to the panel's marker as characters allow.
@@ -262,7 +284,11 @@ export function renderTopicHeader(
     `session: ${session.sessionId}`,
   ];
   if (owner.pid !== null) {
-    lines.push(`window: pid ${owner.pid} (${owner.basis === 'holds' ? 'has it open' : 'owns the workspace'})`);
+    // Named for what it is. Calling the daemon a "window" would tell a reader they can type here,
+    // which is the one thing a daemon-held session cannot do.
+    lines.push(owner.basis === 'daemon'
+      ? `daemon: pid ${owner.pid} (no IDE window here)`
+      : `window: pid ${owner.pid} (${owner.basis === 'holds' ? 'has it open' : 'owns the workspace'})`);
   }
   lines.push('');
   lines.push(blockedReason === null
@@ -271,10 +297,99 @@ export function renderTopicHeader(
   return truncate2(lines.join('\n'));
 }
 
-/** One mirrored transcript turn. */
-export function renderTurn(turn: MessageExchange): string {
+/**
+ * Where to cut `text` so the first piece is at most `limit` characters and still readable.
+ *
+ * Boundaries in preference order — paragraph, line, word — and a hard cut only when none of them
+ * lands late enough to be worth taking. The `0.5` floor is what stops a boundary near the start
+ * from turning a 4000-character part into a 200-character one and spending a message on it: an
+ * early newline is a worse cut than a clean word break at the end.
+ */
+function cutAt(text: string, limit: number): number {
+  if (text.length <= limit) { return text.length; }
+  const window = text.slice(0, limit);
+  const floor = limit * 0.5;
+  for (const sep of ['\n\n', '\n', ' ']) {
+    const at = window.lastIndexOf(sep);
+    if (at > floor) { return at; }
+  }
+  return limit;
+}
+
+/** How many characters the separator at a cut point occupies, so it is not duplicated. */
+function separatorWidth(text: string, at: number): number {
+  if (text.startsWith('\n\n', at)) { return 2; }
+  if (text.startsWith('\n', at) || text.startsWith(' ', at)) { return 1; }
+  return 0;
+}
+
+/**
+ * Split one body into as many Telegram messages as it needs, up to `maxParts`.
+ *
+ * This is the function the feature exists for. Telegram caps a message at 4096 characters, and the
+ * mirror used to answer that by cutting the text off — which is fine for a list that is re-rendered
+ * every pass and useless for an agent's answer, because the part you need in order to reply is
+ * usually the end. So a long body becomes several messages instead of one short one.
+ *
+ * `lead` is the speaker icon, repeated on every part: Telegram renders each message as its own
+ * bubble, so a continuation with no icon reads as though someone else said it.
+ *
+ * Numbering (`(2/5)`) appears only when there is more than one part, because it would otherwise be
+ * noise on the overwhelming majority of turns. It is written into the body rather than being
+ * inferred from message order for a reason: a mirror pass can interleave turns from several
+ * sessions, and a retry after a rate limit can arrive out of order.
+ *
+ * When the body outruns the budget the last part ends with the exact number of characters not
+ * shown, and points at the transcript upload — a count is actionable ("that answer was three times
+ * what I got") where a bare ellipsis is not.
+ */
+export function splitMessages(lead: string, body: string, maxParts: number): string[] {
+  const text = body.trim();
+  const parts = Math.max(1, Math.floor(maxParts));
+  if (lead.length + text.length <= MAX_MESSAGE_CHARS) { return [`${lead}${text}`]; }
+
+  // Held back on every part, numbered or not, so a part's tag cannot push it past the limit.
+  const tag = `(${parts}/${parts}) `.length;
+  const limit = MAX_MESSAGE_CHARS - lead.length - tag;
+
+  const bodies: string[] = [];
+  let rest = text;
+  while (rest.length > 0 && bodies.length < parts) {
+    const last = bodies.length === parts - 1;
+    // On the final allowed part, take the whole remainder when it fits: reserving pointer room
+    // unconditionally would leave a few characters over and report "… 12 more characters" on a
+    // body that had actually finished.
+    if (last && rest.length > limit) {
+      const at = cutAt(rest, limit - POINTER_RESERVE);
+      bodies.push(rest.slice(0, at).trimEnd());
+      rest = rest.slice(at + separatorWidth(rest, at));
+      break;
+    }
+    const at = cutAt(rest, limit);
+    bodies.push(rest.slice(0, at).trimEnd());
+    rest = rest.slice(at + separatorWidth(rest, at));
+  }
+
+  const total = bodies.length;
+  const out = bodies.map((part, i) => (total === 1
+    ? `${lead}${part}`
+    : `${lead}(${i + 1}/${total}) ${part}`));
+  if (rest.length > 0) {
+    out[out.length - 1]
+      += `\n… ${rest.length} more characters — use 📄 Full transcript`;
+  }
+  return out;
+}
+
+/**
+ * One mirrored transcript turn, as the messages it takes to say it.
+ *
+ * `maxParts` defaults to 1, which keeps the single-message-per-turn shape the mirror had before
+ * splitting existed — so a caller that has not opted in is unaffected.
+ */
+export function renderTurn(turn: MessageExchange, maxParts = 1): string[] {
   const icon = turn.role === 'user' ? '🧑' : '🤖';
-  return truncate2(`${icon} ${turn.text.trim()}`);
+  return splitMessages(`${icon} `, turn.text, maxParts);
 }
 
 export interface MirrorPlan {
@@ -282,6 +397,18 @@ export interface MirrorPlan {
   messages: string[];
   /** New cursor value to persist once every message is posted. */
   nextCursor: number;
+}
+
+export interface MirrorOptions {
+  /** Messages the newest turn of a pass may be split into. 1 is the old truncating behaviour. */
+  maxParts?: number;
+  /**
+   * Text this window recently injected, so the mirror does not echo the user's own prompt back.
+   *
+   * Compared here, against the turn, rather than against the rendered message: a prompt long enough
+   * to be split carries a `(1/2)` tag and a speaker icon, and would never match what was sent.
+   */
+  recentlySent?: string[];
 }
 
 /**
@@ -292,24 +419,40 @@ export interface MirrorPlan {
  * recent `MAX_TURNS_PER_PASS` are posted and the rest are acknowledged in one line — the cursor
  * still advances past all of them, because the skipped turns are in the transcript the user can
  * fetch, and pretending otherwise would replay them forever.
+ *
+ * ## Who gets the parts budget
+ *
+ * Splitting long turns and capping turns per pass pull against each other: four turns at four parts
+ * each is sixteen messages, most of a minute's allowance for the whole group. So the budget is not
+ * shared out evenly — **the newest turn of the pass gets all of it, and the older ones get one part
+ * each.** When several turns arrive together the last is the one being answered, and the earlier
+ * ones are context you skim. That holds the worst case to `MAX_TURNS_PER_PASS - 1` plus the budget,
+ * and spends the messages on the text that is actually about to be read.
+ *
+ * The cursor counts **turns**, never messages, so a turn that took five messages is still one step
+ * — counting messages would leave the cursor short and replay the tail of every long answer.
  */
 export function planMirror(
-  turns: MessageExchange[], cursor: number,
+  turns: MessageExchange[], cursor: number, opts: MirrorOptions = {},
 ): MirrorPlan {
   if (turns.length <= cursor) { return { messages: [], nextCursor: turns.length }; }
+  const maxParts = Math.max(1, Math.floor(opts.maxParts ?? 1));
   const fresh = turns.slice(cursor);
-  if (fresh.length <= MAX_TURNS_PER_PASS) {
-    return { messages: fresh.map(renderTurn), nextCursor: turns.length };
+  const skipped = Math.max(0, fresh.length - MAX_TURNS_PER_PASS);
+  const shown = skipped > 0 ? fresh.slice(-MAX_TURNS_PER_PASS) : fresh;
+
+  const messages: string[] = skipped > 0
+    ? [`… ${skipped} earlier turn${skipped === 1 ? '' : 's'} not shown — use Full transcript`]
+    : [];
+  const sent = opts.recentlySent ?? [];
+  for (const [i, turn] of shown.entries()) {
+    // A prompt sent from Telegram comes back as a user turn. It is already on screen as the
+    // sender's own message, so reposting it reads as a duplicate send. The cursor still advances.
+    if (turn.role === 'user' && isEchoOfSent(turn.text, sent)) { continue; }
+    const newest = i === shown.length - 1;
+    messages.push(...renderTurn(turn, newest ? maxParts : 1));
   }
-  const skipped = fresh.length - MAX_TURNS_PER_PASS;
-  const shown = fresh.slice(-MAX_TURNS_PER_PASS);
-  return {
-    messages: [
-      `… ${skipped} earlier turn${skipped === 1 ? '' : 's'} not shown — use Full transcript`,
-      ...shown.map(renderTurn),
-    ],
-    nextCursor: turns.length,
-  };
+  return { messages, nextCursor: turns.length };
 }
 
 /**
@@ -362,7 +505,9 @@ export function renderWho(entries: ListEntry[], hostname: string): string {
   for (const { session, owner } of entries) {
     const who = owner.pid === null
       ? 'nobody — read-only'
-      : `pid ${owner.pid} · ${owner.basis === 'holds' ? 'has it open' : 'owns workspace'}`;
+      : owner.basis === 'daemon'
+        ? `pid ${owner.pid} · daemon, mirror only`
+        : `pid ${owner.pid} · ${owner.basis === 'holds' ? 'has it open' : 'owns workspace'}`;
     lines.push(`${statusIcon(session.status)} ${sessionLabel(session, 30)} → ${who}`);
   }
   return truncate2(lines.join('\n'));

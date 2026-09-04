@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { SessionManager } from './SessionManager';
 import { SessionSitterViewProvider } from './SessionSitterViewProvider';
 import { InspectorBobSender, type AutoRespondRule } from './agents/BobSender';
@@ -28,7 +29,8 @@ import { SessionExporter } from './SessionExporter';
 import { SupervisorOutbox } from './SupervisorOutbox';
 import { SupervisionService } from './SupervisionService';
 import { resolveStateDir, resolveWorkspaceRoot } from './supervisionPaths';
-import { supervisorConfigFromSettings } from './supervisorSettings';
+import { supervisorConfigFromSettings, userValue } from './supervisorSettings';
+import { layeredSettingsReader } from './settingsBridge';
 import { ensureDirs, recordsDir, type SupervisorConfig } from './supervisor/config';
 import { buildChannel } from './supervisor/factory';
 import type { MessagingChannel } from './supervisor/messaging';
@@ -285,16 +287,38 @@ export function activate(context: vscode.ExtensionContext) {
   // is handed its updates instead of polling for them.
   //
   // The adapter spells each setting name out in a direct read rather than forwarding the caller's
-  // string. That is the form `ci/check-settings.mjs` recognises, so these two keys count as read
+  // string. That is the form `ci/check-settings.mjs` recognises, so these keys count as read
   // and cannot silently drift from their `package.json` declarations.
-  const remoteControlSettings: SettingsReader = {
-    getBoolean: (key, fallback) => (key === 'telegram.remoteControl'
-      ? cfg.get<boolean>('telegram.remoteControl', fallback)
-      : fallback),
-    getStringArray: (key, fallback) => (key === 'telegram.allowedUserIds'
-      ? cfg.get<string[]>('telegram.allowedUserIds', fallback)
-      : fallback),
+  //
+  // Layered over the environment, the same precedence `applySupervisorSettings` applies: a setting the
+  // user actually set wins, otherwise the variable, otherwise the declared default. That is what lets
+  // one machine be configured once and read the same way by a window and by `session-sitter daemon`.
+  //
+  // `inspect()` rather than `get()` is load-bearing here. `get()` returns the manifest default for an
+  // unset setting, so an env layer beneath it would be unreachable for every setting that has a
+  // default — which is all four of these.
+  // Each key stays a *literal* in a `userValue` call. That is the form `ci/check-settings.mjs`
+  // recognises, so these four still count as read and cannot silently drift from their `package.json`
+  // declarations — passing `key` straight through would have been shorter and would have made all four
+  // look unread, which is the drift the guard exists to catch.
+  const explicitTelegram = {
+    getBoolean: (key: string): boolean | undefined => {
+      if (key === 'telegram.remoteControl') {
+        return userValue<boolean>(cfg, 'telegram.remoteControl');
+      }
+      if (key === 'telegram.fullMessages') {
+        return userValue<boolean>(cfg, 'telegram.fullMessages');
+      }
+      return undefined;
+    },
+    getStringArray: (key: string): string[] | undefined => (key === 'telegram.allowedUserIds'
+      ? userValue<string[]>(cfg, 'telegram.allowedUserIds')
+      : undefined),
+    getNumber: (key: string): number | undefined => (key === 'telegram.maxMessageParts'
+      ? userValue<number>(cfg, 'telegram.maxMessageParts')
+      : undefined),
   };
+  const remoteControlSettings: SettingsReader = layeredSettingsReader(explicitTelegram);
   const remoteControlConfig = remoteControlConfigFrom(remoteControlSettings, supervisorConfig);
   const remoteControlActive = remoteControlConfig.enabled && !!remoteControlConfig.botToken
     && !!remoteControlConfig.chatId && remoteControlConfig.allowedUserIds.length > 0;
@@ -410,7 +434,14 @@ export function activate(context: vscode.ExtensionContext) {
       bobSender: sender,
       claudeSender,
       launcher: new VsCodeSessionLauncher(
-        log, (sessionId, source) => provider.focusSession(sessionId, source)),
+        log,
+        (sessionId, source) => provider.focusSession(sessionId, source),
+        {
+          // The first message is what turns a freshly opened panel into a session with a transcript,
+          // which is what makes it appear in the worklist and gives its topic something to mirror.
+          sendToSession: (sessionId, text) => claudeSender.sendToSession(sessionId, text),
+          host: os.hostname().split('.')[0],
+        }),
       api: defaultApi(remoteControlConfig.botToken),
       log,
       // Supervision no longer polls for itself, so its updates are forwarded here.

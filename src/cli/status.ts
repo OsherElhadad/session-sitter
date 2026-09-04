@@ -13,12 +13,27 @@ import {
   collectSessions, filterSessions, localHost, peerHost,
   type CollectOptions, type Worklist,
 } from './sessions';
+import { canInject, type Ownership } from '../telegram/ownership';
 import { CliError, flagBool, flagNumber, flagString, parseFlags, type FlagSpec } from './args';
 import { humanAge, parseSince } from './time';
 import {
   CLEAR_SCREEN, HIDE_CURSOR, SHOW_CURSOR, colorEnabled, painter, table,
   type ColorName, type Io, type Paint,
 } from './render';
+
+/**
+ * What is responsible for a session, in one column.
+ *
+ * The distinction the column exists to draw is not "who" but **what can be done**: an IDE window can
+ * have text written into it, and the daemon cannot — it mirrors the session and answers the permission
+ * prompts it raises. Printing both as a pid would hide the only difference that matters.
+ */
+function ownerLabel(owner: Ownership | undefined, paint: Paint): string {
+  if (owner === undefined || owner.pid === null) { return paint('read-only', 'dim'); }
+  return owner.basis === 'daemon'
+    ? paint(`daemon ${owner.pid}`, 'dim')
+    : `window ${owner.pid}`;
+}
 
 /** Every order `--sort` accepts — the same six the panel's sort menu offers. */
 const SORT_MODES: readonly string[] = SESSION_SORT_MODES.map(m => m.id);
@@ -45,6 +60,7 @@ Options:
                       (default: ${DEFAULT_SORT} — most urgent first)
   --peers             also pull sessions from peer machines over SSH
   --watch [SECONDS]   redraw in place every SECONDS (default: 5); Ctrl-C to stop
+  --owners            add a column naming what is responsible for each session
   --json              machine-readable output (see docs/CLI.md for the contract)
   -h, --help          show this help
 
@@ -67,6 +83,7 @@ const SPEC: FlagSpec = {
   '--sort': 'string',
   '--peers': 'boolean',
   '--watch': 'optionalNumber',
+  '--owners': 'boolean',
   '--json': 'boolean',
   '--help': 'boolean',
   '-h': 'boolean',
@@ -104,6 +121,7 @@ interface StatusOptions {
   needsMe: boolean;
   sort: string;
   peers: boolean;
+  owners: boolean;
   json: boolean;
   watchSeconds?: number;
 }
@@ -135,6 +153,7 @@ function parse(argv: readonly string[], io: Io): StatusOptions {
     needsMe: flagBool(args, '--needs-me'),
     sort,
     peers: flagBool(args, '--peers'),
+    owners: flagBool(args, '--owners'),
     json: flagBool(args, '--json'),
   };
   if (!all) { options.since = parseSince(sinceFlag ?? DEFAULT_WINDOW, io.now()); }
@@ -157,7 +176,7 @@ function parse(argv: readonly string[], io: Io): StatusOptions {
 async function worklist(
   options: StatusOptions, collect: Collect,
 ): Promise<{ sessions: ClaudeSession[]; source: Worklist }> {
-  const source = await collect({ peers: options.peers });
+  const source = await collect({ peers: options.peers, owners: options.owners });
   const filtered = filterSessions(source.sessions, {
     since: options.since, agent: options.agent, needsMe: options.needsMe,
   });
@@ -198,6 +217,7 @@ export function renderText(
   const paint = painter(colorEnabled(io));
   const now = io.now();
   const showMachine = sessions.some(s => s.peer) || source.peers.length > 0;
+  const owners = source.owners;
 
   const lines = [summary(sessions, options, paint, now), ''];
 
@@ -211,6 +231,7 @@ export function renderText(
       { header: 'AGENT' },
       { header: 'WORKSPACE', max: 24 },
       ...(showMachine ? [{ header: 'MACHINE' }] : []),
+      ...(owners !== undefined ? [{ header: 'OWNER' }] : []),
       { header: 'UPDATED', right: true },
     ];
     const here = localHost();
@@ -223,6 +244,8 @@ export function renderText(
         AGENTS[s.source] ?? s.source,
         s.projectName || paint('(no workspace)', 'dim'),
         ...(showMachine ? [s.peer ? peerHost(s.peer) : paint(here, 'dim')] : []),
+        ...(owners !== undefined
+          ? [ownerLabel(owners.get(s.sessionId), paint)] : []),
         humanAge(s.updatedAt, now),
       ];
     });
@@ -272,9 +295,36 @@ export interface StatusJson {
     blockedOnYou: boolean;
     updatedAt: string;
     ageSeconds: number;
+    /**
+     * What is responsible for the session — present only under `--owners`, and null when nothing on
+     * this machine claims it.
+     *
+     * `canWrite` is the field to branch on. A `daemon` owner is responsible for the session and cannot
+     * have text written into it: injection goes through the agent's own extension host, which only
+     * runs inside VS Code.
+     */
+    owner?: { kind: 'window' | 'daemon'; pid: number; basis: string; canWrite: boolean } | null;
   }>;
   /** Reachability of each peer machine. Empty unless `--peers` was given. */
   peers: Array<{ peer: string; reachable: boolean; sessionCount: number | null; error: string | null }>;
+}
+
+/** One session's owner, in the `--json` shape. Null when nothing on this machine claims it. */
+function ownerJson(owner: Ownership | undefined): {
+  kind: 'window' | 'daemon';
+  pid: number;
+  basis: string;
+  canWrite: boolean;
+} | null {
+  if (owner === undefined || owner.pid === null) { return null; }
+  return {
+    kind: owner.basis === 'daemon' ? 'daemon' : 'window',
+    pid: owner.pid,
+    basis: owner.basis,
+    // The field that matters, and computed once here rather than at each call site: a daemon owns the
+    // session and still cannot have text written into it.
+    canWrite: canInject(owner),
+  };
 }
 
 export function renderJson(
@@ -297,6 +347,10 @@ export function renderJson(
       blockedOnYou: isBlockedOnYou(s.status),
       updatedAt: s.updatedAt.toISOString(),
       ageSeconds: Math.max(0, Math.round((now.getTime() - s.updatedAt.getTime()) / 1000)),
+      // Additive, and present only when it was asked for: a consumer written against version 1 before
+      // this existed reads every other key unchanged, and one that did not pass `--owners` sees no
+      // key rather than a null it might read as "nothing claims it".
+      ...(source.owners !== undefined ? { owner: ownerJson(source.owners.get(s.sessionId)) } : {}),
     })),
     peers: source.peers.map(p => ({
       peer: p.peer,

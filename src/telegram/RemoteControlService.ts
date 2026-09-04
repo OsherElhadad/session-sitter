@@ -46,15 +46,20 @@ import {
   claimCommand, dropCommand, expiredCommands, newCommandId, postCommand, postResult,
   readPendingCommands, takeResults, leasePath, sweep, type BusCommand,
 } from './bus';
-import { startupBlocker, type RemoteControlConfig } from './config';
+import { effectiveMessageParts, startupBlocker, type RemoteControlConfig } from './config';
 import { ForumApi, type ReplyMarkup } from './forum';
 import { classifyUpdate, decodeCallback, encodeCallback, type Intent } from './intent';
 import { ReaderLease, LEASE_RENEW_MS } from './lease';
-import { resolveOwner, resolveOwners, writeBlockedReason, type Ownership } from './ownership';
+import {
+  daemonClaimantFrom, resolveOwner, resolveOwners, writeBlockedReason,
+  type DaemonClaimant, type Ownership,
+} from './ownership';
+import { health, heartbeatPath, readHeartbeat } from '../daemonHeartbeat';
 import {
   fleetSignature, planMirror, renderFleetList, renderHelp, renderHistoryList, renderTopicHeader,
   renderWho, sessionLabel, topicName, type ListEntry,
 } from './render';
+import { chooseLaunchTarget, targetCaveat } from './newSession';
 import { TopicStore, topicsToDelete, type TopicRecord } from './topics';
 import { routeUpdate } from './updateRouter';
 
@@ -208,10 +213,15 @@ export class RemoteControlService {
     try {
       isReader = await this.lease.tryAcquire();
       const windows = await readLiveWindows({ homedir: this.deps.homedir });
+      // A daemon on this machine is the claimant of last resort, below both window tiers. Read here
+      // as well as in the daemon so a window and the daemon compute the *same* owner for the same
+      // session — two surfaces disagreeing about who is responsible is worse than either being wrong,
+      // because then neither answer can be trusted.
+      const daemon = await this.daemonClaimant();
       const { active, history } = await this.deps.partition();
       const all = [...active, ...history];
       const fleet: FleetView = {
-        active, history, all, owners: resolveOwners(all, windows), windows,
+        active, history, all, owners: resolveOwners(all, windows, daemon), windows,
       };
 
       await this.mirrorOwnedSessions(active, fleet.owners);
@@ -328,7 +338,10 @@ export class RemoteControlService {
     }
 
     const turns = await this.turnsOf(session.sessionId);
-    const plan = planMirror(turns, record.mirroredTurns);
+    const plan = planMirror(turns, record.mirroredTurns, {
+      maxParts: effectiveMessageParts(this.deps.config),
+      recentlySent: this.recentlySent.get(session.sessionId) ?? [],
+    });
     // Reopen before posting, not after: Telegram will not take a message into a closed topic, so
     // posting first would drop the very turns that justified the reopen.
     if (record.closed && plan.messages.length > 0) {
@@ -339,12 +352,7 @@ export class RemoteControlService {
         changed = true;
       }
     }
-    const sentTexts = this.recentlySent.get(session.sessionId) ?? [];
     for (const message of plan.messages) {
-      // Skip the echo of a prompt this window just injected — it is already visible as the user's
-      // own Telegram message, and posting it again reads as a duplicate send.
-      const body = message.replace(/^🧑 /, '');
-      if (message.startsWith('🧑 ') && sentTexts.some(s => s.trim() === body.trim())) { continue; }
       const posted = await this.forum.send(message, record.threadId);
       if (!posted.ok) {
         this.log(`remote control: mirror post failed on ${record.threadId}: ${posted.error}`);
@@ -473,9 +481,17 @@ export class RemoteControlService {
     }
   }
 
+  /**
+   * The recent turns of a session, whole rather than excerpted when full mode is on.
+   *
+   * The excerpt the panel uses is 250 characters, which is a reasonable preview beside the session
+   * and useless as the only thing you can see of an answer you have to reply to. So the mirror asks
+   * for the full text and `planMirror` splits it across messages.
+   */
   private async turnsOf(sessionId: string) {
     try {
-      return await this.deps.sessionManager.getRecentExchanges(sessionId);
+      return await this.deps.sessionManager.getRecentExchanges(
+        sessionId, { full: this.deps.config.fullMessages });
     } catch {
       return [];
     }
@@ -528,17 +544,56 @@ export class RemoteControlService {
   private async readerPass(fleet: FleetView): Promise<void> {
     await this.pruneInactiveTopics(fleet.active, fleet.history);
     await this.refreshListIfChanged(fleet.active, fleet.owners);
-    await this.reportResults();
+    await this.reportResults(fleet);
     await this.reportUnroutable();
     await this.pollUpdates(fleet);
   }
 
   /** Post each finished command's outcome into the topic it came from. */
-  private async reportResults(): Promise<void> {
+  private async reportResults(fleet: FleetView): Promise<void> {
     for (const result of await takeResults(this.deps.homedir)) {
       const prefix = result.ok ? '✅' : '⚠';
-      await this.forum.send(`${prefix} ${result.detail}`, result.threadId || null);
+      // A `newSession` result carries the id of what it started, so its topic is created here rather
+      // than waited for. The mirror only makes topics for sessions in the *active worklist*, and the
+      // worklist is built from transcripts — so before this, a freshly started session had no topic
+      // until somebody spoke to it in the IDE, which is exactly what they were trying to do from here.
+      const threadId = result.sessionId
+        ? await this.ensureTopicForNewSession(result.sessionId, fleet)
+        : null;
+      await this.forum.send(`${prefix} ${result.detail}`, threadId ?? result.threadId ?? null);
     }
+  }
+
+  /**
+   * The topic for a session that has just been started, creating it if the mirror has not yet.
+   *
+   * Returns the thread to report into, or null when no topic could be made — in which case the caller
+   * still reports, in General. A launch the user cannot read about is worse than one reported in the
+   * wrong place.
+   *
+   * The session is usually not in `fleet.all` yet: this runs on the same pass that started it, and the
+   * worklist was read before it existed. So a minimal stand-in is built from the id when it is absent,
+   * which is enough for a topic name and header — and the next pass replaces the header with the real
+   * one once the transcript is on disk.
+   */
+  private async ensureTopicForNewSession(
+    sessionId: string, fleet: FleetView,
+  ): Promise<number | null> {
+    const existing = await this.topics.bySession(sessionId);
+    if (existing !== null) { return existing.threadId; }
+
+    const known = fleet.all.find(s => s.sessionId === sessionId);
+    const session: ClaudeSession = known ?? {
+      sessionId,
+      projectName: '',
+      projectPath: '',
+      title: 'new session',
+      updatedAt: new Date(this.now()),
+      status: 'working',
+      source: 'claude',
+    };
+    const record = await this.createTopicFor(session, fleet.owners.get(sessionId));
+    return record?.threadId ?? null;
   }
 
   /**
@@ -807,12 +862,21 @@ export class RemoteControlService {
    * what makes a workspace controllable, so this cannot offer a target that nothing could run.
    */
   private async sendNewMenu(windows: WindowEntry[]): Promise<void> {
+    // One entry per distinct folder, with the window chosen by `chooseLaunchTarget` rather than by
+    // "whichever listed it first". That pairing was the bug behind a session opening somewhere the
+    // user had not picked: a folder in a multi-root window would open a panel whose session reported
+    // one of that window's *other* folders, silently.
+    const folders = [...new Set(windows.flatMap(w => w.workspaceFolders))];
     this.lastNewMenu = [];
-    for (const w of windows) {
-      for (const folder of w.workspaceFolders) {
-        if (!this.lastNewMenu.some(e => e.workspace === folder)) {
-          this.lastNewMenu.push({ workspace: folder, pid: w.pid });
-        }
+    const caveats: string[] = [];
+    for (const folder of folders) {
+      const target = chooseLaunchTarget(windows, folder);
+      if (target.certainty === 'none') { continue; }
+      this.lastNewMenu.push({ workspace: folder, pid: target.pid });
+      const caveat = targetCaveat(target);
+      if (caveat !== null) {
+        const name = folder.split(/[/\\]/).pop() ?? folder;
+        caveats.push(`· ${name}: ${caveat}`);
       }
     }
     if (this.lastNewMenu.length === 0) {
@@ -826,7 +890,12 @@ export class RemoteControlService {
         { text: `bob · ${name}`.slice(0, 40), callback_data: encodeCallback({ kind: 'launch', index, source: 'bob' }) },
       ]];
     });
-    await this.forum.send('Start a new session where?', null, { inline_keyboard: rows });
+    // Warned before the tap, not after: once the session exists in the wrong folder the only remedy is
+    // to close it and start again, which costs the round trip the warning would have saved.
+    const text = caveats.length === 0
+      ? 'Start a new session where?'
+      : `Start a new session where?\n\nSome folders cannot be guaranteed:\n${caveats.join('\n')}`;
+    await this.forum.send(text, null, { inline_keyboard: rows });
   }
 
   /**
@@ -1051,9 +1120,22 @@ export class RemoteControlService {
     return sent.ok;
   }
 
+  /**
+   * The `session-sitter daemon` on this machine, when one is running and working.
+   *
+   * `running` and nothing else: a wedged daemon claiming sessions would take them off the read-only
+   * tier and then fail to serve them, and the list would say somebody had.
+   */
+  private async daemonClaimant(): Promise<DaemonClaimant | null> {
+    const beat = await readHeartbeat(heartbeatPath());
+    return daemonClaimantFrom(beat, health(beat, Date.now(), pid => {
+      try { process.kill(pid, 0); return true; } catch { return false; }
+    }));
+  }
+
   /** Ownership of one session, for callers that need to know before acting. */
-  ownerOf(session: ClaudeSession, windows: WindowEntry[]): Ownership {
-    return resolveOwner(session, windows);
+  async ownerOf(session: ClaudeSession, windows: WindowEntry[]): Promise<Ownership> {
+    return resolveOwner(session, windows, await this.daemonClaimant());
   }
 
   /** Publish a command from outside the loop (used by the debug command). */
