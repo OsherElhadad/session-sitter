@@ -284,6 +284,63 @@ describe('T36–T38 — why a zero means less for a red', () => {
     expect(ablate('bucket-drop', CORPUS, noise(50)).note).toBe(RED_NOT_PROPOSED);
   });
 
+  /**
+   * #85's fix, end to end. The `lifetimeFires` seam above is now filled by a *corpus-wide* durable
+   * count (`pipeline/citations.json`), because `ablateAll` ablates every clause against one options
+   * object and a single number cannot serve a corpus.
+   *
+   * The window here is the post-rotation window: it contains the hazard's shape (a near-miss) and not
+   * one fire, which is exactly the state that produced the misclassification — `dead-weight?` on a
+   * clause whose whole value is that it stopped something being tried.
+   */
+  const almostBucket = () => record({
+    inputSummary: 'aws s3 rb s3://staging-artifacts --force',
+    call: { tool_name: 'Bash', input: { command: 'aws s3 rb s3://staging-artifacts --force' } },
+  });
+
+  it('#85: the durable count reclassifies a post-rotation `dead-weight?` as `deterrent`', () => {
+    const records = [almostBucket(), ...noise(50)];
+    // What the trail alone can say now that the months of fires have rotated away.
+    expect(ablate('bucket-drop', CORPUS, records).evidence_class).toBe('dead-weight?');
+    // What the durable counter knows.
+    const report = ablate('bucket-drop', CORPUS, records, {
+      citations: { 'bucket-drop': 37, 'git-force': 4 },
+    });
+    expect(report.lifetime_fires).toBe(37);
+    expect(report.evidence_class).toBe('deterrent');
+    expect(report.retirement_candidate).toBe(false);
+  });
+
+  it('#85: the durable count and the record scan combine by max, so neither can lower the other', () => {
+    // A fire inside the window that the counter has not folded yet: the counter is *present* and says
+    // zero, the scan says one, and the scan is the one that is right. A `??` here instead of a `max`
+    // would take the stale zero and report a live clause as never having fired.
+    const fired = record({
+      clause: 'practices §bucket-drop',
+      inputSummary: 'aws s3 rb s3://prod-artifacts --force',
+      call: { tool_name: 'Bash', input: { command: 'aws s3 rb s3://prod-artifacts --force' } },
+    });
+    const stale = ablate('bucket-drop', CORPUS, [fired, ...noise(50)], {
+      citations: { 'bucket-drop': 0, 'git-force': 2 },
+    });
+    expect(stale.lifetime_fires).toBe(1);
+    expect(stale.evidence_class).toBe('deterrent');
+    // And a counter ahead of a rotated window wins the other way.
+    const rotated = ablate('bucket-drop', CORPUS, noise(50), { citations: { 'bucket-drop': 9 } });
+    expect(rotated.lifetime_fires).toBe(9);
+  });
+
+  it('#85: no count makes a red a retirement candidate, and none makes a green stop being one', () => {
+    // The blast radius. `retirement_candidate` is `changed === 0 && !isSafetyLevel(level)`, which does
+    // not read the count at all — so filling `lifetimeFires` differently cannot propose anything new.
+    for (const fires of [0, 1, 10_000]) {
+      expect(ablate('bucket-drop', CORPUS, noise(50), { citations: { 'bucket-drop': fires } })
+        .retirement_candidate).toBe(false);
+      expect(ablate('learned-fetch', CORPUS, noise(50), { citations: { 'learned-fetch': fires } })
+        .retirement_candidate).toBe(true);
+    }
+  });
+
   it('the classifier reads a lifetime fire ahead of everything else', () => {
     expect(classify('red', 0, 1, 99)).toBe('deterrent');
     expect(classify('red', 0, 0, 1)).toBe('dead-weight?');

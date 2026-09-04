@@ -28,6 +28,7 @@ import { loadPolicyInputs } from '../hooks/permissionRequest';
 import { DecisionRecord, readJsonl } from '../audit/trail';
 import { decisionsPath } from '../hooks/paths';
 import { ablateAll } from '../policy/ablate';
+import { lifetimeCitations } from '../policy/citations';
 import { accumulate, propose, recentRuns, type RunLine } from '../policy/pipeline';
 import type { Io } from './render';
 
@@ -134,7 +135,10 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   // of the run and it proposes nothing that writes a file.
   const ablations = flagBool(args, '--no-retire') || records.length === 0
     ? []
-    : ablateAll(inputs.clauses, records);
+    // `accumulate('cli')` above has just folded the citation counter, so this is the freshest lifetime
+    // count available. Without it a clause that fired for months before the last rotation reads as
+    // `insufficient-exposure` or `dead-weight?` instead of `deterrent`.
+    : ablateAll(inputs.clauses, records, { citations: lifetimeCitations() });
 
   const { line, written, exitCode } = propose({
     settings,

@@ -67,6 +67,7 @@ const permissionRequest_1 = require("../hooks/permissionRequest");
 const trail_1 = require("../audit/trail");
 const paths_1 = require("../hooks/paths");
 const ablate_1 = require("../policy/ablate");
+const citations_1 = require("../policy/citations");
 const pipeline_1 = require("../policy/pipeline");
 const FLAGS = {
     '--accumulate': 'boolean',
@@ -181,7 +182,10 @@ async function run(argv, io) {
     // of the run and it proposes nothing that writes a file.
     const ablations = (0, args_1.flagBool)(args, '--no-retire') || records.length === 0
         ? []
-        : (0, ablate_1.ablateAll)(inputs.clauses, records);
+        // `accumulate('cli')` above has just folded the citation counter, so this is the freshest lifetime
+        // count available. Without it a clause that fired for months before the last rotation reads as
+        // `insufficient-exposure` or `dead-weight?` instead of `deterrent`.
+        : (0, ablate_1.ablateAll)(inputs.clauses, records, { citations: (0, citations_1.lifetimeCitations)() });
     const { line, written, exitCode } = (0, pipeline_1.propose)({
         settings,
         corpusRoot,

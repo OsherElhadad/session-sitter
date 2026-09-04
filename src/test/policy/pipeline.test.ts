@@ -19,6 +19,7 @@ import * as path from 'path';
 import type { DecisionRecord } from '../../audit/trail';
 import type { PluginSettings } from '../../hooks/settings';
 import { parsePractices } from '../../policy/practices';
+import { readCitations } from '../../policy/citations';
 import { readShapes } from '../../policy/mine';
 import { parseLearnedClause } from '../../supervisor/learnedClauses';
 import {
@@ -458,6 +459,32 @@ describe('Stage A on its own', () => {
     const second = accumulate('session-end', r.env);
     expect(second.line.exitReason).toBe('no-new-records');
     expect(second.nudge).toBeNull();
+  });
+
+  /**
+   * #85. The durable citation counter is folded by the same Stage A pass, under the same lock, into its
+   * own file. Asserted by reading the file the fold wrote — a fold that silently did not happen is the
+   * failure this is guarding, so nothing here greps for a call.
+   */
+  it('folds the durable citation counter alongside the shapes, and does not double-count it', () => {
+    const r = rig([
+      bash('git push --force origin main', {
+        decision: 'deny', light: 'red', actor: 'policy', clause: 'practices §git-force',
+      }),
+      bash('drop table users', {
+        decision: 'deny', light: 'red', actor: 'policy', clause: 'practices §sql-drop',
+      }),
+      bash('git push --force origin main', {
+        decision: 'deny', light: 'red', actor: 'policy', clause: 'practices §git-force@a1b2c3d',
+      }),
+      ...WINDOW,
+    ]);
+    accumulate('session-end', r.env);
+    // The revision suffix on the third citation is stripped, so a clause is one counter across
+    // revisions rather than one per artifact it happened to be compiled into.
+    expect(readCitations(r.env).counts).toEqual({ 'git-force': 2, 'sql-drop': 1 });
+    accumulate('session-end', r.env);
+    expect(readCitations(r.env).counts).toEqual({ 'git-force': 2, 'sql-drop': 1 });
   });
 
   it('does not nudge twice for the same crossing', () => {

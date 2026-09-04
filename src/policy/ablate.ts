@@ -134,6 +134,17 @@ export interface AblationOptions {
    * and nothing counts citations), so this is the seam: pass the real number when one exists.
    */
   lifetimeFires?: number;
+  /**
+   * The durable per-clause citation counts, `pipeline/citations.json` (`policy/citations.ts`).
+   *
+   * This is the seam {@link AblationOptions.lifetimeFires} describes, filled for a whole corpus:
+   * `ablateAll` ablates every clause against one options object, so a single number cannot serve it.
+   * Combined with the record scan by `max`, never replacing it — the durable count lags whenever
+   * fires arrived after the last fold, and the scan lags whenever the trail has rotated. Each is a
+   * floor under the true lifetime count, so the larger of the two is the closer one and neither can
+   * push the number down.
+   */
+  citations?: Readonly<Record<string, number>>;
 }
 
 /**
@@ -392,7 +403,8 @@ export function ablate(
   // loosened rewrite of a substring pattern and relax the wrong string.
   const rawPatterns = target.patterns.map(p => (p.isRegex ? `/${p.raw}/` : p.raw));
   const misses = nearMisses({ clauseId, patterns: rawPatterns }, windowRecords);
-  const lifetimeFires = opts.lifetimeFires ?? firesFor(clauseId, records);
+  const lifetimeFires = opts.lifetimeFires
+    ?? Math.max(opts.citations?.[clauseId] ?? 0, firesFor(clauseId, records));
   const windowFires = firesFor(clauseId, windowRecords);
   const evidenceClass = classify(target.level, diff.changed, lifetimeFires, misses, shadow.matches);
 
