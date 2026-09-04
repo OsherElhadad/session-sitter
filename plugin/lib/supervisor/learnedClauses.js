@@ -82,6 +82,7 @@ exports.isSafeId = isSafeId;
 exports.readLearnedDir = readLearnedDir;
 exports.assertWritable = assertWritable;
 exports.assertAggregateWritable = assertAggregateWritable;
+exports.realpathOf = realpathOf;
 exports.compareLadder = compareLadder;
 exports.sortByLadder = sortByLadder;
 exports.onRung = onRung;

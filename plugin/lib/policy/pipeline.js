@@ -479,7 +479,10 @@ function describeWindow(line, records, env) {
 // --------------------------------------------------------------------------- gating and validation
 function collectCandidates(clusters, line, opts, lane = 'green', published = []) {
     const out = [];
-    const proseOnly = new Set(['no-matcher-shape', 'prefix-too-short']);
+    // Refusals a human could still write the rule for by hand — the shape is real, the machine just has
+    // nothing safe to emit about it. `path-symlinked` is deliberately NOT here: that cluster is refused
+    // because the tree it describes is not the tree it looks like, which is not advice to hand a human.
+    const proseOnly = new Set(['no-matcher-shape', 'prefix-too-short', 'path-below-floor']);
     // A caller that did not say who this machine is gets no aggregates at all — see
     // `ProposeOptions.selfHosts` for why that is the fail-closed answer.
     const selfHosts = opts.selfHosts ?? null;

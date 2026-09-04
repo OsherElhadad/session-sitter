@@ -955,7 +955,7 @@ export function assertAggregateWritable(corpusRoot: string, target: string, host
  * *dangling* symlink by hand, because `realpathSync` refuses one — is what makes a `learned/`
  * or a target file symlinked outside the corpus detectable before the write instead of after it.
  */
-function realpathOf(p: string, depth = 0): string {
+export function realpathOf(p: string, depth = 0): string {
   try { return fs.realpathSync(p); } catch { /* some component does not exist yet */ }
   // A symlink loop: refuse to chase it further. Returning the unresolved path here would hand
   // `assertWritable` a path it has not actually resolved, which is exactly the write-boundary

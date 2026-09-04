@@ -1,0 +1,15 @@
+# The one datasource. Provisioned from this file rather than clicked, for the same reason the
+# dashboards are: a datasource configured in the UI is a datasource nobody else has.
+apiVersion: 1
+datasources:
+  - name: SessionSitter
+    type: victoriametrics-logs-datasource
+    # Fixed, because every committed dashboard references it by uid. Change it here and the
+    # dashboards stop resolving.
+    uid: sessionsitter
+    access: proxy
+    # The compose network name, not localhost: Grafana proxies from inside the container.
+    url: http://victorialogs:9428
+    isDefault: true
+    jsonData:
+      maxLines: 1000
