@@ -1,0 +1,66 @@
+#!/bin/sh
+# `session-sitter` — the terminal front end, as the installed plugin ships it.
+#
+# The plugin already carries the whole command in `lib/cli/index.js`. What it cannot do is put it on
+# your PATH: a plugin is installed by cloning a git ref into
+# `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`, and nothing about that is on a PATH.
+# So this is the file you symlink:
+#
+#     ln -sf "$(ls -d ~/.claude/plugins/cache/*/session-sitter/*/bin/session-sitter | tail -1)" \
+#            ~/.local/bin/session-sitter
+#
+# ## Why it resolves its own symlinks
+#
+# The symlink above points into a *version-stamped* directory, so it breaks the next time the plugin
+# updates. Resolving `$0` through its symlinks is what lets the link point at the real script inside
+# a specific version while this script still finds the `lib/` beside it — and it is what makes the
+# breakage, when it comes, an honest "No such file or directory" on a path you can read, rather than
+# a Node stack trace about a module id.
+#
+# `readlink -f` is not portable (BSD/macOS `readlink` has no `-f` before macOS 12), so the loop below
+# does it by hand with `cd -P` and plain `readlink`. Ten lines against a dependency on which `sh` and
+# which `readlink` a machine happens to have.
+#
+# Exit codes are the CLI's own, unchanged: 0 answered, 1 something it needed was missing, 2 bad
+# arguments. `exec` is deliberate — this process is replaced, so signals and the exit code reach the
+# caller without a shell in the middle to swallow them.
+
+set -eu
+
+script=$0
+# Follow the symlink chain to the real file. Bounded, so a symlink loop fails instead of hanging.
+hops=0
+while [ -L "$script" ]; do
+  hops=$((hops + 1))
+  if [ "$hops" -gt 40 ]; then
+    echo "session-sitter: symlink loop resolving $0" >&2
+    exit 1
+  fi
+  target=$(readlink "$script")
+  case $target in
+    /*) script=$target ;;
+    # A relative link is relative to the directory holding the link, not to the caller's cwd.
+    *) script=$(dirname "$script")/$target ;;
+  esac
+done
+
+bin_dir=$(cd -P "$(dirname "$script")" && pwd)
+cli="$bin_dir/../lib/cli/index.js"
+
+if [ ! -f "$cli" ]; then
+  # Naming both paths, because the usual cause is a symlink left behind by a plugin update and the
+  # fix is to re-link it — which you cannot work out from "module not found".
+  echo "session-sitter: cannot find the CLI at $cli" >&2
+  echo "session-sitter: this script resolved to $script" >&2
+  echo "session-sitter: if you symlinked an older plugin version, re-link it:" >&2
+  echo '  ln -sf "$(ls -d ~/.claude/plugins/cache/*/session-sitter/*/bin/session-sitter | tail -1)" ~/.local/bin/session-sitter' >&2
+  exit 1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  # The hooks fail the same way and Claude Code surfaces that itself; here nobody else would say it.
+  echo "session-sitter: node is not on PATH, and the CLI is a Node program" >&2
+  exit 1
+fi
+
+exec node "$cli" "$@"

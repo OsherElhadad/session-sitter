@@ -5,6 +5,56 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.12 — The plugin was the one way in that did not get the CLI
+
+`docs/CLI.md` describes `session-sitter` as the front end for "people who never open the IDE", and the
+plugin — the way those people install this — shipped `audit/cli.js` and `policy/cli.js` and nothing
+else. So `log` and `policy check` worked from a slash command, and `status --watch`, `export --html`
+and `learn` existed only for someone who had cloned the repository. That is the opposite of the
+audience.
+
+`cli/index.js` is now in the plugin's build closure, which is derived rather than maintained: the
+whole `session-sitter` command and every module it requires, with the no-`vscode` invariant enforced on
+the way in as it is for the hooks. The slash commands point at it, so the terminal and the slash
+command can no longer disagree about what `log` means. `/session-sitter:learn` and
+`/session-sitter:export` are new, and `/session-sitter:status` now answers both of the questions it
+was being asked — the worklist from each agent's own store, and what the hooks have registered, which
+is the one that says whether governance is wired up at all. A session in the first list and not the
+second is running ungoverned.
+
+**A wall-clock timestamp nearly broke every CI run.** `cli/index.js` requires `buildInfo`, whose
+`BUILD_TIME` is stamped at compile time — and `plugin/lib/` is committed build output that
+`ci/check-plugin-lib.sh` verifies by rebuilding and diffing. CI compiles before it checks, so the
+rebuilt file would differ from the committed one on every single run, and the freshness guard would
+fail for a reason that has nothing to do with freshness. The fix is not a workaround but the more
+honest value: **a plugin is not built.** It is a git ref cloned into `~/.claude/plugins/cache/`, so
+there is no build for a build time to describe, and a timestamp there would name the moment some
+maintainer happened to run `make plugin`. The shipped `BUILD_TIME` is empty and `--version` prints the
+clause only when it has one. The build script fails loudly if the generated file's shape ever stops
+matching what it rewrites, because a silent no-op there would put CI back to failing every run.
+
+**The plugin manifest's version had drifted five patch releases behind** `package.json` — 0.8.0
+against 0.8.11 — because nothing read the two together. It is what names the directory an install is
+cloned into, and now that the version is baked into the shipped tree, a manifest claiming a different
+one makes `session-sitter --version` disagree with the plugin you installed. `ci/check-naming.sh`
+compares them.
+
+**On PATH, three ways, none of them needing VS Code.** `plugin/bin/session-sitter` is a launcher to
+symlink; it resolves its own symlinks, so when a plugin update makes the version-stamped link stale it
+says which path it resolved to and prints the re-link command instead of failing with a Node module
+error. Separately, `npx github:eranra/session-sitter` and `npm i -g github:eranra/session-sitter` now
+work: a `prepare` script builds `out/` on the way in, and a `.npmignore` keeps the tarball to the
+command — 444 kB against the 15 MB it started at, once the screenshots were excluded properly.
+(`.npmignore` and not a `files` array: **vsce refuses to run when both `.vscodeignore` and `files` are
+present**, so `files` would have broken the .vsix. The two packagings stay independent, which is worth
+having — they ship different things.)
+
+New tests spawn the shipped tree in a bare `node`, because the existing guard diffs bytes and a
+missing module is invisible to a byte diff — it shows up for the first time as a stack trace in front
+of a user at a permission prompt. They also assert every script a slash command runs exists in
+`plugin/lib` and is declared in `allowed-tools`, which nothing caught before: the manifest validates,
+the tree diffs clean, the tests pass, and the command fails the first time someone types it.
+
 ### 0.8.11 — `log` could not see the trail the hooks had been writing all along
 
 On a machine with no VS Code, the plugin's hooks are the only front end running, and

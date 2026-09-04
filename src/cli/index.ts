@@ -67,7 +67,12 @@ export async function main(argv: readonly string[], io: Io = processIo()): Promi
   if (name === undefined) { io.err(USAGE); return 2; }
   if (name === '-h' || name === '--help') { io.out(USAGE); return 0; }
   if (name === '-v' || name === '--version') {
-    io.out(`session-sitter ${BUILD_VERSION} (built ${BUILD_TIME})\n`);
+    // A plugin install has no build time — it is a git ref cloned into place, not a build — and
+    // `scripts/build-plugin-lib.js` empties the field rather than shipping the moment a maintainer
+    // ran `make plugin`. Printing `(built )` would be worse than printing nothing.
+    io.out(BUILD_TIME
+      ? `session-sitter ${BUILD_VERSION} (built ${BUILD_TIME})\n`
+      : `session-sitter ${BUILD_VERSION}\n`);
     return 0;
   }
 

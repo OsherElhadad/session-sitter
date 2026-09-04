@@ -20,8 +20,44 @@ session-sitter export --html > report.html   # one file you can send someone
 
 ---
 
+## Getting it
+
+Three ways in, and none of them needs VS Code.
+
+**It comes with the Claude Code plugin.** The plugin ships the whole command at `lib/cli/index.js`,
+and the slash commands are backed by it, so `/session-sitter:log` and `session-sitter log` are the
+same code. To put it on your `PATH`, symlink the launcher the plugin ships:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$(ls -d ~/.claude/plugins/cache/*/session-sitter/*/bin/session-sitter | tail -1)" \
+       ~/.local/bin/session-sitter
+```
+
+The install path is version-stamped, so re-run that after a plugin update. The launcher resolves its
+own symlinks and, when the link goes stale, prints the path it resolved to and the command to fix it
+rather than a Node module error.
+
+**Or on its own, with no plugin and no extension:**
+
+```bash
+npx github:eranra/session-sitter status     # nothing installed
+npm i -g github:eranra/session-sitter       # or keep it on PATH
+```
+
+Both compile on the way in, because `out/` is not committed — so they want a toolchain, not a clone.
+
+**Or from a checkout**, which is what a contributor wants:
+
+```bash
+make compile && node out/cli/index.js status
+```
+
+---
+
 ## Contents
 
+- [Getting it](#getting-it)
 - [Common conventions](#common-conventions)
 - [`status`](#status)
 - [`log`](#log)
