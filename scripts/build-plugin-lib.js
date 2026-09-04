@@ -29,7 +29,15 @@ const repoRoot = path.resolve(__dirname, '..');
 const outDir = path.join(repoRoot, 'out');
 const libDir = path.join(repoRoot, 'plugin', 'lib');
 
-/** Everything the plugin invokes directly, as paths relative to `out/`. */
+/**
+ * Everything the plugin invokes directly, as paths relative to `out/`.
+ *
+ * `cli/index.js` is the whole `session-sitter` command, and it is here because a plugin install was
+ * the one way in that did not get it. The slash commands could reach `audit/cli.js` and
+ * `policy/cli.js`, so `log` and `policy check` worked — but `status --watch`, `export --html` and
+ * `learn` existed only for someone who had cloned the repository, which is the opposite of the
+ * audience the plugin is for.
+ */
 const ENTRY_POINTS = [
   'hooks/permissionRequest.js',
   'hooks/configChange.js',
@@ -40,6 +48,7 @@ const ENTRY_POINTS = [
   'hooks/notification.js',
   'audit/cli.js',
   'policy/cli.js',
+  'cli/index.js',
 ];
 
 const HEADER = (rel) => `// GENERATED FILE — DO NOT EDIT.
@@ -99,15 +108,46 @@ function collect() {
   return [...closure].sort();
 }
 
+/**
+ * `buildInfo.js`, rewritten to be reproducible.
+ *
+ * `out/buildInfo.js` carries a wall-clock `BUILD_TIME` from `gen-build-info.js`. Copying that into a
+ * committed tree breaks this script's one hard property — the rebuild has to diff clean — because CI
+ * compiles before it checks, so the rebuilt file differs from the committed one on every single run
+ * and the freshness guard fails for a reason that has nothing to do with freshness.
+ *
+ * Emptying it is not a workaround, it is the more honest value: **a plugin is not built**. It is a git
+ * ref cloned into `~/.claude/plugins/cache/`, so there is no build for a build time to describe, and
+ * a timestamp there would name the moment some maintainer happened to run `make plugin`. `cli/index.ts`
+ * prints the clause only when it has one.
+ *
+ * The version stays baked, and stays deterministic: it changes when `package.json` changes, which is
+ * a committed change with a commit of its own.
+ */
+function pluginBuildInfo(source) {
+  const version = require(path.join(repoRoot, 'package.json')).version;
+  const out = source
+    .replace(/exports\.BUILD_TIME = '[^']*';/, "exports.BUILD_TIME = '';")
+    .replace(/exports\.BUILD_VERSION = '[^']*';/, `exports.BUILD_VERSION = '${version}';`);
+  // If the shape of the generated file ever changes, fail loudly rather than shipping a timestamp:
+  // a silent no-op here would put CI back into failing on every run, which is the bug this prevents.
+  if (out.includes('BUILD_TIME') && !out.includes("BUILD_TIME = ''")) {
+    throw new Error(
+      'buildInfo.js no longer matches the shape this script rewrites; update pluginBuildInfo()');
+  }
+  return out;
+}
+
 function main() {
   const files = collect();
 
   // Rebuild the tree from scratch, so a module that stops being needed also stops being shipped.
   fs.rmSync(libDir, { recursive: true, force: true });
   for (const rel of files) {
-    const source = fs.readFileSync(path.join(outDir, rel), 'utf8')
+    let source = fs.readFileSync(path.join(outDir, rel), 'utf8')
       // The .map files are not shipped, so a sourceMappingURL pointing at nothing is just noise.
       .replace(/^\/\/# sourceMappingURL=.*$\n?/m, '');
+    if (rel === 'buildInfo.js') { source = pluginBuildInfo(source); }
     // A shebang is only a shebang on line 1, so the header goes underneath it when there is one.
     const shebang = /^#!.*\n/.exec(source);
     const body = shebang

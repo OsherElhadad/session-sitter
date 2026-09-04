@@ -2,7 +2,7 @@
   "name": "session-sitter",
   "displayName": "Session Sitter",
   "description": "Tabbed session switcher for Claude Code, IBM Bob, Codex and VS Code Chat — with traffic-light supervision of the actions your agents pause on",
-  "version": "0.8.11",
+  "version": "0.8.12",
   "publisher": "eranra",
   "icon": "resources/logo.png",
   "galleryBanner": {
@@ -14,7 +14,8 @@
     "url": "https://github.com/eranra/session-sitter"
   },
   "engines": {
-    "vscode": "^1.64.0"
+    "vscode": "^1.64.0",
+    "node": ">=20"
   },
   "categories": [
     "Other"
@@ -476,7 +477,8 @@
     "check": "npm run compile && npm run lint && npm test",
     "package": "npx --yes @vscode/vsce@3.9.2 package --no-dependencies",
     "supervise": "node out/supervisor/cli.js",
-    "corpus": "node out/corpus/cli.js"
+    "corpus": "node out/corpus/cli.js",
+    "prepare": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

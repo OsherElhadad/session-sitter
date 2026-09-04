@@ -98,6 +98,28 @@ check_json "[...new Set(p.contributes.commands.map(c=>c.command.split('.')[0]))]
 # `configuration` is an array of titled sections, so every section's properties are checked.
 check_json "[...new Set([].concat(p.contributes.configuration).flatMap(s=>Object.keys(s.properties)).map(k=>k.split('.')[0]))].join()" "sessionSitter"
 
+# ---------------------------------------------------------------------------
+# One version, too.
+# ---------------------------------------------------------------------------
+#
+# The plugin manifest carries its own `version`, and it is what names the directory an install is
+# cloned into (`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`). It had already drifted
+# five patch releases behind `package.json` before anyone noticed, because nothing read the two
+# together — and once `plugin/lib/buildInfo.js` bakes `package.json`'s version, a manifest claiming a
+# different one makes `session-sitter --version` inside the plugin disagree with the plugin the user
+# installed. That is the kind of disagreement you only discover while trying to reproduce a bug.
+echo
+echo "--- checking one version across the manifests"
+pkg_version="$(node -p "require('./package.json').version" 2>/dev/null || echo '<error>')"
+plugin_version="$(node -p "require('./plugin/.claude-plugin/plugin.json').version" 2>/dev/null || echo '<error>')"
+if [ "$pkg_version" != "$plugin_version" ]; then
+  echo "::error::plugin/.claude-plugin/plugin.json version is '$plugin_version'," \
+       "but package.json is '$pkg_version' — bump both"
+  fail=1
+else
+  printf "    %-52s %s\n" "package.json == plugin.json" "$pkg_version"
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo
   echo "✓ one name everywhere: Session Sitter"

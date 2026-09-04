@@ -34,6 +34,36 @@ If your `permissions.defaultMode` is `auto`, nothing prompts, so the whole decis
 never runs — run with `--permission-mode manual` to see it work. (`default` was renamed; it is no
 longer among the choices `claude --help` lists.)
 
+### The `session-sitter` command comes with it
+
+The plugin ships the whole terminal front end at `lib/cli/index.js`, so the slash commands below are
+backed by the same code `docs/CLI.md` documents — `status`, `log`, `digest`, `policy`, `learn` and
+`export`, not a reduced set.
+
+To get it on your `PATH`, symlink the launcher the plugin ships:
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$(ls -d ~/.claude/plugins/cache/*/session-sitter/*/bin/session-sitter | tail -1)" \
+       ~/.local/bin/session-sitter
+session-sitter --version
+```
+
+The install path is version-stamped, so **that symlink breaks the next time the plugin updates** and
+you re-run the same command. The launcher resolves its own symlinks, so when it does break it says
+which path it resolved to and prints the re-link command, rather than failing with a Node module
+error.
+
+If you would rather not depend on a plugin path at all, the command installs on its own — no
+extension, no plugin, no registry account:
+
+```bash
+npx github:eranra/session-sitter status      # no install
+npm i -g github:eranra/session-sitter        # or on PATH for good
+```
+
+Both build on the way in (`out/` is not committed), so they need a toolchain but no clone.
+
 ---
 
 ## Which calls does which hook govern
@@ -469,15 +499,28 @@ message.
 ### Reading it
 
 ```bash
-/session-sitter:status                  # the sessions this plugin registered
+/session-sitter:status                  # the worklist, and what this plugin has registered
 /session-sitter:log --since 24h --denied
 /session-sitter:digest --since 24h      # one summary per session
 /session-sitter:policy practices.md --replay
+/session-sitter:explain Bash --command 'terraform apply'
+/session-sitter:learn --dry-run         # practices proposed from the trail, no model
+/session-sitter:export --since 7d       # one HTML file to send someone
 ```
 
-`--json` and `--csv` are there for handing the log to someone else. The commands are thin wrappers
-around `plugin/lib/audit/cli.js` and `plugin/lib/policy/cli.js`, so there is one implementation of
-"what happened".
+`--json` and `--csv` are there for handing the log to someone else. Every command is a thin wrapper
+around a script in `plugin/lib/`, so there is one implementation of "what happened" and the terminal
+and the slash command cannot disagree about it.
+
+Two of these are worth a note:
+
+- **`/session-sitter:status` answers two questions**, because they are different questions. The
+  *worklist* reads each agent's own session store, so it sees sessions this plugin has never touched.
+  The *registered* list reads what the hooks wrote, so it is what tells you governance is actually
+  wired up here. A session in the first and not the second is running **ungoverned**.
+- **`/session-sitter:export` writes a file** and prints its path rather than printing the report. A
+  self-contained HTML snapshot is for a human to open, it can be megabytes, and pouring it into the
+  conversation would cost more than it tells anyone.
 
 The `session-sitter` command reads the same trail. It resolves the data directory exactly as the
 hooks do — `$SESSION_SITTER_DATA_DIR`, else `$CLAUDE_PLUGIN_DATA`, else `~/.claude/session-sitter` —
