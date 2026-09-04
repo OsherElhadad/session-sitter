@@ -47,10 +47,45 @@
  * settings file behind someone's back is a bad citizen, and `projectSettings` is exactly that until
  * somebody asks for it. `SESSION_SITTER_RULE_DESTINATION` moves it.
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RULE_DESTINATIONS = void 0;
+exports.PATH_TOOLS = exports.RULE_DESTINATIONS = void 0;
 exports.prefixOf = prefixOf;
 exports.generalisedPermission = generalisedPermission;
+exports.normalisedPath = normalisedPath;
+const path = __importStar(require("path"));
 const practices_1 = require("./practices");
 const shell_1 = require("./shell");
 exports.RULE_DESTINATIONS = ['session', 'localSettings', 'projectSettings', 'userSettings'];
@@ -107,4 +142,80 @@ function generalisedPermission(clause, toolName, toolInput, destination = 'sessi
         behavior: 'allow',
         destination,
     };
+}
+// --------------------------------------------------------------------------- the path seam
+/**
+ * The tools whose input names a file, and the argument key that names it.
+ *
+ * `models.ts` puts "the normalised call *shape* an offline miner keys on" in this module, so the path
+ * normaliser lives here rather than in `mine.ts` or `propose.ts` — one definition of what a path
+ * means, because two places deciding that will disagree the day one of them is changed.
+ *
+ * The set is derived from `session.ts`'s `PAYLOAD_KEYS`, which enumerates the four write tools by the
+ * bytes they carry: `content` (Write), `old_string`/`new_string` (Edit), `edits` (MultiEdit),
+ * `new_source` (NotebookEdit). Three deliberate exclusions:
+ *
+ *  - **`Read`, `Glob`, `Grep`, `NotebookRead`.** They are in `tiers.ts`'s `SAFE_TOOLS`, so
+ *    `preClassify` returns GREEN and ladder rung 1 grants them on every call for free. A learned
+ *    green over them could not change a decision — rule 1 above — and `replay.ts`'s INERT finding
+ *    would reject it anyway. They also cannot fall closed or leave a gap, so neither lane has any
+ *    evidence to mine about them in the first place.
+ *  - **`Bash`.** A path inside a command line is the shell lane's problem, and already has E8's
+ *    `escapesCwd`.
+ *  - **IBM Bob's `write_to_file`.** The repo names the tool (`docs/onboarding/reference/
+ *    AUTO-RESPOND.md`) but pins its path argument nowhere; `trail.ts`'s `pick('path')` is a display
+ *    fallback tried across every tool, not a claim about Bob's schema. A matcher over a guessed key
+ *    matches nothing, forever, and reads exactly like a clean run — the failure shape this wave is
+ *    hunting. Add it with a real record in hand, not a guess.
+ */
+exports.PATH_TOOLS = new Map([
+    ['Write', 'file_path'],
+    ['Edit', 'file_path'],
+    ['MultiEdit', 'file_path'],
+    ['NotebookEdit', 'notebook_path'],
+]);
+/**
+ * Is this path unusable as the basis of a matcher?
+ *
+ * A double quote and a backslash are escaped by `JSON.stringify` on the way into `haystackFor`, so a
+ * matcher built from the raw path would be anchored against a string the haystack never contains. A
+ * control character is the same problem. Refusing beats escaping them as well: such a path is
+ * pathological, and the whole value of this lane is that the matcher and the haystack agree exactly.
+ *
+ * Whitespace is *not* refused here, because a file with a space in its name is ordinary. It is refused
+ * one level up, on the emitted directory literal — `propose.ts`'s `pathMatcher` says why.
+ */
+function unusableInPath(raw) {
+    return raw.includes('"') || raw.includes('\\') || [...raw].some(c => c < ' ');
+}
+/**
+ * The absolute, lexically normalised path a record's tool input names — or null.
+ *
+ * `cwd` is required for a relative path and never defaulted: `path.resolve` would silently fall back
+ * to `process.cwd()`, which is the miner's directory and has nothing to do with the session's. That
+ * would resolve two records for the same file to two different strings and cluster them apart, which
+ * is exactly the bug this function exists to prevent.
+ *
+ * Lexical, not filesystem: `.` and `..` are collapsed by `path.resolve`, and no symlink is followed
+ * here. Resolution is `propose.ts`'s `symlinkEscape`, at gate time, where it can refuse.
+ */
+function normalisedPath(toolName, toolInput, cwd) {
+    const key = exports.PATH_TOOLS.get(toolName);
+    if (key === undefined || !toolInput) {
+        return null;
+    }
+    const raw = toolInput[key];
+    if (typeof raw !== 'string' || raw.trim() === '') {
+        return null;
+    }
+    if (unusableInPath(raw)) {
+        return null;
+    }
+    if (path.isAbsolute(raw)) {
+        return path.resolve(raw);
+    }
+    if (cwd === null || !path.isAbsolute(cwd)) {
+        return null;
+    }
+    return path.resolve(cwd, raw);
 }

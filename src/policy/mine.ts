@@ -52,6 +52,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DecisionRecord } from '../audit/trail';
 import { dataDir, decisionsPath } from '../hooks/paths';
+import { PATH_TOOLS, normalisedPath } from './generalise';
 import { citedClauseId, recordId } from './replay';
 import { splitShellCommand } from './shell';
 
@@ -80,6 +81,53 @@ export function canonicalSegment(command: string): string {
   const argv0 = tokens[0].toLowerCase();
   const sub = tokens[1];
   return sub !== undefined && !sub.startsWith('-') ? `${argv0} ${sub.toLowerCase()}` : argv0;
+}
+
+/** How many path segments below the recorded `cwd` a directory literal must be. See {@link canonicalPathSegment}. */
+export const PATH_FLOOR_SEGMENTS = 2;
+
+/**
+ * The canonical *directory* segment for a path-carrying tool: the first {@link PATH_FLOOR_SEGMENTS}
+ * segments of the file's directory, relative to `cwd`.
+ *
+ * The exact analogue of {@link canonicalSegment}, and the number is the same for the same reason.
+ * There, one token is a whole tool (`git`, `npm`) and clusters everything it can do into one rule;
+ * here, one segment is a whole top-level tree (`src`, `docs`, `infra`) and does the same. The rule
+ * people actually mean lives one level down — `infra/prod`, not `infra` — which is where the
+ * subcommand lives in the shell lane too.
+ *
+ * **The direction of the analogy is what inverts.** For a command, a *longer* argument list is the
+ * widening; for a path a *shorter* prefix is, and a directory rule's natural form is a prefix. So the
+ * shape is capped at the floor rather than grown from it, and going shallower than the floor is the
+ * unsafe direction — `propose.ts`'s `commonPathLiteral` refuses it rather than falling back to it.
+ *
+ * `''` — no shape at all — for a path with no usable relative directory: outside `cwd`, at the `cwd`
+ * root, or with no `cwd` to be relative to. A shallower-than-floor directory does get a shape, so the
+ * floor refusal is visible in the run ledger as a named cluster rather than lumped in with the
+ * unshapeable.
+ */
+export function canonicalPathSegment(absPath: string, cwd: string | null): string {
+  if (cwd === null || !path.isAbsolute(cwd) || !path.isAbsolute(absPath)) { return ''; }
+  const root = path.resolve(cwd);
+  const rel = path.relative(root, path.dirname(path.resolve(absPath)));
+  // `path.relative` answers `..`-prefixed for a sibling and `''` for the root itself. Both mean there
+  // is no directory under `cwd` to key on. A bare-string `startsWith` would have said `/w/apifoo` is
+  // under `/w/api`; `path.relative` cannot make that mistake, which is why it is the test.
+  if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) { return ''; }
+  return rel.split(path.sep).slice(0, PATH_FLOOR_SEGMENTS).join('/');
+}
+
+/**
+ * The shape one raw segment folds into, for any tool. The single definition of "which cluster".
+ *
+ * Three call sites read it (the fold, the fold's before/after floor comparison, and the window
+ * clustering) and they must agree exactly or a shape is counted under one key and emitted under
+ * another.
+ */
+export function shapeSegment(record: DecisionRecord, raw: string): string {
+  if (SHELL_TOOLS.has(record.tool)) { return canonicalSegment(raw); }
+  if (PATH_TOOLS.has(record.tool)) { return canonicalPathSegment(raw, record.cwd ?? null); }
+  return '';
 }
 
 /**
@@ -131,6 +179,13 @@ export interface Segmented {
  * only thing stable about it.
  */
 export function segmentsOf(record: DecisionRecord): Segmented {
+  if (PATH_TOOLS.has(record.tool)) {
+    // The *normalised* path, so a record that wrote `infra/prod/db.tf` and one that wrote
+    // `/w/api/infra/prod/db.tf` are one segment rather than two. `inputSummary` is deliberately not a
+    // fallback: it is a 300-char display string, and E1 refuses a `call`-less record anyway.
+    const resolved = normalisedPath(record.tool, record.call?.input ?? null, record.cwd ?? null);
+    return { segments: [resolved ?? ''], confident: true };
+  }
   if (!SHELL_TOOLS.has(record.tool)) { return { segments: [''], confident: true }; }
   const raw = record.call?.input?.command;
   const command = typeof raw === 'string' ? raw : record.inputSummary;
@@ -411,7 +466,7 @@ export function foldRecord(
   const day = record.ts.slice(0, 10);
   const signal = signalOf(record);
   for (const raw of segments) {
-    const segment = SHELL_TOOLS.has(record.tool) ? canonicalSegment(raw) : '';
+    const segment = shapeSegment(record, raw);
     const key = `${record.tool}|${segment}`;
     const stat = shapes[key] ?? (shapes[key] = {
       tool: record.tool,
@@ -495,7 +550,7 @@ export function fold(env?: NodeJS.ProcessEnv, now: Date = new Date()): FoldResul
       }
       if (typeof record?.ts !== 'string' || typeof record.tool !== 'string') { continue; }
       const before = new Map(segmentsOf(record).segments.map(raw => {
-        const key = `${record.tool}|${SHELL_TOOLS.has(record.tool) ? canonicalSegment(raw) : ''}`;
+        const key = `${record.tool}|${shapeSegment(record, raw)}`;
         const stat = shapes.shapes[key];
         return [key, stat !== undefined && clearsFloor(stat)];
       }));
@@ -782,9 +837,8 @@ export function clusterWindow(
   const out = new Map<string, Cluster>();
   for (const record of records) {
     const { segments, confident } = segmentsOf(record);
-    const isShell = SHELL_TOOLS.has(record.tool);
     for (const raw of segments) {
-      const segment = isShell ? canonicalSegment(raw) : '';
+      const segment = shapeSegment(record, raw);
       const key = `${record.tool}|${segment}`;
       const cluster = out.get(key) ?? {
         key,

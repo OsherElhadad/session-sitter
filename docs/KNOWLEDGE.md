@@ -178,6 +178,31 @@ content. A missing file is `exists: false`, never an error. That contract is wha
 - **Supersede rather than delete.** `supersedes` keeps the history of why a practice changed.
 - **Put personal preference in the user tier.** Team files are for what the team agreed.
 
+### A path matcher is a textual guard, not a filesystem one
+
+This applies to a `Match:` you write by hand and to one `session-sitter learn` proposes for a
+directory, and it is the single thing most easily misread about either.
+
+A matcher is a regular expression over the tool name and its arguments as JSON. When it names a
+directory it matches **the path string the tool was asked to write** — never the file that string
+resolves to. Three consequences, all of which have bitten someone:
+
+- **A symlink defeats it.** If `infra/prod` is, or contains, a symlink pointing out of the repository,
+  a write "under `infra/prod/`" lands outside it and the matcher is satisfied either way. The miner
+  refuses to propose a directory clause when any path in its own evidence resolved somewhere other
+  than where it was written, but a symlink created afterwards is invisible to the clause.
+- **The written form has to match.** `Write` may be asked with an absolute path or one relative to the
+  session's working directory, and a matcher anchored on the absolute form does not match the relative
+  one. That direction is safe — the call falls through to the classifier instead of being decided for
+  free — but it means a green path clause is a latency optimisation, never a guarantee of coverage.
+- **It is not `assertWritable`.** `assertWritable` in `src/supervisor/learnedClauses.ts` is the only
+  filesystem boundary in this system: it resolves symlinks, and it is what stops the pipeline writing
+  outside the corpus. No clause, learned or hand-written, substitutes for it. Do not treat "there is a
+  red clause about `infra/prod`" as containment.
+
+Write path clauses anyway — they are the cheapest way to state where work belongs. Just do not read
+one as a wall.
+
 ---
 
 ## See also
