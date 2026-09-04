@@ -88,9 +88,10 @@ const crypto_1 = require("crypto");
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
+const paths_1 = require("../hooks/paths");
 /** Root for all cross-window state, beside the existing `windows/` registry. */
 function busDir(homedir = os.homedir()) {
-    return path.join(homedir, '.claude', 'session-sitter', 'bus');
+    return path.join((0, paths_1.claudeDir)(process.env, homedir), 'session-sitter', 'bus');
 }
 function cmdDir(homedir) {
     return path.join(busDir(homedir), 'cmd');

@@ -112,6 +112,7 @@ const models_2 = require("../supervisor/models");
 const paths_1 = require("./paths");
 const io_1 = require("./io");
 const settings_1 = require("./settings");
+const util_1 = require("util");
 const escalate_1 = require("./escalate");
 const daemonHeartbeat_1 = require("../daemonHeartbeat");
 const session_1 = require("./session");
@@ -882,7 +883,16 @@ async function handle(rawInput) {
         clause: verdict.clause,
         actor: verdict.actor,
         latencyMs: Date.now() - started,
-        rewritten: verdict.decision.updatedInput !== undefined,
+        // Whether the input CHANGED, not merely whether the verdict carried one. Rung 7's
+        // human-allow returns the original input as `updatedInput`, so the old test — "is updatedInput
+        // present" — recorded a plain human "allow" as `rewritten: true`, and `log` rendered it as a
+        // correction. `session-sitter learn` mines this field, so that asserted the correction lane had
+        // produced a safer form of a call it never touched.
+        //
+        // Compared here, once, rather than by stripping `updatedInput` from that one caller: the wrong
+        // question would otherwise still be asked of every future verdict that echoes its input back.
+        rewritten: verdict.decision.updatedInput !== undefined
+            && !(0, util_1.isDeepStrictEqual)(verdict.decision.updatedInput, input.tool_input ?? {}),
         // Null on every rung that called no model, which is what makes a cache figure computable: a
         // reader filters to non-null and prints that count as its denominator.
         telemetry: verdict.telemetry ?? null,

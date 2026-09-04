@@ -34,10 +34,11 @@ import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { claudeDir } from '../hooks/paths';
 
 /** Root for all cross-window state, beside the existing `windows/` registry. */
 export function busDir(homedir: string = os.homedir()): string {
-  return path.join(homedir, '.claude', 'session-sitter', 'bus');
+  return path.join(claudeDir(process.env, homedir), 'session-sitter', 'bus');
 }
 export function cmdDir(homedir?: string): string {
   return path.join(busDir(homedir), 'cmd');

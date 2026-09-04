@@ -8,6 +8,11 @@
 # Usage:  PLUGIN=/path/to/session-sitter/plugin sh docs/evidence/setup.sh
 set -eu
 
+# Resolved before the first `cd`, because this script cds into the scratch repo partway through and
+# then copies a file from its own directory. With a relative $0 that copy looked for
+# docs/evidence/practices.md *inside the scratch repo* and failed.
+HERE=$(cd -P "$(dirname "$0")" && pwd)
+
 ROOT=${ROOT:-/tmp/ss-e2e}
 PLUGIN=${PLUGIN:?set PLUGIN to the plugin directory of a session-sitter checkout}
 
@@ -76,7 +81,7 @@ printf 'export function sub(a, b) {\n  return a - b;\n}\n\nexport function neg(a
 git add sub.js && git commit -q --amend -m 'Add subtract and negate helpers'
 
 # 5. The practices file that decides every call.
-cp "$(dirname "$0")/practices.md" "$ROOT/practices.md"
+cp "$HERE/practices.md" "$ROOT/practices.md"
 
 cat > "$ROOT/env.sh" <<ENV
 export CLAUDE_CONFIG_DIR=$ROOT/cfg

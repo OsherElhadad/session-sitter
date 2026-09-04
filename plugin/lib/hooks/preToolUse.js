@@ -119,11 +119,22 @@ async function handle(rawInput) {
     if (!settings.preToolUse || permissionRequest_1.EXEMPT_TOOLS.has(toolName)) {
         return {};
     }
-    // A practices file that cannot be read is a no-decision here, not a denial: `PermissionRequest`
-    // is still behind this hook and still fails closed on the same error.
+    // The SAME loader `PermissionRequest` uses — artifact first, markdown corpus as the fallback.
+    //
+    // This hook used to read `loadClauses`, which only ever sees the markdown corpus. So publishing the
+    // compiled artifact silently turned this half of enforcement off: `PermissionRequest` denied from
+    // the artifact, this hook had zero clauses and returned no decision, and because Claude Code allows
+    // reads without prompting, `PermissionRequest` was never invoked for them at all. Measured in a real
+    // terminal session: `cat .env` returned the credentials to the model and wrote no record. Compiling —
+    // the reviewed, prompt-cache-stable path — made enforcement strictly weaker and said nothing.
+    //
+    // Two loaders were two possible answers to "what is the policy". One loader is one.
+    //
+    // A policy that cannot be read is a no-decision here, not a denial: `PermissionRequest` is still
+    // behind this hook and still fails closed on the same error.
     let clauses = [];
     try {
-        clauses = await (0, permissionRequest_1.loadClauses)(settings);
+        clauses = (await (0, permissionRequest_1.loadPolicyInputs)(settings)).clauses;
     }
     catch {
         return {};

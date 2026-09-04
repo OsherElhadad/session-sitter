@@ -47,6 +47,7 @@ const crypto_1 = require("crypto");
 const fs = __importStar(require("fs"));
 const os = __importStar(require("os"));
 const path = __importStar(require("path"));
+const paths_1 = require("./hooks/paths");
 const HELPER_NAMES = new Set(['helpers']);
 // Determine the CLI used to focus a window. On remote IDEs the launcher lives in
 // <serverBin>/bin/remote-cli/ next to the node execPath (Bob → "bobide", VS Code → "code").
@@ -145,7 +146,7 @@ function isAttendedWindow(entry, attentionWindowMs, now) {
     return entry.lastActiveAt >= now - attentionWindowMs;
 }
 function windowsDir(homedir = os.homedir()) {
-    return path.join(homedir, '.claude', 'session-sitter', 'windows');
+    return path.join((0, paths_1.claudeDir)(process.env, homedir), 'session-sitter', 'windows');
 }
 /**
  * Publish this window's entry, atomically.

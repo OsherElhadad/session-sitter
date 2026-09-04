@@ -99,7 +99,10 @@ const SCENARIOS = [
   {
     name: 'rung 2  correction lane (git push --force)',
     event: { tool_name: 'Bash', tool_input: { command: 'git push --force origin main' } },
-    expect: { behavior: 'allow', actor: 'policy', rewritten: true },
+    // `correction`, not `policy`: the correction lane records its own actor so the trail can tell a
+    // rewrite apart from a clause that simply allowed. This expectation still said `policy` and so
+    // printed a failure against correct behaviour.
+    expect: { behavior: 'allow', actor: 'correction', rewritten: true },
   },
   {
     name: 'rung 4  written green clause (npm test)',
