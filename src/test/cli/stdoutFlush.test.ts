@@ -75,11 +75,18 @@ describe('output survives a pipe', () => {
     // The flush must not cost the exit code — a cron that ships on a schedule depends on it. Asserted
     // on the EXPORTER's status, not the pipeline's: `sh -c 'a | b'` exits with b's, so a test that
     // read the pipeline status would pass however wrong the exporter's code was.
-    const out = execFileSync('/bin/sh', [
-      '-c', `node ${JSON.stringify(CLI)} export --jsonline 2>/dev/null | cat; echo "rc=\${PIPESTATUS[0]:-$?}"`,
+    //
+    // The exporter's status is carried out through a file rather than `${PIPESTATUS[0]}`, because
+    // that is a bash array and this runs under `/bin/sh` — bash in POSIX mode on macOS, **dash** on
+    // Linux CI. Under dash the expansion is empty, the `:-$?` fallback reads `cat`'s status instead,
+    // and the assertion passes or fails for a reason that has nothing to do with the flush. The same
+    // platform split `docs/EVIDENCE.md` warns about for `script`.
+    const rcFile = path.join(dir, 'rc');
+    execFileSync('/bin/sh', [
+      '-c', `{ node ${JSON.stringify(CLI)} export --jsonline 2>/dev/null; echo $? > ${JSON.stringify(rcFile)}; } | cat`,
     ], { env: { ...process.env, SESSION_SITTER_DATA_DIR: dir }, encoding: 'utf8' });
     // No trail on this machine, so the exporter exits 1 and says where it looked.
-    expect(out).toContain('rc=1');
+    expect(fs.readFileSync(rcFile, 'utf8').trim()).toBe('1');
   });
 
   it('does not hang when the reader closes early', () => {
