@@ -1,0 +1,78 @@
+# Keep supervision running on a machine with no IDE.
+#
+# A **user** unit, not a system one: everything it reads lives under $HOME — the practices file, the
+# state dir, `~/.claude/session-sitter/` — and it must run as the person whose agents it supervises.
+# A system unit would run as root and read the wrong home, which is the sort of misconfiguration that
+# looks like it is working.
+#
+# ## Install
+#
+#     mkdir -p ~/.config/systemd/user
+#     cp session-sitter-daemon.service ~/.config/systemd/user/
+#     # then point it at your install and your state dir:
+#     systemctl --user edit session-sitter-daemon    # or edit the copy directly
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now session-sitter-daemon
+#
+#     systemctl --user status session-sitter-daemon
+#     journalctl --user -u session-sitter-daemon -f
+#     session-sitter daemon --status                 # the daemon's own answer
+#
+# `loginctl enable-linger $USER` if it should survive you logging out, which on a build box is
+# usually the point.
+#
+# ## Read `session-sitter daemon --status`, not just `systemctl status`
+#
+# They answer different questions. systemd knows whether the process exists; the daemon's own status
+# knows whether it is completing passes, and reports `stale` when the process is up and the work has
+# stopped. A wedged daemon is `active (running)` to systemd.
+
+[Unit]
+Description=Session Sitter — headless agent supervision
+Documentation=https://github.com/eranra/session-sitter/blob/main/docs/CLI.md
+# Nothing here needs the network at boot: a missing Telegram is a failed pass, and a failed pass is
+# logged and retried rather than fatal. Ordering after it only avoids noise in the first few seconds.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# WorkingDirectory decides the default state dir (`<cwd>/.supervisor-state`) and is where a `.env` is
+# read from, so set it to the repository whose agents you supervise. Prefer being explicit with
+# --state-dir below: a working directory that quietly changes what is supervised is worth avoiding.
+WorkingDirectory=%h
+
+# Adjust to how you installed it. In order of how likely each is to keep working across updates:
+#   the launcher on PATH ..... ExecStart=%h/.local/bin/session-sitter daemon --state-dir %h/.supervisor-state
+#   a global npm install ..... ExecStart=/usr/bin/session-sitter daemon --state-dir %h/.supervisor-state
+#   a checkout ............... ExecStart=/usr/bin/node %h/src/session-sitter/out/cli/index.js daemon ...
+ExecStart=%h/.local/bin/session-sitter daemon --state-dir %h/.supervisor-state
+
+# Restart always, not on-failure: the daemon exits 0 on SIGTERM, and a clean exit that is not a
+# `systemctl stop` still means nothing is applying timeouts.
+Restart=always
+RestartSec=5s
+
+# A pass that wedges on a hung socket would otherwise keep the unit "active" forever. This is the
+# outer bound; the daemon's own `--status` reports `stale` sooner and more precisely.
+WatchdogSec=0
+
+# stdout is the report, stderr is the log. The daemon writes its log to stderr on purpose, so
+# `--json` on stdout stays machine-readable when you run it by hand.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=session-sitter
+
+# It reads a practices file and a state dir, and writes a decision trail. It has no business
+# anywhere else.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# The two paths it must be able to write: its own state, and the plugin data dir holding the
+# heartbeat and the audit trail. Add your state dir here if it is not under $HOME/.supervisor-state.
+ReadWritePaths=%h/.supervisor-state %h/.claude/session-sitter
+
+[Install]
+WantedBy=default.target

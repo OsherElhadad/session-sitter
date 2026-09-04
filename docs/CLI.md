@@ -60,6 +60,7 @@ make compile && node out/cli/index.js status
 - [Getting it](#getting-it)
 - [Common conventions](#common-conventions)
 - [`status`](#status)
+- [`daemon`](#daemon)
 - [`log`](#log)
 - [`digest`](#digest)
 - [`policy check`](#policy-check)
@@ -207,6 +208,132 @@ out, whichever way the loop ends.
 Ctrl-C is honoured immediately, not at the end of the current interval. `--watch` requires a
 terminal — into a pipe the escapes would be garbage and the frames would append forever, so it
 refuses with exit 2 — and cannot be combined with `--json`.
+
+---
+
+## `daemon`
+
+Keeps supervision running on a machine with no IDE.
+
+```bash
+session-sitter daemon                    # resident, 5s passes
+session-sitter daemon --status           # is it running, and is it working?
+session-sitter daemon --once             # one pass — for cron
+```
+
+### What one pass does, and why it matters
+
+Two things: **correlate replies** to escalated decisions, and **expire the ones nobody answered.**
+
+The second is the reason this command exists. Expiring a card is the mechanism behind *silence is
+never approval* — and with nothing running, an escalated call never reaches its deadline. It sits in
+`orange_awaiting_user` for as long as the state dir survives, which is the one outcome this project
+says it will not produce. Before this, that mechanism ran only inside a VS Code window, or as
+`supervise poll --loop` typed by hand.
+
+### What it deliberately does not do
+
+**It does not apply decisions into a paused agent.** The orchestrator writes its decisions as JSON
+into `<stateDir>/outbox/`, and getting from there into a blocked agent means resolving a prompt
+through that agent's approval emitter — which lives inside another VS Code extension's process. A
+terminal cannot reach it.
+
+So the daemon **counts** the backlog and says a window is needed:
+
+```
+14:02 3 deliveries waiting for an IDE window — a terminal cannot reach a paused agent, so they stay queued
+```
+
+Nothing is lost by waiting: the outbox moves a delivery to `done/` only on a confirmed apply, so a
+window opening later drains the queue. A daemon that discarded what it could not deliver would be
+worse than one that never ran.
+
+It also does not start `SupervisionService`, `AutoResponder` or `PendingWatcher`, and that is not an
+omission. Those are driven by IBM Bob's pending-approval queue, read through the VS Code extension
+host — Bob is an IDE, so on a terminal-only machine **their input does not exist.** A daemon that
+constructed them would be watching an empty room.
+
+### One reader per machine
+
+A Telegram bot token has one update stream, and `getUpdates` consumes it **destructively**. Two
+pollers do not each get a copy: each update goes to whichever asked first, and the shared offset
+advances past updates the other never saw. Replies are silently split at random, and both halves look
+like they are working.
+
+So the daemon takes the same reader lease the Telegram remote control uses
+(`~/.claude/session-sitter/bus/telegram.lock`) and **reads only while it holds it.** Not holding it is
+not an error — it means a window is the reader here, and that window is already doing this work:
+
+```
+14:02 another reader holds the Telegram lease — timeouts only, no replies read
+```
+
+Note what still runs in that state: **timeouts.** Not holding the lease suppresses reading replies, never
+expiring a card, because standing fully down would leave escalations pending past their deadline.
+
+It also **refuses to start** when a live VS Code extension host is registered on this machine, naming
+the pids so the claim can be checked:
+
+```
+$ session-sitter daemon
+session-sitter daemon: refusing to start: 1 VS Code extension host live on this machine (pid 33550).
+```
+
+The lease alone is not enough for that case: with the Telegram remote interface off,
+`SupervisionService` polls `getUpdates` *without* taking the lease, so nothing would arbitrate.
+`--allow-with-ide` overrides it when you know the window is not supervising this state dir.
+
+### `--status` answers a different question from `systemctl status`
+
+```
+$ session-sitter daemon --status
+running · pid 164800 · eranra-wsl
+  started   09-04 14:55
+  last pass 09-04 14:56
+  passes    34, 0 record(s) transitioned
+  reading   no — timeouts only
+  state dir /repo/.supervisor-state
+```
+
+A pid cannot answer "are my timeouts being applied": pids are recycled, and **a daemon wedged
+mid-pass is still a live pid** — `active (running)` to systemd. So every pass writes a heartbeat, and
+the status is read from that:
+
+| | |
+|---|---|
+| `running` | the pid is live and a pass landed recently |
+| `stale` | **the process is up and the work has stopped.** Says so in as many words: timeouts are not being applied |
+| `dead` | the pid is gone |
+| `single pass` | a finished `--once` run. The process exiting is expected, so this is not reported as a failure — a status line that cries wolf at a working cron setup is one people stop reading |
+| — | nothing has ever run here, and it names the path it looked at |
+
+Staleness scales with `--interval`, so a daemon that wakes every ten minutes is not called wedged for
+being nine minutes idle. Exit is 0 only for `running`, so `--status` works as a health check.
+
+### Running it as a service
+
+A user unit ships at [`plugin/systemd/session-sitter-daemon.service`](../plugin/systemd/session-sitter-daemon.service):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp plugin/systemd/session-sitter-daemon.service ~/.config/systemd/user/
+# edit ExecStart for how you installed it, then:
+systemctl --user daemon-reload
+systemctl --user enable --now session-sitter-daemon
+loginctl enable-linger "$USER"        # survive logout — usually the point on a build box
+```
+
+A **user** unit, not a system one: everything it reads is under `$HOME`, and it has to run as the
+person whose agents it supervises. A system unit runs as root against the wrong home, which is the
+kind of misconfiguration that looks like it is working.
+
+`Restart=always` rather than `on-failure`, because the daemon exits 0 on `SIGTERM` and a clean exit
+that was not a `systemctl stop` still means nothing is applying timeouts.
+
+For cron instead, `--once` is the pass: `*/5 * * * * session-sitter daemon --once --state-dir ~/...`.
+
+Either way it stops cleanly on `SIGINT`/`SIGTERM` — it finishes the pass in flight, releases the lease
+and exits 0, rather than being killed halfway through writing a record.
 
 ---
 
@@ -548,7 +675,7 @@ The surface question has three answers because three people ask it.
 |---|---|---|---|
 | Where they are | one laptop, no team tier | a checkout of the corpus repo, reviewing PRs | a terminal, and nothing else |
 | Primary surface | the hook, silently. The denial message names the clause and quotes it, so most days they invoke nothing | `policy explain` to test a clause *before* writing it; `policy check --replay` for the blast radius of an edit | `session-sitter` on `$PATH` |
-| Concretely | third time the same thing is blocked: `/session-sitter:explain`, then the `writing-practices` skill | `policy explain <tool> --command …` · `policy check <file> --replay` · `policy compile --dry-run` in CI · `policy ablate` for clauses that stopped mattering | `session-sitter policy explain … --json`, `log --denied`, `digest --since 24h`, `export --html > report.html` to hand someone a file |
+| Concretely | third time the same thing is blocked: `/session-sitter:explain`, then the `writing-practices` skill | `policy explain <tool> --command …` · `policy check <file> --replay` · `policy compile --dry-run` in CI · `policy ablate` for clauses that stopped mattering | `session-sitter policy explain … --json`, `log --denied`, `digest --since 24h`, `export --html > report.html` to hand someone a file — and `session-sitter daemon` as a user unit, because nothing else expires an escalation on that machine |
 | Do they need the skill? | **yes, most of all** — no reviewer, so the pre-flight check is the only thing between them and a denial loop | rarely; they read the corpus directly | no; they type the command |
 
 **The bare-terminal path is not a degraded path.** The plugin's hooks are plain `node` commands
@@ -561,6 +688,12 @@ session-sitter policy explain Bash --command 'terraform apply' --json | jq -r '.
 ```
 
 That is also the CI path: exit 0 answered, 1 no policy loaded, 2 bad arguments.
+
+One thing on that machine is **not** free, and saying so is the honest version of the claim above:
+if you use escalation, something has to be resident to expire a card nobody answered. That is
+[`session-sitter daemon`](#daemon), and without it an escalated call stays pending instead of failing
+closed at its deadline. The governance decision itself needs nothing resident — the hook decides
+in-process — so this applies only to the escalation path.
 
 A surface a solo dev *must* invoke to get value is a surface that failed — so the hook decides
 silently, the denial explains itself, and `explain` is there for the third time the same thing gets

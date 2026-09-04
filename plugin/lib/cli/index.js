@@ -12,6 +12,7 @@
  * supervision decisions, an overnight digest, and a linter for the practices file.
  *
  *     session-sitter status              every session, and which of them need you
+ *     session-sitter daemon              keep applying timeouts with no IDE running
  *     session-sitter log                 the audit trail of supervision decisions
  *     session-sitter digest              what your agents did last night
  *     session-sitter policy check        lint a practices file, replay decisions against it
@@ -61,6 +62,7 @@ exports.runMain = runMain;
 const buildInfo_1 = require("../buildInfo");
 const args_1 = require("./args");
 const render_1 = require("./render");
+const daemon = __importStar(require("./daemon"));
 const digest = __importStar(require("./digest"));
 const exportCmd = __importStar(require("./export"));
 const learn = __importStar(require("./learn"));
@@ -69,6 +71,10 @@ const policy = __importStar(require("./policy"));
 const status = __importStar(require("./status"));
 const COMMANDS = {
     status: { summary: 'every agent session, and which of them need you', run: status.run },
+    daemon: {
+        summary: 'keep supervision running without an IDE — replies, and timeouts',
+        run: daemon.run,
+    },
     log: { summary: 'query the audit trail of supervision decisions', run: log.run },
     digest: { summary: 'what your agents did last night, one page per session', run: digest.run },
     policy: { summary: 'lint a practices file, or ask what it would decide', run: policy.run },
