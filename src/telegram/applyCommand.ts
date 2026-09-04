@@ -37,6 +37,22 @@ export interface ApplyDeps {
   launcher: SessionLauncher;
   now?: () => number;
   log?: (msg: string) => void;
+  /**
+   * Why this process cannot write into a session — null when it can.
+   *
+   * Set by an owner that is responsible for a session but unable to type into it, which is the
+   * `session-sitter daemon` on a machine with no VS Code: injection goes through the agent's own
+   * extension host over the V8 inspector, and there is no extension host in a terminal.
+   *
+   * Checked *before* any sender is called rather than left to fail inside one. The senders' failure
+   * modes are `no-channel` and `ambiguous`, which describe a window that could not find the right
+   * conversation — a completely different problem with a completely different fix, and reporting one
+   * as the other sends someone looking for a session that was never reachable from here at all.
+   *
+   * The sentence comes from `injectionBlocker` in `ownership.ts`, so what an owner can do and how that
+   * is explained stay in one place.
+   */
+  writeBlocker?: string | null;
 }
 
 function result(cmd: BusCommand, deps: ApplyDeps, ok: boolean, detail: string): BusResult {
@@ -73,6 +89,7 @@ export async function applyCommand(cmd: BusCommand, deps: ApplyDeps): Promise<Bu
 
 async function applySendText(cmd: BusCommand, deps: ApplyDeps): Promise<BusResult> {
   if (!cmd.text.trim()) { return result(cmd, deps, false, 'Nothing to send.'); }
+  if (deps.writeBlocker) { return result(cmd, deps, false, deps.writeBlocker); }
 
   if (cmd.source === 'bob') {
     // Bob takes a task id directly and reaches any task from any window, live or historical, so
@@ -91,6 +108,11 @@ async function applySendText(cmd: BusCommand, deps: ApplyDeps): Promise<BusResul
 }
 
 async function applyFocus(cmd: BusCommand, deps: ApplyDeps): Promise<BusResult> {
+  // Focus raises a window to the front, which is meaningless without one.
+  if (deps.writeBlocker) {
+    return result(cmd, deps, false,
+      `There is no IDE window here to bring to the front — ${deps.writeBlocker}`);
+  }
   const ok = await deps.launcher.focus(cmd.sessionId, cmd.source);
   return ok
     ? result(cmd, deps, true, 'Brought to the front on its machine.')
@@ -100,6 +122,11 @@ async function applyFocus(cmd: BusCommand, deps: ApplyDeps): Promise<BusResult> 
 async function applyNewSession(cmd: BusCommand, deps: ApplyDeps): Promise<BusResult> {
   if (cmd.source !== 'claude' && cmd.source !== 'bob') {
     return result(cmd, deps, false, 'Only Claude and Bob sessions can be started.');
+  }
+  // Starting a session is a VS Code command, so it needs a window to run in.
+  if (deps.writeBlocker) {
+    return result(cmd, deps, false,
+      `Cannot start a session from here — ${deps.writeBlocker}`);
   }
   const outcome = await deps.launcher.launch(cmd.source, cmd.text);
   return result(cmd, deps, outcome.ok, outcome.detail);

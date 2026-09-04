@@ -284,7 +284,11 @@ export function renderTopicHeader(
     `session: ${session.sessionId}`,
   ];
   if (owner.pid !== null) {
-    lines.push(`window: pid ${owner.pid} (${owner.basis === 'holds' ? 'has it open' : 'owns the workspace'})`);
+    // Named for what it is. Calling the daemon a "window" would tell a reader they can type here,
+    // which is the one thing a daemon-held session cannot do.
+    lines.push(owner.basis === 'daemon'
+      ? `daemon: pid ${owner.pid} (no IDE window here)`
+      : `window: pid ${owner.pid} (${owner.basis === 'holds' ? 'has it open' : 'owns the workspace'})`);
   }
   lines.push('');
   lines.push(blockedReason === null
@@ -501,7 +505,9 @@ export function renderWho(entries: ListEntry[], hostname: string): string {
   for (const { session, owner } of entries) {
     const who = owner.pid === null
       ? 'nobody — read-only'
-      : `pid ${owner.pid} · ${owner.basis === 'holds' ? 'has it open' : 'owns workspace'}`;
+      : owner.basis === 'daemon'
+        ? `pid ${owner.pid} · daemon, mirror only`
+        : `pid ${owner.pid} · ${owner.basis === 'holds' ? 'has it open' : 'owns workspace'}`;
     lines.push(`${statusIcon(session.status)} ${sessionLabel(session, 30)} → ${who}`);
   }
   return truncate2(lines.join('\n'));

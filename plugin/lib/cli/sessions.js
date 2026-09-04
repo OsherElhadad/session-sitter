@@ -61,6 +61,9 @@ const RemoteSessionSource_1 = require("../remote/RemoteSessionSource");
 const SshRunner_1 = require("../remote/SshRunner");
 const sessionScan_1 = require("../sessionScan");
 const sessionStatus_1 = require("../sessionStatus");
+const WindowRegistry_1 = require("../WindowRegistry");
+const ownership_1 = require("../telegram/ownership");
+const daemonHeartbeat_1 = require("../daemonHeartbeat");
 /**
  * Scan every source and return the merged list, newest first.
  *
@@ -78,6 +81,9 @@ async function collectSessions(opts = {}) {
     const result = { sessions, peers: [] };
     if (!opts.peers && !opts.remote) {
         result.sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+        if (opts.owners) {
+            result.owners = await resolveOwnership(result.sessions);
+        }
         return result;
     }
     const remote = opts.remote ?? new RemoteSessionSource_1.RemoteSessionSource({
@@ -96,7 +102,32 @@ async function collectSessions(opts = {}) {
         result.peerError = String(err);
     }
     result.sessions.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    if (opts.owners) {
+        result.owners = await resolveOwnership(result.sessions);
+    }
     return result;
+}
+/**
+ * Who is responsible for each session, resolved exactly as the panel resolves it.
+ *
+ * Host-free on purpose: the window registry is a directory of JSON files and the heartbeat is one more,
+ * so a terminal reaches the same answer as an IDE without being one. Sharing `resolveOwners` rather
+ * than reimplementing it is what stops the two surfaces disagreeing about who holds a session — which
+ * is worse than either being wrong, because then neither can be trusted.
+ */
+async function resolveOwnership(sessions) {
+    const windows = await (0, WindowRegistry_1.readLiveWindows)();
+    const beat = await (0, daemonHeartbeat_1.readHeartbeat)((0, daemonHeartbeat_1.heartbeatPath)());
+    const daemon = (0, ownership_1.daemonClaimantFrom)(beat, (0, daemonHeartbeat_1.health)(beat, Date.now(), pid => {
+        try {
+            process.kill(pid, 0);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }));
+    return (0, ownership_1.resolveOwners)(sessions, windows, daemon);
 }
 function filterSessions(sessions, opts) {
     return sessions.filter(s => {

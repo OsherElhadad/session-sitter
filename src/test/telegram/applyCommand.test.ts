@@ -151,6 +151,69 @@ describe('applyCommand — failure handling', () => {
   });
 });
 
+/**
+ * A daemon owns sessions no window claims, and cannot type into them: injection goes through the
+ * agent's own extension host over the V8 inspector, and a terminal has none.
+ *
+ * Checked before any sender runs rather than left to fail inside one. The senders' own failures are
+ * `no-channel` and `ambiguous`, which describe a window that could not find the right conversation —
+ * a different problem with a different fix, and reporting one as the other sends someone hunting for
+ * a session that was never reachable from here at all.
+ */
+describe('applyCommand — a process that cannot write', () => {
+  const BLOCKER = 'the session-sitter daemon holds this session, not an IDE window. '
+    + 'Open the session in an IDE window to send it a message.';
+
+  it('refuses a sendText, and never calls the sender', async () => {
+    const d = deps({ writeBlocker: BLOCKER });
+    const res = await applyCommand(command({ kind: 'sendText', text: 'hello' }), d.deps);
+    expect(res.ok).toBe(false);
+    expect(res.detail).toBe(BLOCKER);
+    // The point of checking first: nothing is attempted, so nothing can half-succeed.
+    expect(d.claudeSent).toEqual([]);
+    expect(d.bobSent).toEqual([]);
+  });
+
+  it('refuses a Bob sendText too, which would otherwise reach any task from any window', async () => {
+    const d = deps({ writeBlocker: BLOCKER });
+    const res = await applyCommand(
+      command({ kind: 'sendText', source: 'bob', text: 'hello' }), d.deps);
+    expect(res.ok).toBe(false);
+    expect(d.bobSent).toEqual([]);
+  });
+
+  it('refuses focus, because there is no window to bring forward', async () => {
+    const res = await applyCommand(
+      command({ kind: 'focus' }), deps({ writeBlocker: BLOCKER }).deps);
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain('no IDE window here');
+    expect(res.detail).toContain('Open the session in an IDE window');
+  });
+
+  it('refuses newSession, because starting one is a VS Code command', async () => {
+    const d = deps({ writeBlocker: BLOCKER });
+    const res = await applyCommand(
+      command({ kind: 'newSession', targetPid: 100, text: '/work/app' }), d.deps);
+    expect(res.ok).toBe(false);
+    expect(res.detail).toContain('Cannot start a session from here');
+    expect(d.launched).toEqual([]);
+  });
+
+  it('still reports the empty-message case as such, not as a write refusal', async () => {
+    // A blocker must not mask an ordinary mistake: "nothing to send" is more useful here.
+    const res = await applyCommand(
+      command({ kind: 'sendText', text: '   ' }), deps({ writeBlocker: BLOCKER }).deps);
+    expect(res.detail).toBe('Nothing to send.');
+  });
+
+  it('changes nothing when there is no blocker', async () => {
+    const d = deps({ writeBlocker: null });
+    const res = await applyCommand(command({ kind: 'sendText', text: 'hello' }), d.deps);
+    expect(res.ok).toBe(true);
+    expect(d.claudeSent).toHaveLength(1);
+  });
+});
+
 describe('commandIsMine', () => {
   it('takes a command for a session this window owns', () => {
     expect(commandIsMine(command(), 100, new Set(['s1']))).toBe(true);
