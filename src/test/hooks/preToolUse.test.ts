@@ -160,8 +160,12 @@ describe('handle', () => {
     expect(await handle(call('Bash', { command: 'cat .env' }))).toEqual({});
   });
 
-  it('returns no decision when the clause loader throws', async () => {
-    const spy = vi.spyOn(permissionRequest, 'loadClauses').mockRejectedValue(new Error('boom'));
+  it('returns no decision when the policy loader throws', async () => {
+    // Spied on `loadPolicyInputs` because that is the loader this hook now uses — the same one
+    // `PermissionRequest` uses, so the artifact is honoured here too. Spying on `loadClauses` would
+    // pass without proving anything: `loadPolicyInputs` calls it directly rather than through the
+    // module object, and on the artifact path it does not call it at all.
+    const spy = vi.spyOn(permissionRequest, 'loadPolicyInputs').mockRejectedValue(new Error('boom'));
     expect(await handle(call('Bash', { command: 'cat .env' }))).toEqual({});
     expect(spy).toHaveBeenCalled();
   });

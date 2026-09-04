@@ -15,11 +15,38 @@
 import * as os from 'os';
 import * as path from 'path';
 
-/** Root for everything this plugin writes. Override with `SESSION_SITTER_DATA_DIR` in tests. */
+/**
+ * The active Claude Code configuration directory.
+ *
+ * `CLAUDE_CONFIG_DIR` is how Claude Code is pointed somewhere other than `~/.claude`, and it is what
+ * an isolated run exports so a test never touches real sessions. Nothing here read it, so every
+ * path below resolved against the real home directory regardless — which made `session-sitter
+ * status` walk the real session store while exiting 0 and printing a plausible table. A command that
+ * ignores an isolation request loudly is recoverable; one that ignores it silently is not.
+ *
+ * An empty or whitespace-only value is treated as unset, because `export CLAUDE_CONFIG_DIR=` in a
+ * sourced env file is how a variable gets cleared, and resolving that to `/session-sitter` would be
+ * a worse answer than the default.
+ */
+export function claudeDir(
+  env: NodeJS.ProcessEnv = process.env, homedir: string = os.homedir(),
+): string {
+  const configured = env.CLAUDE_CONFIG_DIR?.trim();
+  return configured ? configured : path.join(homedir, '.claude');
+}
+
+/**
+ * Root for everything this plugin writes. Override with `SESSION_SITTER_DATA_DIR` in tests.
+ *
+ * The two explicit variables still win: `CLAUDE_PLUGIN_DATA` is what Claude Code exports for an
+ * installed plugin and already points inside the active config dir, so it needs no help.
+ * `claudeDir` only replaces the bare fallback — the path a `--plugin-dir` run or a hand-run hook
+ * actually takes, and the one an isolated run was silently escaping.
+ */
 export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.SESSION_SITTER_DATA_DIR
     || env.CLAUDE_PLUGIN_DATA
-    || path.join(os.homedir(), '.claude', 'session-sitter');
+    || path.join(claudeDir(env), 'session-sitter');
 }
 
 /** One JSON line per governance decision. */
