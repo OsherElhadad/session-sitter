@@ -526,7 +526,11 @@ function collectCandidates(
   clusters: readonly Cluster[], line: RunLine, opts: ProposeOptions, lane: Lane = 'green',
 ): Candidate[] {
   const out: Candidate[] = [];
-  const proseOnly = new Set<RefusalReason>(['no-matcher-shape', 'prefix-too-short']);
+  // Refusals a human could still write the rule for by hand — the shape is real, the machine just has
+  // nothing safe to emit about it. `path-symlinked` is deliberately NOT here: that cluster is refused
+  // because the tree it describes is not the tree it looks like, which is not advice to hand a human.
+  const proseOnly = new Set<RefusalReason>(
+    ['no-matcher-shape', 'prefix-too-short', 'path-below-floor']);
   for (const cluster of clusters) {
     const support = supportOf(cluster);
     const { tier, distances, declinedTeam } = tierFor(support, Boolean(opts.settings.project));

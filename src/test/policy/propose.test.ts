@@ -245,12 +245,25 @@ describe('the gates (§4.3)', () => {
     expect(candidateFrom(window).refusal?.why).toBe('no-call');
   });
 
-  it('E2 — refuses a tool with no matcher shape (the directory lane is not built)', () => {
+  it('E2 — a path-carrying write tool now has a shape, and refuses on the floor instead', () => {
+    // This case used to assert `no-matcher-shape`, back when the directory lane did not exist. It
+    // still refuses — `src` is one segment, which is a whole top-level tree — but it refuses for the
+    // reason the lane gives rather than for want of a lane. `src/test/policy/paths.test.ts` owns the
+    // rest of the lane's invariants.
     const writes = Array.from({ length: 6 }, (_, i) => bash('x', {
       tool: 'Write', call: { tool_name: 'Write', input: { file_path: '/w/api/src/a.ts' } },
       sessionId: `s-w${i}`, ts: `2026-08-2${i}T09:00:00.000Z`,
     }));
-    expect(candidateFrom(writes).refusal?.why).toBe('no-matcher-shape');
+    expect(candidateFrom(writes).refusal?.why).toBe('path-below-floor');
+  });
+
+  it('E2 — refuses a tool that carries no path and no command at all', () => {
+    const fetches = Array.from({ length: 6 }, (_, i) => bash('x', {
+      tool: 'WebFetch',
+      call: { tool_name: 'WebFetch', input: { url: 'https://example.invalid/x' } },
+      sessionId: `s-f${i}`, ts: `2026-08-2${i}T09:00:00.000Z`,
+    }));
+    expect(candidateFrom(fetches).refusal?.why).toBe('no-matcher-shape');
   });
 
   it('E3a — refuses the whole cluster on an unconfident split (§12.6)', () => {
