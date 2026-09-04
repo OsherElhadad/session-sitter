@@ -127,6 +127,29 @@ describe('applyCommand — focus and newSession', () => {
       command({ kind: 'newSession', source: 'codex', text: '/work/app' }), deps().deps);
     expect(result.ok).toBe(false);
   });
+
+  /**
+   * `BusResult.sessionId` has been documented as "set by newSession once the started session is
+   * identified" since the bus was written, and nothing ever set it — so a new session had no topic
+   * until somebody spoke to it in the IDE, which is what the user was trying to do from Telegram.
+   */
+  it('carries the started session id onto the result', async () => {
+    const f = deps();
+    f.deps.launcher.launch = async () =>
+      ({ ok: true, detail: 'Started.', sessionId: 'new-1' });
+    const result = await applyCommand(
+      command({ kind: 'newSession', source: 'claude', text: '/work/app' }), f.deps);
+    expect(result.sessionId).toBe('new-1');
+  });
+
+  it('omits the id when the launcher could not name what it opened', async () => {
+    const f = deps();
+    f.deps.launcher.launch = async () => ({ ok: true, detail: 'Opened a panel.' });
+    const result = await applyCommand(
+      command({ kind: 'newSession', source: 'claude', text: '/work/app' }), f.deps);
+    // Absent rather than empty: a topic must not be created for a session nobody identified.
+    expect('sessionId' in result).toBe(false);
+  });
 });
 
 describe('applyCommand — failure handling', () => {

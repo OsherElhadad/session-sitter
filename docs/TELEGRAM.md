@@ -98,7 +98,7 @@ peer discovery — but they are marked read-only, because only that machine can 
 |---|---|
 | `/sessions` | Redraw the list of active sessions. One pinned message, edited in place. |
 | `/history` | The earlier sessions. Tap one to bring it back into the active list. |
-| `/new` | Start a session: pick a workspace, then Claude or Bob. |
+| `/new` | Start a session: pick a workspace, then Claude or Bob. It sends the new session a first message and creates its topic, so you can continue from here straight away. |
 | `/who` | Which window owns which session, and why. Explains a read-only row. |
 | `/help` | The commands, and the current write limits. |
 | `/forget` | Sent **inside a topic**: delete that topic. The way to clear a thread the automatic cleanup cannot see — see [Topics the cleanup cannot see](#topics-the-cleanup-cannot-see). |
@@ -335,9 +335,53 @@ agent produces far more turns than that. So mirroring posts **user prompts and a
 Queuing the burst instead would put the group minutes behind the session, which is worse than saying
 what was skipped.
 
-**Starting a session is not confirmable.** Neither Claude nor Bob returns an id when told to open a
-conversation — the id appears only once the CLI writes its first record. So `/new` reports that the
-window was opened, and the session's topic appears a poll or two later once it exists.
+**`/new` starts the session, names it, and gives it a topic.** `primaryEditor.open` returns no id, so
+this used to report only that a window had been opened and promise a topic "once it writes its first
+message" — a promise nothing kept. **A panel nobody has spoken to writes no transcript**, and the
+worklist is built from transcripts, so the session existed in the IDE and could never be continued from
+the phone it was started on.
+
+Two things make it work now. Claude's live manager knows the panel immediately, so `/new` reads the open
+sessions before and after opening and learns which one appeared. Then it **sends that session a first
+message**, which is what makes the CLI write a transcript and the session real. The id travels back on
+the command result, and its topic is created there and then rather than waited for.
+
+Where it cannot be sure, it says so instead of guessing:
+
+| | |
+|---|---|
+| two sessions appeared at once | it refuses to pick. A first message in the wrong conversation is worse than none, so the panel is left for you to use in the IDE |
+| nothing registered within 8s | the panel is open and unnamed; say something to it in the IDE and it appears on the next pass |
+| the first message did not land | the session is identified and gets a topic, but nothing is mirrored until it has a transcript. The reason is quoted |
+
+None of those is reported as "could not start" — the panel is open in every one of them, and saying
+otherwise sends you looking for a window sitting in front of you.
+
+**Bob is unchanged**, and still cannot be confirmed: `startTask` returns nothing and its tasks live in a
+SQLite store this window does not read synchronously. Its topic still appears a poll or two later.
+
+### Which workspace it opens in
+
+The menu offers one button per workspace folder, and pairs each folder with the window most likely to
+honour it — **a window that has that folder and only that folder**. That matters because nothing in
+Claude's API takes a folder: `primaryEditor.open` accepts a session id and nothing else, so in a
+multi-root window Claude picks the folder itself.
+
+This is a fix, not a refinement. The menu used to pair a folder with *whichever window listed it first*,
+so a multi-root window would capture folders that had a dedicated window of their own — and tapping one
+opened a session that reported a different workspace, silently. Where no single-folder window exists the
+folder is still offered, with the caveat said **before** you tap:
+
+```
+Start a new session where?
+
+Some folders cannot be guaranteed:
+· app: that window also has other, third open, and Claude picks the folder itself — the session may
+  land in one of those instead
+```
+
+Warned before rather than after, because once the session exists in the wrong folder the only remedy is
+to close it and start again.
 
 ---
 

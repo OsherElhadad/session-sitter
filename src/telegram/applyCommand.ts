@@ -24,8 +24,17 @@ export interface TargetedClaudeSender extends MessageSender {
 
 /** Starts a new session in this window. Implemented over `vscode.commands` by the extension. */
 export interface SessionLauncher {
-  /** Open a fresh session for `source`, returning a sentence describing the outcome. */
-  launch(source: 'claude' | 'bob', workspace: string): Promise<{ ok: boolean; detail: string }>;
+  /**
+   * Open a fresh session for `source`, returning a sentence describing the outcome.
+   *
+   * `sessionId` is set when the launcher could identify what it started, which is what lets a topic be
+   * created for it immediately instead of waiting for a transcript that may never be written. Absent
+   * when it could not — a Bob task, or a Claude panel that did not register in time — and absent is
+   * not a failure: the panel is open either way, and the two cases need different words.
+   */
+  launch(source: 'claude' | 'bob', workspace: string): Promise<{
+    ok: boolean; detail: string; sessionId?: string;
+  }>;
   /** Bring the given session to the front in this window. */
   focus(sessionId: string, source: string): Promise<boolean>;
 }
@@ -129,7 +138,10 @@ async function applyNewSession(cmd: BusCommand, deps: ApplyDeps): Promise<BusRes
       `Cannot start a session from here — ${deps.writeBlocker}`);
   }
   const outcome = await deps.launcher.launch(cmd.source, cmd.text);
-  return result(cmd, deps, outcome.ok, outcome.detail);
+  const res = result(cmd, deps, outcome.ok, outcome.detail);
+  // Carried on the result so the reader can create the session's topic and report into it. The field
+  // has been documented on `BusResult` since the bus was written and nothing ever set it.
+  return outcome.sessionId === undefined ? res : { ...res, sessionId: outcome.sessionId };
 }
 
 /**
