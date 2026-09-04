@@ -109,6 +109,8 @@ const models_2 = require("../supervisor/models");
 const paths_1 = require("./paths");
 const io_1 = require("./io");
 const settings_1 = require("./settings");
+const escalate_1 = require("./escalate");
+const daemonHeartbeat_1 = require("../daemonHeartbeat");
 const session_1 = require("./session");
 const UNREACHABLE_MESSAGE = 'Session Sitter denied this call because the supervisor could not reach a verdict, and silence '
     + 'is not approval. Nothing here says the call is unsafe — only that nothing said it was safe. '
@@ -572,6 +574,83 @@ function routeAmbiguous(settings) {
     }
     return settings.mode === 'observe' ? 'handed-back' : 'fail-closed';
 }
+/**
+ * Ask a human, and turn their answer — or their silence — into a verdict.
+ *
+ * ## It refuses to wait for something nobody will answer
+ *
+ * An ask is served by `session-sitter daemon`, which is the only process allowed to read the human
+ * channel (a bot token has one destructive update stream, and a hook runs *per prompt* — polling it
+ * here would mean an unbounded number of competing readers). So with no live daemon the ask cannot be
+ * delivered, and waiting out the deadline would hold the agent still for nothing. It denies at once
+ * and says which command to run.
+ *
+ * A **wedged** daemon is treated the same as none, which is why `health()` distinguishes them: a
+ * process that has stopped completing passes cannot serve an ask either, and "the pid exists" is not
+ * the question.
+ *
+ * ## Silence is still never approval
+ *
+ * No verdict by the deadline is a deny, recorded with `actor: 'timeout'` and a note saying a human was
+ * asked and did not answer. Escalation adds a way to say yes; it never adds a way to drift into one.
+ */
+async function escalateToHuman(args) {
+    const { input, toolName, why, unsplittable } = args;
+    const deny = (message, note) => ({
+        decision: { behavior: 'deny', message },
+        light: null, clause: null, actor: 'timeout', rung: 7, note, settled: false, allowedBy: null,
+    });
+    const beat = await (0, daemonHeartbeat_1.readHeartbeat)((0, daemonHeartbeat_1.heartbeatPath)());
+    const state = (0, daemonHeartbeat_1.health)(beat, Date.now(), pid => {
+        try {
+            process.kill(pid, 0);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    });
+    if (state !== 'running') {
+        const because = state === 'stale'
+            ? 'a daemon is running but has stopped completing passes, so it cannot deliver the question'
+            : state === 'dead' ? 'the last daemon here has exited'
+                : 'no daemon has run here';
+        return deny(`${UNREACHABLE_MESSAGE}\n\n(escalation: ${because}. Start one with \`session-sitter daemon\`, `
+            + 'or turn escalation off with SESSION_SITTER_ESCALATE=off.)', `denied — ${why}; escalation unavailable (${state})`);
+    }
+    const ask = (0, escalate_1.buildAsk)({
+        sessionId: input.session_id ?? 'unknown',
+        cwd: input.cwd ?? '',
+        tool: toolName,
+        inputSummary: (0, trail_1.summarizeInput)(input.tool_input),
+        reason: unsplittable === null ? why : `${why} (shell: ${unsplittable})`,
+        now: new Date(),
+        waitSeconds: args.waitSeconds,
+    });
+    const { verdict, waitedMs } = await (0, escalate_1.askHuman)({ ask });
+    if (verdict === null) {
+        return deny('Session Sitter denied this call because a human was asked and did not answer within '
+            + `${args.waitSeconds}s, and silence is not approval. Nothing here says the call is unsafe — `
+            + 'only that nobody said it was safe.', `denied — ${why}; asked a human, no answer in ${Math.round(waitedMs / 1000)}s`);
+    }
+    if (verdict.decision === 'allow') {
+        return {
+            decision: { behavior: 'allow', updatedInput: input.tool_input ?? {} },
+            light: 'green',
+            clause: null,
+            actor: 'human',
+            rung: 7,
+            note: `allowed by ${verdict.by} after ${Math.round(waitedMs / 1000)}s`
+                + `${verdict.text ? `: ${verdict.text}` : ''}`,
+            // Never settled: one human saying yes once is not a standing rule, and deriving a permission
+            // rule from it would turn a single answer into policy nobody wrote.
+            settled: false,
+            allowedBy: null,
+        };
+    }
+    return deny(`Session Sitter denied this call: ${verdict.by} declined it`
+        + `${verdict.text ? ` — ${verdict.text}` : '.'}`, `denied by ${verdict.by} after ${Math.round(waitedMs / 1000)}s`);
+}
 async function handle(rawInput) {
     const started = Date.now();
     const input = rawInput;
@@ -665,16 +744,30 @@ async function handle(rawInput) {
             ? 'no classifier configured and no written clause applied'
             : `the shell command line could not be split with certainty (${unsplittable}), so no part of `
                 + 'it could be evaluated';
-        verdict = {
-            decision: {
-                behavior: 'deny',
-                message: unsplittable === null ? UNREACHABLE_MESSAGE
-                    : `${UNREACHABLE_MESSAGE}\n\n(shell: ${unsplittable})`,
-            },
-            light: null, clause: null, actor: 'timeout', rung: 7,
-            note: `denied — ${why}`, settled: false,
-            allowedBy: null,
-        };
+        // The last step of rung 7, before it fails closed: ask a human, if one can be reached.
+        //
+        // Still rung 7, deliberately not a rung 8. This is the last resort, and asking a human *is* the
+        // last resort — `actor` is what separates the outcomes (`human` answered, `timeout` did not),
+        // and it is already the field that answers "who decided". Renumbering would also have meant
+        // rewriting `docs/EVIDENCE.md`, which is a dated record of real decisions; a record edited to
+        // suit a later refactor is not a record.
+        if (settings.escalate) {
+            verdict = await escalateToHuman({
+                input, toolName, why, waitSeconds: settings.escalateWaitSeconds, unsplittable,
+            });
+        }
+        else {
+            verdict = {
+                decision: {
+                    behavior: 'deny',
+                    message: unsplittable === null ? UNREACHABLE_MESSAGE
+                        : `${UNREACHABLE_MESSAGE}\n\n(shell: ${unsplittable})`,
+                },
+                light: null, clause: null, actor: 'timeout', rung: 7,
+                note: `denied — ${why}`, settled: false,
+                allowedBy: null,
+            };
+        }
     }
     // `updatedPermissions` is allow-only, and only for a decision that is genuinely standing AND was
     // made by a written clause. The dialog's own `permission_suggestions` are deliberately NOT echoed:

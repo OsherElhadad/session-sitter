@@ -5,6 +5,59 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.14 — Rung 7 can ask a human now, and the hook holds the prompt open to do it
+
+Rung 7 had one answer: deny. Correct, and for a terminal session over SSH it was the *only* answer —
+there was no way for a person who was not at that terminal to say yes. `SESSION_SITTER_ESCALATE=on`
+adds one, and rung 7 becomes *ask a human, then fail closed.*
+
+**The prompt is held open rather than typed into, and that is the design.** The obvious way to answer a
+terminal session from a phone is to write into it — find the process, inject the keystrokes. This
+project has that machinery for the IDE (`ClaudeSender` reaches into the `anthropic.claude-code`
+extension host over the V8 inspector) and it cannot work for a bare `claude` in a terminal, which has
+no extension host to reach into. Inverting it is better, not merely available: `PermissionRequest` is
+**already** the synchronous decision point and is allowed 60 seconds, so nothing needs to write into
+the session at all. What comes back is a real permission decision that can cite a clause, rather than
+simulated typing, and it works identically in a tmux pane, over SSH, or in an IDE.
+
+**The hook never touches the messaging channel.** A bot token has one update stream and `getUpdates`
+consumes it destructively — and a hook runs *once per prompt*, so a hook that polled Telegram would be
+an unbounded number of competing readers, far worse than the two-window case the reader lease exists to
+prevent. So the hook writes an **ask** to a file and polls for a **verdict** beside it; the daemon is
+the single reader that posts it, correlates the reply and writes the verdict. The ask is promoted into
+an ordinary supervision record for that, which is what keeps it inside the *same* `pollResponses` call
+as every other pending decision — a second call would have consumed updates meant for the first, inside
+one process.
+
+**It refuses to wait for something nobody will answer.** With no daemon running, the ask cannot be
+delivered, so the hook denies immediately and names the command that fixes it rather than holding the
+agent still for 45 seconds first. A wedged daemon counts as none — it cannot deliver an ask either, and
+"the pid exists" is not the question. That is what the heartbeat's `stale` verdict is for.
+
+**A real safety bug found and fixed on the way.** `Orchestrator.replyApproves` approved on *any*
+approval word anywhere in the reply — so **"no, don't allow that" approved the call**, because it
+contains `allow`. Survivable while it only resolved Bob approvals; not survivable once a permission
+decision rides on the same parser. It now requires an approval word **and** no negation word.
+Requiring *every* word to be an approval was the other obvious fix and is worse — it rejects "yes
+please" and "ok go ahead", which is how people actually answer. There is still exactly one definition
+of "what counts as approval", and the escalation path deliberately does not add a second.
+
+Two things it will not do, both deliberate:
+
+- **One answer never becomes policy.** An escalated allow is not `settled`, so no standing permission
+  rule is derived from it even with `SESSION_SITTER_PERSIST_RULES=on`.
+- **Silence is still never approval.** The deadline passing is a denial, recorded with `actor: 'timeout'`
+  and a note saying a human was asked and did not answer.
+
+The wait is capped at 55s, below the event's own 60s budget, because a hook killed mid-wait returns no
+JSON at all — which Claude Code reports as a hook *error* rather than as a decision, and a governance
+layer whose failure mode is "no verdict" is not one.
+
+The heartbeat moved into `src/daemonHeartbeat.ts` so the hook can read it without importing the
+daemon. That import would have dragged the orchestrator, the supervisor factory, the Telegram client
+and the window registry into the closure of **every permission prompt**, to call three functions that
+read one small JSON file.
+
 ### 0.8.13 — Nothing was expiring an escalation on a machine with no IDE
 
 *Silence is never approval* is this project's founding rule, and the mechanism behind it is a card
