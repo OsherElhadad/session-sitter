@@ -33,6 +33,8 @@ import {
   relaxations,
   renderedCount,
 } from '../../policy/ablate';
+import { coreClauses, renderCore } from '../../policy/compile';
+import { selectClauses } from '../../policy/select';
 
 // --------------------------------------------------------------------------- fixtures
 
@@ -472,6 +474,93 @@ describe('the ceiling (§5.3)', () => {
 
   it('is one number in config, not adaptive', () => {
     expect(CEILING_PER_TIER).toBe(25);
+  });
+});
+
+// ------------------------------------------------------- the exemption's cross-module dependency
+
+/**
+ * #81. `renderedCount` exempts every matchable clause from the per-tier ceiling, and that exemption
+ * is what makes a mining pipeline structurally unable to consume the prompt budget: every mined
+ * candidate carries an anchored matcher, so `renderedCount` is always 0 for it.
+ *
+ * The exemption is **not** a property of the schema. It holds only because `selectClauses` tests a
+ * patterned clause against the call and drops it as `evaluated-missed` rather than rendering it. That
+ * is a different module, and simplifying it into an unfiltered bundle would make the exemption false
+ * while `renderedCount` kept returning 0 — the count would simply be over the wrong population.
+ *
+ * So these assertions name the selector's *behaviour* alongside the count. Asserting `renderedCount`
+ * alone passes for the wrong reason the day the selector stops dropping.
+ */
+describe('#81 — the rendered-ceiling exemption is a selector behaviour, not a schema property', () => {
+  const mined = (id: string, pattern: string, level = 'red'): CompiledClause => ({
+    id, citation: `practices §${id}`, origin: 'learned', tier: 'user',
+    level: level as CompiledClause['level'], status: 'accepted', kind: 'intention',
+    title: id, body: `- ${id}\n`, patterns: [{ raw: pattern, is_regex: false, flags: '' }],
+    fix: null, weight: 'medium', expires: null, supersedes: [], source_file: null, deletable: null,
+  });
+
+  // A corpus of matchable mined clauses well past the ceiling, so a count over the wrong population
+  // could not be mistaken for a corpus that merely happens to fit.
+  const MINED = Array.from({ length: CEILING_PER_TIER + 10 }, (_, i) =>
+    mined(`mined-${i}`, `shape-${i} --now`, i % 2 === 0 ? 'red' : 'green'));
+
+  const select = (haystack: string) =>
+    selectClauses(MINED, { haystack, today: '2026-09-04' });
+
+  it('a corpus of matchable clauses is exempt, and the selector is why: every one is evaluated-missed',
+    () => {
+      expect(MINED.length).toBeGreaterThan(CEILING_PER_TIER);
+      expect(renderedCount(MINED, 'learned-red')).toBe(0);
+      expect(renderedCount(MINED, 'learned-green')).toBe(0);
+
+      // The load-bearing half. `renderedCount` is 0 *because* the selector evaluated each clause
+      // against this call and dropped it — not because the clauses are absent from the artifact.
+      const selection = select('git status --short');
+      expect(selection.dropped['evaluated-missed']).toBe(MINED.length);
+      expect(selection.selected).toEqual([]);
+      // Nothing reached the fill order at all, so no byte of the per-call budget was spent.
+      expect(selection.dropped.budget).toBe(0);
+    });
+
+  it('a clause that matches is rendered and the rest are still dropped — the exemption is per call',
+    () => {
+      const selection = select('shape-3 --now please');
+      expect(selection.matched).toEqual(['mined-3']);
+      expect(selection.dropped['evaluated-missed']).toBe(MINED.length - 1);
+      // And the ceiling count does not move, because a matched clause is decided deterministically
+      // at rungs 2–4: it is rendered for *this* call and costs no standing instruction.
+      expect(renderedCount(MINED, 'learned-red')).toBe(0);
+      expect(renderedCount(MINED, 'learned-green')).toBe(0);
+    });
+
+  it('the exemption is exactly the pattern test: the same clauses as prose consume the whole ceiling',
+    () => {
+      const prose = MINED.map(c => ({ ...c, patterns: [] }));
+      const reds = MINED.filter(c => c.level === 'red').length;
+      expect(renderedCount(prose, 'learned-red')).toBe(reds);
+      expect(renderedCount(prose, 'learned-green')).toBe(MINED.length - reds);
+      const selection = selectClauses(prose, { haystack: 'git status', today: '2026-09-04' });
+      expect(selection.dropped['evaluated-missed']).toBe(0);
+      expect(selection.selected.length).toBeGreaterThan(0);
+    });
+
+  /**
+   * The second module the exemption leans on, which #81 does not name. `renderedCount` counts
+   * patternless clauses, and there are *two* channels a patternless clause can reach the prompt
+   * through: `prompt_core` (`coreClauses`, reds and oranges, inside the cache breakpoint) and the
+   * per-call block (`selectClauses`'s `fill`). `coreClauses` filters on `patterns.length === 0` for
+   * the same reason, so relaxing *it* would push every mined red into the cached core — the standing
+   * instruction budget, and a revision-hash change on every running session's prefix. Strictly worse
+   * than the per-call case, and equally silent.
+   */
+  it('the core channel exempts them too: no matchable clause reaches prompt_core', () => {
+    expect(coreClauses(MINED)).toEqual([]);
+    expect(renderCore(MINED)).toBe('');
+    // The same reds as prose do reach it, so the emptiness above is the pattern test and not the
+    // fixture failing to be a red at all.
+    const prose = MINED.filter(c => c.level === 'red').map(c => ({ ...c, patterns: [] }));
+    expect(coreClauses(prose)).toHaveLength(prose.length);
   });
 });
 
