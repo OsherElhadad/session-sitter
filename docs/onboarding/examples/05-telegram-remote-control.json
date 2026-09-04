@@ -1,0 +1,56 @@
+{
+  // ── Level 5: read and drive sessions from Telegram ────────────────────────
+  //
+  // Each active session becomes a TOPIC in a Telegram forum group, so the thread you type in IS the
+  // session you are talking to. Off by default.
+  //
+  // Four things must be true in Telegram first, and all four are easy to miss:
+  //
+  //   1. a GROUP with Topics enabled — Manage group → Topics. Topics cannot be enabled in a
+  //      one-to-one chat, which is why a group is needed even for a single user.
+  //   2. the bot's privacy mode DISABLED — @BotFather → /setprivacy → Disable. On by default, and
+  //      with it on the bot sees /sessions but not the text you type into a session topic: the
+  //      feature appears to work and silently ignores everything you say to an agent.
+  //   3. the bot in the group as an ADMIN with "Manage Topics" — it creates, renames and deletes a
+  //      topic per session, none of which is possible without that right.
+  //   4. one bot PER MACHINE. A bot token has a single message stream and reading removes each
+  //      message from it, so two machines sharing one token take each other's messages.
+
+  "sessionSitter.telegram.remoteControl": true,
+
+  // Telegram numeric USER ids permitted to drive it. An EMPTY LIST AUTHORISES NOBODY and the feature
+  // does not start. To find your id: turn this on with the list empty, send any message in the
+  // group, and read the "Session Sitter" Output panel — every rejected sender's id is logged.
+  //
+  // All four telegram.* settings fall back to an environment variable when unset, which is how
+  // `session-sitter daemon` is configured on a machine with no IDE:
+  //   SESSION_SITTER_TELEGRAM_REMOTE_CONTROL=1
+  //   SESSION_SITTER_TELEGRAM_ALLOWED_USER_IDS="123456789, 987654321"   # commas or whitespace
+  //   SESSION_SITTER_TELEGRAM_FULL_MESSAGES=1
+  //   SESSION_SITTER_TELEGRAM_MAX_MESSAGE_PARTS=4
+  "sessionSitter.telegram.allowedUserIds": ["123456789"],
+
+  // Mirror each turn WHOLE, split over as many messages as it needs. Off falls back to the panel's
+  // ~250-character preview, which is unusable as the only view of an answer you have to reply to.
+  "sessionSitter.telegram.fullMessages": true,
+
+  // Messages one turn may be split into, 1–20. Past the budget the last message says how many
+  // characters were left out and points at "Full transcript". The real ceiling is Telegram's own
+  // rate limit — about 20 messages a minute to one group — so 4 is a deliberate default, not a
+  // timid one.
+  "sessionSitter.telegram.maxMessageParts": 4,
+
+  // The group id is shared with supervision, so cards and conversations land in the same group.
+  // Negative because it is a group; a supergroup id starts with -100.
+  "sessionSitter.supervisor.telegramChatId": "-1001234567890",
+
+  // The token belongs in the environment or a .env file, NOT here — see point 4 above, and
+  // Settings Sync would copy a token in settings to every machine:
+  //
+  //     TELEGRAM_BOT_TOKEN=123456:ABC...
+
+  // Remote control does not require supervision, but they are usually wanted together.
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",
+  "sessionSitter.supervisor.messagingChannel": "telegram",
+  "sessionSitter.supervisor.engine": "claude"
+}

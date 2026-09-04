@@ -1,0 +1,55 @@
+{
+  // ── A remote or WSL setup ─────────────────────────────────────────────────
+  //
+  // On WSL, SSH remote, or IBM Bob IDE these settings are read from the CLIENT machine, so they
+  // belong in your USER settings — not in the remote window's workspace settings.
+  //
+  // The trap worth knowing: with a Windows-side VS Code opening a WSL folder, the live user
+  // settings.json is on the WINDOWS side (under /mnt/c/Users/<you>/AppData/Roaming/Code/User/), and a
+  // Linux-side ~/.config/Code/User/settings.json left over from a native install is never read while
+  // looking entirely plausible. Run `ss-config.mjs where` and confirm which file the panel reflects
+  // before editing either.
+
+  // Windows a report of a window's open sessions. The process that publishes it is the SERVER-SIDE
+  // extension host, and closing the client window does not stop it: the server keeps the host alive
+  // for a reconnect, so it goes on reporting the sessions that were open when you disconnected.
+  // Setting this makes those reports expire after N minutes of nobody touching the window.
+  //
+  // 0 (the default) turns this off. RAISE it rather than lower it if a session you are working in
+  // moves to History too eagerly. Windows running a build too old to publish the signal are always
+  // treated as attended.
+  "sessionSitter.windowAttentionMinutes": 30,
+
+  // Peer discovery reads the IDE's own state store: every remote window you have opened leaves an
+  // `ssh-remote+<user@host>` record, so the address used is the exact one the IDE connects with.
+  // This machine's own addresses are filtered out first. SSH runs with BatchMode=yes, so a host that
+  // would prompt for a password is reported unreachable rather than blocking the poll.
+  //
+  // Set "off" if you work on one machine and would rather the extension never invoke ssh.
+  "sessionSitter.remotePeers": "auto",
+
+  // Sessions on other machines are shown, and clicking one focuses the window on ITS OWN machine
+  // rather than opening anything here. Grouping by machine first makes that obvious in the list.
+  "sessionSitter.sessionSort": "hostWorkspace",
+
+  // Paths are machine-scoped for a reason: a path is only meaningful on the machine that has it.
+  // These stay overridable per workspace, so a checkout can point at its own corpus.
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",
+
+  // Where the classifier runs, and where a legacy .env is read from. Derived from the state dir's
+  // parent when empty. The .env layers are read from THIS directory, not from your home directory:
+  //   <parent>/.env  <  <root>/.env  <  <root>/.supervisor.env   (process env wins over all three)
+  "sessionSitter.supervisorRepoPath": "/home/you/work/your-project",
+
+  // Only needed if the CLI is not on the PATH the extension host sees — which on a remote setup is
+  // the PATH of the machine the host runs on, not your terminal's.
+  "sessionSitter.supervisor.bobCliPath": "bob",
+  "sessionSitter.supervisor.claudeCliPath": "claude"
+
+  // The engine is left at its default, "bob", which needs a key. It is a credential, so it goes in
+  // the environment or in <supervisorRepoPath>/.supervisor.env rather than in settings:
+  //
+  //     BOBSHELL_API_KEY=...
+  //
+  // Either BOBSHELL_API_KEY or BOB_API_KEY is accepted.
+}

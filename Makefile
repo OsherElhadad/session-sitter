@@ -109,12 +109,20 @@ coverage: node_modules $(BUILD_INFO) ## Run the tests with a coverage report
 	$(NPX) vitest run --coverage
 
 .PHONY: guards
-guards: compile ## Run every CI guard: no Python, settings match, one project name, plugin/lib fresh
+guards: compile ## Run every CI guard: no Python, settings match, one project name, plugin/lib fresh, onboarding honest
 	bash ci/check-no-python.sh
 	node ci/check-settings.mjs
 	bash ci/check-naming.sh
 	node ci/check-links.mjs
 	bash ci/check-plugin-lib.sh
+	bash ci/check-onboarding.sh
+
+# The onboarding skill writes to a real settings.json, so a stale claim in it is a wrong setting in
+# someone's configuration rather than a documentation bug. Runnable on its own because it is the one
+# guard you want after touching either docs/onboarding/ or a setting declaration.
+.PHONY: onboarding
+onboarding: ## Check the onboarding skill against this build's settings
+	bash ci/check-onboarding.sh
 
 .PHONY: check
 check: typecheck lint test ## compile + lint + test — the same gate CI applies

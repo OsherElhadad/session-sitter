@@ -2,6 +2,12 @@
 
 Everything in `docs/`, and what each file is for. Start with whichever question you actually have.
 
+## Getting set up
+
+| Document | Read it when you want to know |
+|---|---|
+| [`onboarding/`](onboarding/) | how to have an agent configure Session Sitter for you, or how to do it by hand: the six layers in the order they build on each other, seven worked configurations, and a validator that reads the settings the installed build actually declares |
+
 ## The extension
 
 | Document | Read it when you want to know |
