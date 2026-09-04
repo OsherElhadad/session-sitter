@@ -1,0 +1,29 @@
+{
+  // ── Level 1: the session panel, nothing else ─────────────────────────────
+  //
+  // Every key here is cosmetic or ergonomic. Nothing is required — the panel works with an empty
+  // settings file — so this is what "configuration" means before any agent governance is involved.
+  //
+  // Copy into your USER settings (Ctrl+Shift+P → "Preferences: Open User Settings (JSON)").
+
+  // Hold the rows still. The default, "recent", re-sorts every time any session updates, which is
+  // right for "what did I touch last" and wrong for "where was the session I was reading".
+  "sessionSitter.sessionSort": "hostWorkspace",
+
+  // One colour per project. Keys are tried in the order written and the FIRST MATCH WINS, so the
+  // specific entries come before the globs and "*" comes last.
+  "sessionSitter.workspaceColors": {
+    "session-sitter": "green",
+    "scratch-*": "slate",
+    "*": "auto"
+  },
+
+  // Codex and VS Code Chat expose no live-process signal, so recency is the only honest proxy for
+  // "is this session active". 120 minutes is the default; 0 keeps them in History always.
+  "sessionSitter.probelessActiveWindowMinutes": 120,
+
+  // Sessions from other machines. "auto" discovers peers from the remote windows this IDE has
+  // already opened and reaches them over SSH with BatchMode=yes. "off" disables discovery, the
+  // polling, and any SSH connection at all.
+  "sessionSitter.remotePeers": "auto"
+}

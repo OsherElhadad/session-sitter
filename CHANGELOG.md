@@ -5,6 +5,69 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.18 — Configuration you can have a conversation about
+
+Thirty-eight settings, six environment-variable groups, and a set of dependencies between them that
+nobody discovers in the right order. `docs/CONFIGURATION.md` documents all of it accurately and
+answers exactly one question — *what does this setting do* — while the question someone actually has
+on the first day is *what should I set*, and the question on the second is *why isn't it working*.
+
+So `docs/onboarding/` is an **Agent Skill**: instructions an agent follows to interview you, write the
+settings, and validate them. Six layers, walked in the order they build on each other — the session
+panel needs nothing, auto-respond rules need nothing, the supervisor needs a state directory, Telegram
+needs a bot, remote control needs a forum group, the fast classifier needs a gateway — so the
+conversation stops at the layer you actually wanted instead of touring all of them. It reconfigures an
+existing install just as well: *"turn on Telegram cards"*, *"why isn't my rule firing?"*, *"review my
+configuration"*.
+
+**The interesting problem was preventing the agent from being confidently wrong.** VS Code ignores an
+unrecognised setting key **silently** — no error, no warning, `config.get()` just returns the default —
+so an id half-remembered from a doc gives you a configuration that looks complete and does nothing.
+That failure is invisible at exactly the moment it is introduced.
+
+A skill that carried a list of settings would be that failure waiting to happen, so it carries a
+script instead. `ss-config.mjs` reads `contributes.configuration` out of the `package.json` of the
+build in front of you — a repo checkout, an installed extension, or a committed snapshot as a last
+resort — and validates against that. Three commands:
+
+- **`where`** lists every `settings.json` on the machine with its modification time and whether it
+  already carries `sessionSitter.*` keys. This is first for a reason: on WSL the live user settings are
+  on the Windows side under `/mnt/c` while a Linux-side leftover sits there looking equally plausible
+  and is never read, and editing the wrong file is the commonest way a change appears to do nothing.
+- **`schema`** prints the declared settings as JSON, so the skill never hard-codes an id.
+- **`check`** resolves settings, `process.env` and the three `.env` layers in the extension's own
+  precedence order, then reports what is on, what is off, and why. It catches an unknown key with the
+  correction named, a wrong type, a value outside its enum or range, a credential in a workspace file
+  that is probably committed, and every way an `autoRespond` rule silently never fires — half a pair,
+  an invalid regex, a rule shadowed by a catch-all **in the same agent's lane**, a scoped Claude
+  approval rule (those are skipped, not applied), and a rule aimed at a question tool.
+
+Two of those checks were wrong when first written and were corrected by running the doctor against a
+real `settings.json`: an unreachability warning that did not know Bob and Claude rules are matched in
+separate lanes, so a `source: "bob"` catch-all appeared to shadow a `source: "claude"` rule it cannot
+reach. Which is the argument for `selftest.mjs` — 36 fixtures, one per finding code, asserting the code
+comes back. A validation that quietly becomes a no-op reports a broken configuration as healthy, which
+is worse than shipping no validator at all.
+
+`ci/check-onboarding.sh` runs the self-test, re-validates all seven shipped example configurations
+against the real schema, diffs the generated snapshot, and checks every `sessionSitter.*` id the prose
+names against `package.json` — **in both directions**, so a setting the extension gains and the skill
+never explains fails the build. That last check found six settings the first draft never mentioned.
+
+It also compares the doctor's environment table against `HEADLESS_EQUIVALENT` in `settingsBridge.ts`,
+because that drift happened while this was being written: 0.8.17 gave the four `telegram.*` settings
+environment equivalents, and the doctor went on resolving them from settings alone — so it reported
+remote control as *off* on a machine where the daemon had it on. The two tables answer genuinely
+different questions (*what does the extension read when this is blank* versus *how does a terminal
+configure this*, where `STATE_DIR` is the sharpest divergence: the daemon reads it and the extension
+never does), so the check asserts the one relationship that must hold rather than equality.
+
+Two checks assert they can still **see** their input — "parsed no entries, this check has gone blind" —
+because a regex over another file's source is exactly the kind of check that passes forever after
+quietly matching nothing. Both fired during development, which is why they are there.
+
+Nothing ships in the `.vsix`: `docs/` is already excluded.
+
 ### 0.8.17 — `/new` started a session you could not continue from Telegram
 
 `/new` opened a Claude panel and reported that the session's topic would appear "once it writes its

@@ -1,0 +1,45 @@
+{
+  // ── Level 4: decision cards on your phone ─────────────────────────────────
+  //
+  // This is supervision plus a real messaging channel: an Orange reaches you as a card with a
+  // countdown, and your reply decides. Remote control (typing INTO a session from Telegram) is a
+  // separate feature — see 05-telegram-remote-control.json.
+  //
+  // Before this works, in Telegram: create a GROUP (not a channel), talk to @BotFather with /newbot
+  // for a token, and add the bot to the group. The chat id of a group is NEGATIVE.
+
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",
+  "sessionSitter.autoSupervise": true,
+
+  // Stated explicitly rather than left to the default. The default is "bob", which needs a Bob API
+  // key — so a configuration that never mentions the engine and never sets a key has a classifier
+  // that cannot run.
+  "sessionSitter.supervisor.engine": "claude",
+
+  // Real cards instead of files. With this set but the token or chat id missing, the stub channel
+  // is used and a warning is logged — supervision degrades rather than failing silently.
+  "sessionSitter.supervisor.messagingChannel": "telegram",
+
+  // The chat id is safe in settings; it is not a secret.
+  "sessionSitter.supervisor.telegramChatId": "-1001234567890",
+
+  // The bot token is deliberately NOT here. VS Code stores settings in plain text and Settings Sync
+  // would copy the token to every machine — and two machines polling one bot token take each
+  // other's messages. Put it in the environment or a .env file instead:
+  //
+  //     TELEGRAM_BOT_TOKEN=123456:ABC...
+  //
+  // The setting `sessionSitter.supervisor.telegramBotToken` exists and is read first if you set it.
+  // Leaving it empty so the environment supplies it is a supported choice, not a deprecation.
+
+  // 30 minutes is the default. Shorter means an unanswered Orange denies sooner and the agent gets
+  // its safe alternatives sooner; longer means you have more time to answer from your phone.
+  "sessionSitter.supervisor.orangeResponseTimeoutMinutes": 30,
+
+  // A Red always blocks; this posts a one-way alert as well.
+  "sessionSitter.supervisor.redNotify": true,
+
+  // Deterministic rule decisions also go out, as one-way updates. Set false to keep them out of
+  // Telegram while they are still recorded and still shown in the activity panel.
+  "sessionSitter.supervisor.notifyRuleDecisions": true
+}

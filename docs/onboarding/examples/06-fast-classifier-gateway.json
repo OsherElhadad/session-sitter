@@ -1,0 +1,47 @@
+{
+  // ── Level 6: the fast classifier ──────────────────────────────────────────
+  //
+  // Three tiers decide an action, each seeing only what the tier above could not settle:
+  //
+  //     deterministic rules   ~3ms      the read-only and unambiguously-destructive tables
+  //     fast classifier       ~4-6s     ONE POST /v1/messages, prompt-cached
+  //     agent CLI            ~13.5s     a whole bob / claude subprocess
+  //
+  // MOST CLAUDE USERS WILL NOT GET THIS, AND THAT IS EXPECTED. A Pro/Max/Team subscription signs in
+  // through OAuth, with credentials in the OS keychain and no ANTHROPIC_AUTH_TOKEN or
+  // ANTHROPIC_BASE_URL set. The tier then stays off, ambiguous actions go to the agent CLI exactly as
+  // before, and nothing breaks. It applies when you run against an API key or a gateway.
+  //
+  // It needs three things and stays silently inert without them — a gateway, a token, and a model.
+  // It never approves on doubt: a timeout, an HTTP error, an unparsable verdict, or a self-reported
+  // confidence below 0.6 all hand the decision down to the agent CLI.
+
+  "sessionSitter.supervisorStateDir": "/home/you/.ai-sessions/state",
+  "sessionSitter.supervisor.fastClassifier": true,
+
+  // The FALLBACK engine, for the actions the fast tier hands over. "claude" here because the gateway
+  // and token below are the same ones it needs; the default, "bob", would additionally want a Bob
+  // API key.
+  "sessionSitter.supervisor.engine": "claude",
+
+  // The gateway the fast tier posts /v1/messages to. Falls back to
+  // sessionSitter.supervisor.anthropicBaseUrl, then to ANTHROPIC_BASE_URL.
+  "sessionSitter.supervisor.fastClassifierBaseUrl": "https://your-gateway.example.com",
+
+  // Also passed into the `claude` subprocess when that engine runs, which is why it is worth setting
+  // even if you only ever wanted the fast tier.
+  "sessionSitter.supervisor.anthropicBaseUrl": "https://your-gateway.example.com",
+
+  // The token is a credential. This setting exists, but the environment is the better home for it —
+  // it is machine-scoped precisely so Settings Sync does not copy it:
+  //
+  //     ANTHROPIC_AUTH_TOKEN=...
+
+  // Empty uses the AGENT'S OWN model from ANTHROPIC_MODEL, minus any trailing "[1m]" — a suffix an
+  // agent harness understands and a plain Messages endpoint rejects. Set it explicitly to judge with
+  // a cheaper model than the agent writes code with.
+  "sessionSitter.supervisor.fastClassifierModel": "claude-sonnet-5",
+
+  // How long the fast tier may take before the action goes to the agent CLI instead. Minimum 1.
+  "sessionSitter.supervisor.fastClassifierTimeoutSeconds": 10
+}

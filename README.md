@@ -290,6 +290,48 @@ Both layers run at once, and the supervision half of this extension is off until
 
 ---
 
+## Let an agent configure it
+
+You already have a coding agent. It can do the setup, and it can tell you why a setting is not
+taking effect — [`docs/onboarding/`](docs/onboarding/) is an Agent Skill for exactly that.
+
+```
+Read docs/onboarding/SKILL.md and set up Session Sitter for me.
+```
+
+It walks the configuration in six layers, from the session panel (which needs nothing) up to the fast
+classifier, asks about each, and **validates what it wrote** — because VS Code ignores an
+unrecognised setting key silently, so an invented id gives you a configuration that looks complete
+and does nothing. The same skill reconfigures an existing install and reviews one:
+
+```
+Turn on Telegram decision cards.
+Why isn't my auto-approve rule firing?
+Review my Session Sitter configuration.
+```
+
+To have it in every Claude Code session, copy it into your skills directory:
+
+```bash
+mkdir -p ~/.claude/skills/configuring-session-sitter
+cp -r docs/onboarding/* ~/.claude/skills/configuring-session-sitter/
+```
+
+The validator runs on its own too — no dependencies, no network, and it writes nothing:
+
+```bash
+node docs/onboarding/scripts/ss-config.mjs where   # which settings.json is the live one
+node docs/onboarding/scripts/ss-config.mjs check   # what is configured, and what is broken
+```
+
+`where` matters more than it sounds: on WSL and on a remote IDE several `settings.json` files exist
+and only one is read, which is the commonest reason a change appears to do nothing.
+
+Not using an agent? [`docs/onboarding/SKILL.md`](docs/onboarding/SKILL.md) reads as a getting-started
+guide, and [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) is the full reference.
+
+---
+
 ## First run
 
 Open the **Secondary Sidebar** — `Ctrl+Alt+B`, or **View → Secondary Side Bar**. The
@@ -343,6 +385,7 @@ Every document is indexed in [`docs/README.md`](docs/README.md). The short versi
 
 | Document | What it covers |
 |---|---|
+| [`docs/onboarding/`](docs/onboarding/) | the Agent Skill that configures all of it: the interview, seven worked configurations, and the validator |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | components, session detection, cross-machine, the supervision layer, the agent bridges |
 | [`docs/STATUS-INDICATORS.md`](docs/STATUS-INDICATORS.md) | the six row markers, and the rules that pick one — per agent |
 | [`docs/CLI.md`](docs/CLI.md) | the `session-sitter` terminal command: status, log, digest, policy check |

@@ -1,0 +1,80 @@
+{
+  // ── Level 2: deterministic rules, no model and no state directory ─────────
+  //
+  // `sessionSitter.autoRespond` is one array holding two kinds of rule, evaluated in order, first
+  // match wins. It needs NO other configuration: rules apply, and every decision one takes is
+  // recorded and shown in the Supervision activity panel even with the AI supervisor off.
+  //
+  // Two guards no rule can override:
+  //   · a user-facing question (`ask_followup_question`, `AskUserQuestion`) is never auto-approved
+  //   · a Claude request whose metadata the hook missed is never auto-approved, even by "*"
+
+  "sessionSitter.autoRespond": [
+    // ── Approval rules: toolPattern (glob) + decision ──────────────────────
+    // `*` is any run of characters and `|` separates alternatives. The glob is matched against the
+    // pending TOOL NAME, anchored at both ends.
+
+    // Reads are safe and constant, so they never deserve a prompt. Bob tool names.
+    {
+      "toolPattern": "read_file|list_files|glob|grep",
+      "decision": "approveOnce"
+    },
+
+    // A narrower rule: the tool glob matches, and then `argumentPattern` — a JavaScript regex,
+    // UNANCHORED, against the arguments as JSON — has to match too. Note the doubled backslashes:
+    // this is JSON, so `\s` in the regex is written `\\s`.
+    {
+      "toolPattern": "execute_command",
+      "argumentPattern": "\"command\":\\s*\"(git (status|diff|log)|ls|pwd)",
+      "decision": "approveOnce"
+    },
+
+    // Scope a rule to one checkout with `sessionPattern`, a regex against the session's project
+    // path. Honoured for Bob rules; a CLAUDE approval rule carrying it is SKIPPED, because Claude
+    // approvals cannot be tied to a session yet — the doctor reports that as an error.
+    {
+      "toolPattern": "*",
+      "decision": "approveOnce",
+      "sessionPattern": "/scratch/"
+    },
+
+    // ── The Claude lane ───────────────────────────────────────────────────
+    // `source` selects which agent a rule applies to: "bob" (the default) or "claude". The two
+    // lanes are matched separately, so a catch-all in one shadows nothing in the other. Claude's
+    // tool names are capitalised.
+    {
+      "source": "claude",
+      "toolPattern": "Read|Glob|Grep",
+      "decision": "approveOnce"
+    },
+
+    // `approveForTask` also suppresses later prompts for that permission group — and, for
+    // execute-style tools, that specific command. Stronger than `approveOnce`; use it where you
+    // would have clicked "always allow".
+    {
+      "source": "claude",
+      "toolPattern": "Bash",
+      "argumentPattern": "\"command\":\\s*\"(npm (test|run build)|npx vitest)",
+      "decision": "approveForTask"
+    },
+
+    // ── Text rules: matchPattern (regex) + response ────────────────────────
+    // The regex is tested against the latest assistant message and the response is typed into the
+    // session. Keep these narrow: an over-broad pattern answers questions you have not read.
+    {
+      "matchPattern": "Do you want to continue\\?",
+      "response": "Yes"
+    },
+
+    // A rejection is a rule too, and is the honest way to write "never, without asking me".
+    {
+      "toolPattern": "execute_command",
+      "argumentPattern": "\"command\":\\s*\"[^\"]*(rm -rf /|git push --force(?!-with-lease))",
+      "decision": "reject"
+    }
+  ],
+
+  // Rule decisions reach your messaging channel as one-way updates, never as decision cards — the
+  // decision is already made. Set false to keep them out of Telegram while still recording them.
+  "sessionSitter.supervisor.notifyRuleDecisions": true
+}
