@@ -271,7 +271,7 @@ function renderText(
   return `${lines.join('\n')}\n`;
 }
 
-export type ReadDecisions = (stateDir: string) => Promise<Decision[]>;
+export type ReadDecisions = (stateDir: string, hookTrail?: string | null) => Promise<Decision[]>;
 
 export interface PolicyDeps {
   load?: (specifier?: string) => PolicyModule | string;
@@ -341,7 +341,7 @@ export async function run(
     }
     const state = resolveState(flagString(args, '--state-dir'), cwd);
     const read = deps.read ?? readDecisions;
-    const recent = filterDecisions(await read(state.dir), {}).slice(-replayCount);
+    const recent = filterDecisions(await read(state.dir, state.hookTrail), {}).slice(-replayCount);
     replayed = replay(policy, recent, loaded.evaluate);
   }
 

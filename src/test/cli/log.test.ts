@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { Decision } from '../../cli/audit';
 import {
   CSV_HEADER, applyLimit, clauseOf, csvCell, decisionJson, renderCsv, renderText, run,
@@ -201,6 +204,48 @@ describe('run', () => {
     expect(json.version).toBe(1);
     expect(typeof json.stateDir).toBe('string');
     expect(typeof json.populated).toBe('boolean');
+  });
+
+  /**
+   * The regression this change exists for, driven end to end through the real reader rather than an
+   * injected one: on a terminal-only machine the hooks are the only writer, and `log` used to answer
+   * "No supervision state found" while `decisions.jsonl` had been filling up all along.
+   */
+  it('finds the hook trail with no state dir anywhere — the terminal-only machine', async () => {
+    const dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ss-log-data-'));
+    const saved = process.env.SESSION_SITTER_DATA_DIR;
+    process.env.SESSION_SITTER_DATA_DIR = dataDir;
+    try {
+      await fs.promises.writeFile(path.join(dataDir, 'decisions.jsonl'), `${JSON.stringify({
+        ts: '2026-08-31T21:10:00.000Z',
+        sessionId: 'h-1',
+        cwd: '/repo',
+        tool: 'Bash',
+        inputSummary: 'npm publish',
+        light: 'red',
+        decision: 'deny',
+        clause: 'practices §no-publish',
+        actor: 'policy',
+        latencyMs: 4,
+        rewritten: false,
+      })}\n`, 'utf8');
+
+      const io = fakeIo({ now: NOW });
+      // No injected reader: this has to go through readDecisions and resolveState for real.
+      expect(await run(['--json', '--since', '2026-08-01'], io)).toBe(0);
+      const json = JSON.parse(io.text());
+      expect(json.populated).toBe(true);
+      expect(json.hookTrail).toBe(path.join(dataDir, 'decisions.jsonl'));
+      expect(json.count).toBe(1);
+      expect(json.decisions[0]).toMatchObject({
+        outcome: 'deny',
+        clause: { id: 'practices §no-publish', text: '' },
+      });
+    } finally {
+      if (saved === undefined) { delete process.env.SESSION_SITTER_DATA_DIR; }
+      else { process.env.SESSION_SITTER_DATA_DIR = saved; }
+      await fs.promises.rm(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('--csv writes the header and rows', async () => {

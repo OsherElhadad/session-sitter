@@ -216,16 +216,30 @@ Combining filters is an AND. `--json` and `--csv` cannot be combined.
 | `failed` | the supervisor itself failed |
 | `unknown` | the writer recorded no outcome, and none could be read from the light without guessing |
 
-### The two writers
+### The three writers
 
-`log` reads both and labels each decision with its origin in `--json` (`from`):
+`log` reads all three and labels each decision with its origin in `--json` (`from`), and each
+decision's `id` names the file and line it came from, so a surprising row traces back to a byte on
+disk:
 
-- **`audit`** — `<stateDir>/audit.jsonl`, one JSON object per decision, written by the hook front
-  end. Carries the clause citation, the actor, the latency and the rewritten input.
+- **`audit`, from `decisions.jsonl`** — the plugin's hooks, one record per governance decision
+  (`decisions.jsonl:12`). The trail that exists on a terminal-only machine. Carries the clause
+  citation, which rung answered (`actor` is `deterministic`, `policy`, `correction`, `classifier`,
+  `human` or `timeout`), the latency, and the whole redacted call. It records no `host` and no
+  session name, and no cost — it stores token counts, and turning those into money in a reader would
+  mean pinning prices where nobody could trace them.
+- **`audit`, from `audit.jsonl`** — `<stateDir>/audit.jsonl`, the same reader's shape for a trail
+  shipped from elsewhere. Nothing in this repository writes it yet.
 - **`supervision`** — `<stateDir>/records/req-*.json`, written by the extension and the `supervise`
   CLI since before the audit trail existed. These carry a traffic light, a lifecycle state and a
   rule trace but **no clause citation**, so `clause.id` is empty for them. That gap is the reason
   the audit trail exists, and printing it empty is how it stays visible.
+
+Two translations happen on the way in, and both are deliberate. A hook record's `decision: "allow"`
+with `rewritten: true` reads as outcome **`correct`** — the correction lane is the distinction the
+whole trail exists to make. And `decision: "none"`, which means the hook reached no verdict at all
+(an exempt tool, or observe mode), reads as **`unknown`**, never as `allow`: a layer that records a
+decision it did not take is a layer whose trail cannot be used as evidence.
 
 A half-written line is skipped and the rest of the trail is still returned: a governance log that
 becomes unqueryable because of one truncated write is a log you cannot use in the situation you
@@ -520,19 +534,38 @@ blocked.
 
 ## Where state is read from
 
-`log`, `digest` and `policy check --replay` need the supervision state dir. There are two
-conventions in this project, and both are searched, in order:
+`log`, `digest` and `policy check --replay` read decisions from two *kinds* of place, and the
+difference matters: one is a state dir, and one is the plugin's own data dir.
 
-1. `--state-dir PATH` — honoured outright, even when empty. Being told where to look and looking
-   somewhere else is not a favour.
-2. `$STATE_DIR`, or a `.env` beside the working directory that sets it (the same resolution
+**The hook trail — always read.** `<dataDir>/decisions.jsonl`, where `dataDir` is
+`$SESSION_SITTER_DATA_DIR`, else `$CLAUDE_PLUGIN_DATA` (the directory Claude Code hands an installed
+plugin), else `~/.claude/session-sitter`. This is the file the plugin's hooks append to, and **on a
+terminal-only machine it is the only trail there is** — the hooks are the only front end running.
+
+**The state dir — searched, first populated one wins.** Two conventions, both looked at, in order:
+
+1. `$STATE_DIR`, or a `.env` beside the working directory that sets it (the same resolution
    [`src/supervisor/config.ts`](../src/supervisor/config.ts) applies), else
    `<cwd>/.supervisor-state` — where the `supervise` CLI writes.
-3. `<VS Code user dir>/globalStorage/eranra.session-sitter/state` — where the extension writes when
+2. `<VS Code user dir>/globalStorage/eranra.session-sitter/state` — where the extension writes when
    `sessionSitter.supervisorStateDir` is unset.
 
-The first that actually holds an `audit.jsonl` or a `records/` directory wins. Every command reports
-which one it used (in `--json` as `stateDir`), and every empty result lists the places it looked.
+The first that actually holds an `audit.jsonl` or a `records/` directory wins.
+
+**The hook trail is read *as well as* the state dir, never instead of it.** A machine can have both —
+an IDE window supervising sessions, and terminal sessions governed by the same practices — and
+showing one while hiding the other is the worst failure available to an evidence tool. It is also the
+bug this resolution replaced: `log` reported `No supervision state found` on machines whose
+`decisions.jsonl` had been filling up for weeks, because the hook trail was not among the places it
+looked.
+
+`--state-dir PATH` is the one exception. It is honoured outright, even when empty, **and to the
+exclusion of the hook trail** — being told where to look and reading somewhere else as well is not a
+favour either. Pass it when you mean one directory and nothing else.
+
+Every command reports what it actually read — in text as the trailing `·`-separated path, in `--json`
+as `stateDir` plus `hookTrail` — and every empty result lists every place it looked, the hook trail
+included.
 
 ---
 
@@ -593,6 +626,7 @@ switch over the six is the natural way to read this field.
   "version": 1,
   "generatedAt": "2026-09-01T08:12:44.101Z",
   "stateDir": "/Users/u/repo/.supervisor-state",
+  "hookTrail": "/Users/u/.claude/session-sitter/decisions.jsonl",
   "populated": true,
   "count": 1,
   "decisions": [
@@ -620,12 +654,14 @@ switch over the six is the natural way to read this field.
 
 | Field | Notes |
 |---|---|
-| `stateDir`, `populated` | which directory was read, and whether it held anything |
-| `id` | the request id for a supervision record; `audit.jsonl:<line>` for a trail line |
+| `stateDir` | which state dir was read |
+| `hookTrail` | the plugin's `decisions.jsonl` when it was read; `null` when it does not exist, or when `--state-dir` confined the read to one directory |
+| `populated` | whether either store held anything a reader can use |
+| `id` | the request id for a supervision record; `<file>:<line>` for a trail line, so the row traces back to disk |
 | `from` | `audit` \| `supervision` — which writer it came from |
 | `light` | `green` \| `yellow` \| `orange` \| `red`, or `""` |
 | `outcome` | see [outcomes](#outcomes) |
-| `actor` | `rule` \| `classifier` \| `human`, or `""` |
+| `actor` | `rule` \| `classifier` \| `human` from the older writers; `deterministic` \| `policy` \| `correction` \| `classifier` \| `human` \| `timeout` from the hook trail, which records *which* rung answered. `""` when not recorded. |
 | `clause` | `null` when no clause was cited — distinct from a cited clause with empty text |
 | `rewritten` | `true` only for the correction lane |
 | `latencyMs`, `costUsd` | `null` when not recorded. Not `0`. |
@@ -647,6 +683,7 @@ at,session_id,session_name,host,agent,tool,light,outcome,actor,clause_id,clause_
   "generatedAt": "2026-09-01T08:12:44.101Z",
   "window": { "since": "2026-08-31T17:00:00.000Z", "until": "2026-09-01T08:12:44.101Z" },
   "stateDir": "/Users/u/repo/.supervisor-state",
+  "hookTrail": "/Users/u/.claude/session-sitter/decisions.jsonl",
   "populated": true,
   "totals": {
     "sessions": 3, "decisions": 7, "corrected": 1, "escalated": 1, "denied": 3, "costUsd": 0.0043

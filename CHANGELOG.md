@@ -5,6 +5,52 @@ single name — **Session Sitter** — and `ci/check-naming.sh` enforces that.
 
 ## Unreleased
 
+### 0.8.11 — `log` could not see the trail the hooks had been writing all along
+
+On a machine with no VS Code, the plugin's hooks are the only front end running, and
+`decisions.jsonl` is the only governance record there is. `session-sitter log` did not read it. Nor
+did `digest`, nor `policy check --replay`. All three answered:
+
+```
+No supervision state found. Looked in:
+  /home/u/repo/.supervisor-state
+  /home/u/.config/Code/User/globalStorage/eranra.session-sitter/state
+```
+
+— on machines that had been recording every decision for weeks. Two things were wrong at once. The
+hooks write `<dataDir>/decisions.jsonl`, where `dataDir` is `$CLAUDE_PLUGIN_DATA` or
+`~/.claude/session-sitter`; the readers looked for `<stateDir>/audit.jsonl`. **Different directory,
+different filename** — and nothing in the repository writes `audit.jsonl` at all, so the writer the
+reader was built around did not exist yet. `export` had been reading the hook trail correctly the
+whole time, which is why the gap survived: two of the five commands worked.
+
+The fix reads the hook trail **as well as** the state dir, not as another candidate for it. Those are
+different kinds of store in different places, and a machine can have both — an IDE window supervising
+sessions, and terminal sessions governed by the same practices. Picking one and hiding the other is
+the worst failure available to an evidence tool.
+
+`decisions.jsonl` is a different shape from `audit.jsonl`, not a differently-spelled one, and every
+difference is resolved by recording what the writer knew:
+
+- a rewrite is stored as `decision: "allow"` with `rewritten: true`, and reads as outcome
+  **`correct`** — the correction lane is the distinction this trail exists to make;
+- `decision: "none"` means the hook reached no verdict, and reads as **`unknown`**, never `allow`. A
+  layer that records a decision it did not take is a layer whose trail cannot be used as evidence;
+- `actor` keeps the rung that answered (`deterministic`, `policy`, `correction`) rather than being
+  flattened to `rule`. Only `model` is translated, to `classifier`, so all three writers use one word
+  for "a model decided this";
+- no `host`, no session name, no cost. The hook records token counts, and turning those into money
+  inside a reader would mean pinning prices where nobody could trace them.
+
+`--state-dir` is unchanged and now documented as what it always was: one directory and nothing else,
+the hook trail excluded. Being told where to look and reading somewhere else as well is not a favour
+either.
+
+Every command already named the directory it read; that line now names what it **actually** read,
+both stores when both are in play. It was misreporting in the new case — decisions from the hook trail
+printed under a state dir path that need not even exist. `log --json` and `digest --json` gain
+`hookTrail` additively; `stateDir` keeps its meaning and its key.
+
 ### 0.8.10 — The mirror was showing you 250 characters of the answer
 
 Telegram topics mirrored a session's turns, and the turns arrived cut off. Not at Telegram's

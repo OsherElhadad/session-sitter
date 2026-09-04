@@ -3,13 +3,28 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  AUDIT_FILE, auditToDecision, filterDecisions, isCorrection, isDenial, readAuditTrail,
-  readDecisions, readSupervisionRecords, resolveState, type AuditRecord, type Decision,
+  AUDIT_FILE, DECISIONS_FILE, auditToDecision, filterDecisions, hookToDecision, isCorrection,
+  isDenial, readAuditTrail, readDecisions, readFrom, readHookTrail, readSupervisionRecords,
+  resolveState, type AuditRecord, type Decision,
 } from '../../cli/audit';
+import type { DecisionRecord } from '../../audit/trail';
 
 // Fixtures rather than a real state dir: these tests must pass on a machine that has never run the
 // supervisor, and must not depend on what a machine that has happens to contain.
 let stateDir: string;
+/**
+ * Where the hook trail is written for these tests. `resolveState` reads the plugin data dir out of
+ * the environment, so every test that does not want the developer's real `~/.claude` in the answer
+ * has to pass one — the same reason `stateDir` is a temp dir rather than the machine's.
+ */
+let dataDir: string;
+const hermeticEnv = (): NodeJS.ProcessEnv => ({ SESSION_SITTER_DATA_DIR: dataDir });
+
+async function writeHookTrail(records: Array<Partial<DecisionRecord> | string>): Promise<void> {
+  const lines = records.map(r => (typeof r === 'string' ? r : JSON.stringify(r)));
+  await fs.promises.writeFile(
+    path.join(dataDir, DECISIONS_FILE), `${lines.join('\n')}\n`, 'utf8');
+}
 
 async function writeAudit(records: Array<AuditRecord | string>): Promise<void> {
   const lines = records.map(r => (typeof r === 'string' ? r : JSON.stringify(r)));
@@ -43,12 +58,50 @@ const CORRECTION: AuditRecord = {
   cost_usd: 0.0012,
 };
 
+/**
+ * A hook record as `src/hooks/permissionRequest.ts` writes one: camelCase, `ts` not `at`, `clause` a
+ * citation string rather than a pair, and `decision` rather than an outcome.
+ */
+const HOOK_DENIAL: DecisionRecord = {
+  ts: '2026-08-31T21:10:00.000Z',
+  sessionId: 'h-1',
+  cwd: '/repo',
+  tool: 'Bash',
+  inputSummary: 'npm publish',
+  light: 'red',
+  decision: 'deny',
+  clause: 'practices §no-publish',
+  actor: 'policy',
+  latencyMs: 4,
+  rewritten: false,
+  note: 'publishing is irreversible',
+  call: { tool_name: 'Bash', input: { command: 'npm publish' } },
+};
+
+/** The correction lane, as the hook records it: an allow that also rewrote the call. */
+const HOOK_CORRECTION: DecisionRecord = {
+  ts: '2026-08-31T21:12:00.000Z',
+  sessionId: 'h-1',
+  cwd: '/repo',
+  tool: 'Bash',
+  inputSummary: 'git push --force origin main',
+  light: 'yellow',
+  decision: 'allow',
+  clause: 'practices §force-push',
+  actor: 'correction',
+  latencyMs: 6,
+  rewritten: true,
+  note: '--force replaced with --force-with-lease',
+};
+
 beforeEach(async () => {
   stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ss-audit-'));
+  dataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ss-data-'));
 });
 
 afterEach(async () => {
   await fs.promises.rm(stateDir, { recursive: true, force: true });
+  await fs.promises.rm(dataDir, { recursive: true, force: true });
 });
 
 describe('auditToDecision', () => {
@@ -133,6 +186,91 @@ describe('readAuditTrail', () => {
     await writeAudit([CORRECTION, CORRECTION]);
     expect((await readAuditTrail(stateDir)).map(d => d.id))
       .toEqual(['audit.jsonl:1', 'audit.jsonl:2']);
+  });
+});
+
+describe('hookToDecision', () => {
+  it('reads a hook denial with its clause citation intact', () => {
+    const d = hookToDecision(HOOK_DENIAL, 'decisions.jsonl:1');
+    expect(d).toMatchObject({
+      from: 'audit',
+      id: 'decisions.jsonl:1',
+      sessionId: 'h-1',
+      tool: 'Bash',
+      light: 'red',
+      outcome: 'deny',
+      actor: 'policy',
+      clauseId: 'practices §no-publish',
+      rewritten: false,
+      reason: 'publishing is irreversible',
+      latencyMs: 4,
+    });
+    expect(d.at.toISOString()).toBe('2026-08-31T21:10:00.000Z');
+  });
+
+  // The distinction the whole trail exists to make: a rewrite is recorded as allow + rewritten.
+  it('reads a rewrite as the correction lane, not as a plain allow', () => {
+    const d = hookToDecision(HOOK_CORRECTION, 'decisions.jsonl:1');
+    expect(d.outcome).toBe('correct');
+    expect(d.rewritten).toBe(true);
+    expect(isCorrection(d)).toBe(true);
+  });
+
+  it('reads "no verdict" as unknown, never as an allow the hook did not give', () => {
+    const none: DecisionRecord = { ...HOOK_DENIAL, decision: 'none', light: null, clause: null };
+    const d = hookToDecision(none, 'decisions.jsonl:1');
+    expect(d.outcome).toBe('unknown');
+    expect(isDenial(d)).toBe(false);
+    expect(d.clauseId).toBe('');
+  });
+
+  it('speaks one word for a model decision across every writer', () => {
+    expect(hookToDecision({ ...HOOK_DENIAL, actor: 'model' }, 'x').actor).toBe('classifier');
+  });
+
+  it('keeps the deterministic rungs distinct rather than collapsing them into "rule"', () => {
+    expect(hookToDecision({ ...HOOK_DENIAL, actor: 'deterministic' }, 'x').actor)
+      .toBe('deterministic');
+  });
+
+  it('carries the whole recorded call, which is what a replay has to re-decide', () => {
+    expect(hookToDecision(HOOK_DENIAL, 'x').input).toEqual({ command: 'npm publish' });
+  });
+
+  it('leaves a field the hook does not record empty rather than inventing it', () => {
+    const d = hookToDecision(HOOK_CORRECTION, 'x');
+    expect(d.host).toBe('');
+    expect(d.clauseText).toBe('');
+    expect(d.ask).toBe('');
+    // Token counts are not money, and a cost nobody can trace is worse than an empty column.
+    expect(d.costUsd).toBeNull();
+  });
+
+  it('falls back to the session id when no name was recorded', () => {
+    expect(hookToDecision(HOOK_DENIAL, 'x').sessionName).toBe('h-1');
+  });
+});
+
+describe('readHookTrail', () => {
+  it('is empty, not an error, when the hook has never run', async () => {
+    expect(await readHookTrail(path.join(dataDir, DECISIONS_FILE))).toEqual([]);
+  });
+
+  it('skips a half-written line and keeps the rest of the trail', async () => {
+    await writeHookTrail([HOOK_DENIAL, '{"ts":"2026-08-31T21:', HOOK_CORRECTION]);
+    const decisions = await readHookTrail(path.join(dataDir, DECISIONS_FILE));
+    expect(decisions.map(d => d.outcome)).toEqual(['deny', 'correct']);
+  });
+
+  it('skips a line with no usable timestamp', async () => {
+    await writeHookTrail([{ ...HOOK_DENIAL, ts: 'not a date' }, { ...HOOK_DENIAL, ts: undefined }]);
+    expect(await readHookTrail(path.join(dataDir, DECISIONS_FILE))).toEqual([]);
+  });
+
+  it('numbers each decision by its line, so a record traces back to the file', async () => {
+    await writeHookTrail([HOOK_DENIAL, HOOK_CORRECTION]);
+    const decisions = await readHookTrail(path.join(dataDir, DECISIONS_FILE));
+    expect(decisions.map(d => d.id)).toEqual(['decisions.jsonl:1', 'decisions.jsonl:2']);
   });
 });
 
@@ -236,6 +374,36 @@ describe('readDecisions', () => {
     const decisions = await readDecisions(stateDir);
     expect(decisions.map(d => d.from)).toEqual(['supervision', 'audit']);
   });
+
+  it('merges all three writers into one chronological list', async () => {
+    await writeAudit([{ ...CORRECTION, at: '2026-08-31T22:00:00.000Z' }]);
+    await writeHookTrail([HOOK_DENIAL]); // 21:10
+    await writeRecord('req-early.json', {
+      request_id: 'req-early',
+      session_id: 's-legacy',
+      state: 'green_completed',
+      decided_by: 'supervisor',
+      assessment: { traffic_light: 'green' },
+      events: [{ type: 'green_completed', at: '2026-08-31T20:00:00Z' }],
+    });
+    const decisions = await readDecisions(stateDir, path.join(dataDir, DECISIONS_FILE));
+    expect(decisions.map(d => d.id)).toEqual([
+      'req-early', 'decisions.jsonl:1', 'audit.jsonl:1',
+    ]);
+  });
+
+  it('reads only the state dir when no hook trail is passed', async () => {
+    await writeHookTrail([HOOK_DENIAL]);
+    // The explicit-`--state-dir` path relies on this: null means that directory and nothing else.
+    expect(await readDecisions(stateDir, null)).toEqual([]);
+  });
+
+  it('reads the hook trail with no state dir at all', async () => {
+    await writeHookTrail([HOOK_DENIAL, HOOK_CORRECTION]);
+    const decisions = await readDecisions(
+      path.join(stateDir, 'no-such-state'), path.join(dataDir, DECISIONS_FILE));
+    expect(decisions.map(d => d.outcome)).toEqual(['deny', 'correct']);
+  });
 });
 
 describe('filterDecisions', () => {
@@ -311,7 +479,7 @@ describe('isCorrection and isDenial', () => {
 
 describe('resolveState', () => {
   it('honours an explicit directory even when it is empty', () => {
-    const resolved = resolveState(path.join(stateDir, 'elsewhere'));
+    const resolved = resolveState(path.join(stateDir, 'elsewhere'), process.cwd(), hermeticEnv());
     expect(resolved.dir).toBe(path.join(stateDir, 'elsewhere'));
     expect(resolved.populated).toBe(false);
     expect(resolved.searched).toEqual([resolved.dir]);
@@ -319,23 +487,88 @@ describe('resolveState', () => {
 
   it('reports an explicit directory that does hold a trail as populated', async () => {
     await writeAudit([CORRECTION]);
-    expect(resolveState(stateDir).populated).toBe(true);
+    expect(resolveState(stateDir, process.cwd(), hermeticEnv()).populated).toBe(true);
   });
 
   it('finds the state dir under a working directory, and lists where it looked', async () => {
     const repo = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ss-repo-'));
     try {
       await fs.promises.mkdir(path.join(repo, '.supervisor-state', 'records'), { recursive: true });
-      const resolved = resolveState(undefined, repo);
+      const resolved = resolveState(undefined, repo, hermeticEnv());
       expect(resolved.populated).toBe(true);
       expect(resolved.dir).toBe(path.join(repo, '.supervisor-state'));
 
-      const missing = resolveState(undefined, path.join(repo, 'no-such-repo'));
+      const missing = resolveState(undefined, path.join(repo, 'no-such-repo'), hermeticEnv());
       expect(missing.populated).toBe(false);
       // Saying "nothing" without saying "nothing, here" sends people hunting a bug that is a path.
       expect(missing.searched.length).toBeGreaterThan(1);
     } finally {
       await fs.promises.rm(repo, { recursive: true, force: true });
     }
+  });
+
+  // The bug this whole change exists for: the hook is the only writer on a terminal-only machine,
+  // and `log` reported "no supervision state found" while it had been recording decisions all along.
+  it('is populated by the hook trail alone, with no state dir anywhere', async () => {
+    await writeHookTrail([HOOK_DENIAL]);
+    const repo = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ss-repo-'));
+    try {
+      const resolved = resolveState(undefined, repo, hermeticEnv());
+      expect(resolved.populated).toBe(true);
+      expect(resolved.hookTrail).toBe(path.join(dataDir, DECISIONS_FILE));
+    } finally {
+      await fs.promises.rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the hook trail as well as a state dir, never instead of it', async () => {
+    await writeHookTrail([HOOK_DENIAL]);
+    const repo = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ss-repo-'));
+    try {
+      await fs.promises.mkdir(path.join(repo, '.supervisor-state', 'records'), { recursive: true });
+      const resolved = resolveState(undefined, repo, hermeticEnv());
+      expect(resolved.dir).toBe(path.join(repo, '.supervisor-state'));
+      expect(resolved.hookTrail).toBe(path.join(dataDir, DECISIONS_FILE));
+    } finally {
+      await fs.promises.rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('names the hook trail among the places it looked, so an empty answer points somewhere', () => {
+    const resolved = resolveState(undefined, path.join(stateDir, 'nope'), hermeticEnv());
+    expect(resolved.searched).toContain(path.join(dataDir, DECISIONS_FILE));
+  });
+
+  it('confines an explicit --state-dir to that directory, hook trail included', async () => {
+    await writeHookTrail([HOOK_DENIAL]);
+    // Being told where to look and reading somewhere else as well is not a favour.
+    expect(resolveState(stateDir, process.cwd(), hermeticEnv()).hookTrail).toBeNull();
+  });
+
+  it('leaves the hook trail null when the file does not exist', () => {
+    expect(resolveState(undefined, stateDir, hermeticEnv()).hookTrail).toBeNull();
+  });
+});
+
+describe('readFrom', () => {
+  it('names both stores when both were read', async () => {
+    await writeAudit([CORRECTION]);
+    await writeHookTrail([HOOK_DENIAL]);
+    const state = resolveState(undefined, stateDir, hermeticEnv());
+    // Not cosmetic: printing only the state dir told people their decisions came from a directory
+    // that need not even exist.
+    expect(readFrom({ ...state, dir: stateDir })).toBe(
+      `${stateDir} + ${path.join(dataDir, DECISIONS_FILE)}`);
+  });
+
+  it('names only the hook trail when that is all there is', async () => {
+    await writeHookTrail([HOOK_DENIAL]);
+    const state = resolveState(undefined, path.join(stateDir, 'nope'), hermeticEnv());
+    expect(readFrom(state)).toBe(path.join(dataDir, DECISIONS_FILE));
+  });
+
+  it('falls back to the chosen directory when neither store holds anything', () => {
+    const state = resolveState(undefined, path.join(stateDir, 'nope'), hermeticEnv());
+    expect(readFrom(state)).toBe(state.dir);
   });
 });
